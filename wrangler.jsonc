@@ -4,9 +4,8 @@
   "main": "./index.js",
   "compatibility_date": "2026-08-11",
   "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    "directory": ".",
-    "binding": "ASSETS",
-    "run_worker_first": true
-  }
+"assets": {
+  "directory": "./public",
+  "binding": "ASSETS",
+  "run_worker_first": true
 }
