@@ -1,0 +1,15 @@
+الماهر الماسي V8 - نسخة Cloudflare Workers
+
+هذه الحزمة مجهزة لتشغيل الواجهة والـ API على نفس الرابط.
+مسارات /.netlify/functions/* القديمة ستستمر في العمل بدون تعديل index.html.
+
+بعد رفع الملفات إلى GitHub وربط المستودع بـ Cloudflare:
+1) Settings > Variables and Secrets
+2) أضف Secret باسم SUPABASE_URL وقيمته رابط مشروع Supabase.
+3) أضف Secret باسم SUPABASE_SERVICE_ROLE_KEY وقيمته Service Role Key من Supabase.
+   مهم: لا تضع Service Role Key داخل GitHub أو داخل index.html.
+4) Deploy command: npx wrangler deploy
+5) Production branch: main
+
+الرابط المتوقع بعد النشر:
+https://almaher-almasi.travel10.workers.dev
