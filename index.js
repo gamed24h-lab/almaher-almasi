@@ -1,13 +1,12 @@
-import * as health from './functions/health.js';
-import * as createBooking from './functions/create-booking.js';
-import * as getBooking from './functions/get-booking.js';
-import * as developerLogin from './functions/developer-login.js';
-import * as platformData from './functions/platform-data.js';
-import * as staffLogin from './functions/staff-login.js';
-import * as staffAdmin from './functions/staff-admin.js';
-import * as cloudCore from './functions/cloud-core.js';
-import * as systemRelease from './functions/system-release.js';
-
+import * as health from './health.js';
+import * as createBooking from './create-booking.js';
+import * as getBooking from './get-booking.js';
+import * as developerLogin from './developer-login.js';
+import * as platformData from './platform-data.js';
+import * as staffLogin from './staff-login.js';
+import * as staffAdmin from './staff-admin.js';
+import * as cloudCore from './cloud-core.js';
+import * as systemRelease from './system-release.js';
 const handlers = {
   'health': health.handler,
   'create-booking': createBooking.handler,
