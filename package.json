@@ -1,11 +1,7 @@
 {
-  "name": "almaher-almasi-cloudflare",
+  "name": "almaher-almasi-cloudflare-single-worker",
   "private": true,
-  "version": "8.0.0",
-  "devDependencies": {
-    "wrangler": "^4.0.0"
-  },
-  "scripts": {
-    "deploy": "wrangler deploy"
-  }
+  "version": "8.0.1",
+  "devDependencies": {"wrangler": "^4.0.0"},
+  "scripts": {"deploy": "wrangler deploy"}
 }
