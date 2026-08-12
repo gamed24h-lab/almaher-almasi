@@ -1,3 +1,4 @@
+const process = { env: {} };
 import * as crypto from 'node:crypto';
 const __mods = Object.create(null);
 function __localRequire(spec){
@@ -775,6 +776,7 @@ function __htmlResponse(request){
 }
 export default {
   async fetch(request, env){
+    process.env = env || {};
     const url=new URL(request.url);
     if(url.pathname==='/' && url.searchParams.get('release')==='test'){
       try{
