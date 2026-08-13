@@ -1,4 +1,10 @@
 name = "almaher-almasi"
 main = "index.js"
 compatibility_date = "2026-08-13"
+
+# Preserve dashboard Variables across wrangler deploys.
 keep_vars = true
+
+# Validate that the required Supabase secret exists before deploy.
+[secrets]
+required = [ "SUPABASE_SERVICE_ROLE_KEY" ]
