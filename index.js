@@ -36,7 +36,7 @@ function __load_health(){
   const module={exports:{}};
   const exports=module.exports;
   const require=__localRequire;
-  exports.handler=async()=>({statusCode:200,headers:{"Content-Type":"application/json"},body:JSON.stringify({ok:true,service:"almaher",version:"9.5.0"})});
+  exports.handler=async()=>({statusCode:200,headers:{"Content-Type":"application/json"},body:JSON.stringify({ok:true,service:"almaher",version:"9.5.9"})});
   return module.exports;
 }
 __mods["health"]=__load_health();
@@ -304,28 +304,56 @@ __mods["platform-data"]=__load_platform_data();
 function __load_staff_login(){
   const module={exports:{}};const exports=module.exports;const require=__localRequire;const crypto=require('crypto');const {issue}=require('./_staff-session');
   function hashPassword(password){const salt=crypto.randomBytes(16).toString('hex');const hash=crypto.scryptSync(String(password),salt,64).toString('hex');return `scrypt$${salt}$${hash}`}
-  function verifyPassword(input,stored){stored=String(stored||'');if(stored.startsWith('scrypt$')){const parts=stored.split('$');if(parts.length!==3)return false;const hash=crypto.scryptSync(String(input),parts[1],64).toString('hex');try{return crypto.timingSafeEqual(Buffer.from(hash,'hex'),Buffer.from(parts[2],'hex'))}catch{return false}}return stored===String(input)}
+  function safeHexEqual(a,b){try{const A=Buffer.from(String(a||''),'hex'),B=Buffer.from(String(b||''),'hex');return A.length>0&&A.length===B.length&&crypto.timingSafeEqual(A,B)}catch{return false}}
+  function verifyPassword(input,stored){
+    stored=String(stored??'');const raw=String(input??'');
+    if(stored.startsWith('scrypt$')){const parts=stored.split('$');if(parts.length!==3)return false;const hash=crypto.scryptSync(raw,parts[1],64).toString('hex');return safeHexEqual(hash,parts[2])}
+    if(stored.startsWith('sha256$')){const expected=stored.slice(7);const hash=crypto.createHash('sha256').update(raw).digest('hex');return safeHexEqual(hash,expected)}
+    if(/^[a-f0-9]{64}$/i.test(stored)){const hash=crypto.createHash('sha256').update(raw).digest('hex');return safeHexEqual(hash,stored)}
+    if(stored.startsWith('plain$'))return stored.slice(6)===raw;
+    return stored===raw;
+  }
+  function normUser(v){return String(v??'').trim().toLowerCase()}
+  function normPhone(v){return String(v??'').replace(/\D/g,'').replace(/^00/,'')}
+  function activeStatus(v){const x=String(v??'').trim().toLowerCase();return !x||['نشط','active','enabled','مفعل','مفعّل','1','true'].includes(x)}
+  async function patchUser(url,sh,id,row){try{await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:{...sh,Prefer:'return=minimal'},body:JSON.stringify(row)})}catch(_e){}}
   exports.handler=async(event)=>{
     const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};if(event.httpMethod!=='POST')return{statusCode:405,headers:H,body:JSON.stringify({error:'Method not allowed'})};
-    let p={};try{p=JSON.parse(event.body||'{}')}catch{}const identity=String(p.identity||'').trim(),password=String(p.password||''),method=String(p.method||'username');if(!identity||!password)return{statusCode:400,headers:H,body:JSON.stringify({error:'أدخل بيانات الدخول'})};
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,''),key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'إعدادات Supabase على الخادم غير مكتملة'})};
+    let p={};try{p=JSON.parse(event.body||'{}')}catch{}
+    const identity=String(p.identity||'').trim(),password=String(p.password||''),method=String(p.method||'username');
+    if(!identity||!password)return{statusCode:400,headers:H,body:JSON.stringify({error:'أدخل بيانات الدخول'})};
+    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,''),key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+    if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'إعدادات Supabase على الخادم غير مكتملة'})};
     const sh={apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'};
     try{
-      const field=method==='phone'?'phone':'username';const r=await fetch(`${url}/rest/v1/staff_users?select=id,name,username,password,phone,role,branch_id,status,permissions,failed_login_attempts,locked_until,last_login_at,force_password_reset,security_meta&${field}=eq.${encodeURIComponent(identity)}&limit=1`,{headers:sh});const rows=await r.json().catch(()=>[]);if(!r.ok)return{statusCode:500,headers:H,body:JSON.stringify({error:rows?.message||'تعذر قراءة المستخدم'})};
-      const u=Array.isArray(rows)?rows[0]:null;if(!u)return{statusCode:401,headers:H,body:JSON.stringify({error:'اسم المستخدم أو كلمة المرور غير صحيحة'})};
+      // Load a bounded staff directory and compare normalized identities locally. This
+      // keeps legacy usernames with casing/whitespace and formatted phone numbers working.
+      const r=await fetch(`${url}/rest/v1/staff_users?select=id,name,username,password,phone,role,branch_id,status,permissions,failed_login_attempts,locked_until,last_login_at,force_password_reset,security_meta&limit=1000`,{headers:sh});
+      const rows=await r.json().catch(()=>[]);if(!r.ok)return{statusCode:500,headers:H,body:JSON.stringify({error:rows?.message||'تعذر قراءة المستخدم'})};
+      const list=Array.isArray(rows)?rows:[];
+      let u=null;
+      if(method==='phone'){
+        const target=normPhone(identity);u=list.find(x=>normPhone(x.phone)===target)||null;
+      }else{
+        const target=normUser(identity);u=list.find(x=>String(x.username??'').trim()===identity)||list.find(x=>normUser(x.username)===target)||null;
+      }
+      if(!u)return{statusCode:401,headers:H,body:JSON.stringify({error:'اسم المستخدم أو كلمة المرور غير صحيحة'})};
       if(u.locked_until&&new Date(u.locked_until).getTime()>Date.now())return{statusCode:429,headers:H,body:JSON.stringify({error:'تم إيقاف محاولات الدخول مؤقتاً. حاول لاحقاً.'})};
       if(!verifyPassword(password,u.password)){
         const n=Number(u.failed_login_attempts||0)+1,lock=n>=5?new Date(Date.now()+15*60*1000).toISOString():null;
-        await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(u.id)}`,{method:'PATCH',headers:{...sh,Prefer:'return=minimal'},body:JSON.stringify({failed_login_attempts:n,locked_until:lock,security_meta:{...(u.security_meta||{}),last_failed_login_at:new Date().toISOString()}})});
+        await patchUser(url,sh,u.id,{failed_login_attempts:n,locked_until:lock,security_meta:{...(u.security_meta||{}),last_failed_login_at:new Date().toISOString()}});
         return{statusCode:401,headers:H,body:JSON.stringify({error:'اسم المستخدم أو كلمة المرور غير صحيحة'})};
       }
-      if(u.status&&u.status!=='نشط')return{statusCode:403,headers:H,body:JSON.stringify({error:'هذا الحساب غير نشط'})};
-      const patch={failed_login_attempts:0,locked_until:null,last_login_at:new Date().toISOString(),security_meta:{...(u.security_meta||{}),last_login_ip:String(event.headers['cf-connecting-ip']||'')}};
-      // Transparently migrate any old plaintext staff password after a successful login.
-      if(!String(u.password||'').startsWith('scrypt$')){patch.password=hashPassword(password);patch.password_changed_at=new Date().toISOString()}
-      await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(u.id)}`,{method:'PATCH',headers:{...sh,Prefer:'return=minimal'},body:JSON.stringify(patch)});
-      const safe={id:u.id,name:u.name,username:u.username,phone:u.phone,role:u.role,branch_id:u.branch_id,status:u.status,permissions:u.permissions,force_password_reset:!!u.force_password_reset};
-      const session_token=issue({id:u.id,name:u.name,role:u.role,branch_id:u.branch_id||null,permissions:u.permissions||{}},key);return{statusCode:200,headers:H,body:JSON.stringify({user:safe,session_token})};
+      if(!activeStatus(u.status))return{statusCode:403,headers:H,body:JSON.stringify({error:'هذا الحساب غير نشط'})};
+      const patch={failed_login_attempts:0,locked_until:null,last_login_at:new Date().toISOString(),security_meta:{...(u.security_meta||{}),last_login_ip:String(event.headers['cf-connecting-ip']||''),login_bridge_version:'9.5.9'}};
+      const stored=String(u.password||'');
+      const modern=stored.startsWith('scrypt$');
+      if(!modern){patch.password=hashPassword(password);patch.password_changed_at=new Date().toISOString();patch.security_meta={...patch.security_meta,legacy_password_migrated_at:new Date().toISOString()}}
+      // Security bookkeeping must never turn a verified password into a failed login.
+      await patchUser(url,sh,u.id,patch);
+      const safe={id:u.id,name:u.name,username:String(u.username||'').trim(),phone:u.phone,role:u.role,branch_id:u.branch_id,status:u.status||'نشط',permissions:u.permissions||{},force_password_reset:!!u.force_password_reset};
+      const session_token=issue({id:u.id,name:u.name,role:u.role,branch_id:u.branch_id||null,permissions:u.permissions||{}},key);
+      return{statusCode:200,headers:H,body:JSON.stringify({user:safe,session_token,password_migrated:!modern,login_bridge:'9.5.9'})};
     }catch(e){return{statusCode:502,headers:H,body:JSON.stringify({error:e.message||'تعذر تسجيل الدخول'})}}
   };return module.exports;
 }
@@ -802,13 +830,13 @@ function __load_v9_admin_data(){
         if(resource==='overview'){
           const all=['leads','service_tickets','tasks','agents','supplier_contracts','supplier_payables','incidents','lost_found'];const counts={};
           await Promise.all(all.map(async t=>{const r=await fetch(`${url}/rest/v1/${t}?select=id&limit=1000`,{headers:sh});const b=await r.json().catch(()=>[]);counts[t]=r.ok&&Array.isArray(b)?b.length:0}));
-          return{statusCode:200,headers:H,body:JSON.stringify({ok:true,build:'9.5.6-shared-ops-finance-isolation',actor:{name:actor.name,role:actor.role},counts})};
+          return{statusCode:200,headers:H,body:JSON.stringify({ok:true,build:'9.5.9-staff-login-bridge',actor:{name:actor.name,role:actor.role},counts})};
         }
 
         if(resource==='manifest'){
           return{statusCode:200,headers:H,body:JSON.stringify({
             ok:true,
-            build:'9.5.6-shared-ops-finance-isolation',
+            build:'9.5.9-staff-login-bridge',
             resources:Object.keys(READ_MAP).sort()
           })};
         }
