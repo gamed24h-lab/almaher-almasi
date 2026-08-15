@@ -1,6 +1,12 @@
 const process = { env: {} };
 import * as crypto from 'node:crypto';
 // AL-MAHER V10.1.6 — CENTRAL BRANCH SCOPE / LIVE STAFF SESSION HARDENING
+function __supabaseBase(value){
+  let v=String(value||'').trim().replace(/^['\"]|['\"]$/g,'').replace(/\/+$/,'');
+  // Accept project root OR accidentally pasted API paths such as /rest/v1 or /auth/v1.
+  v=v.replace(/\/(?:rest|auth|storage|functions)\/v1(?:\/.*)?$/i,'');
+  return v.replace(/\/+$/,'');
+}
 const __mods = Object.create(null);
 function __localRequire(spec){
   if(spec==='crypto'||spec==='node:crypto') return crypto;
@@ -49,7 +55,7 @@ function __load_create_booking(){
   exports.handler = async (event) => {
     const headers={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"};
     if(event.httpMethod!=="POST")return{statusCode:405,headers,body:JSON.stringify({error:"Method not allowed"})};
-    const supabaseUrl=(process.env.SUPABASE_URL||"").replace(/\/+$/,'');
+    const supabaseUrl=(__supabaseBase(process.env.SUPABASE_URL)||"").replace(/\/+$/,'');
     const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY||"";
     if(!supabaseUrl||!serviceKey)return{statusCode:500,headers,body:JSON.stringify({error:"Server Supabase environment variables are missing"})};
     let payload={};try{payload=JSON.parse(event.body||"{}")}catch{return{statusCode:400,headers,body:JSON.stringify({error:"Invalid JSON"})}}
@@ -117,7 +123,7 @@ function __load_get_booking(){
      if(!bookingNo||!verification)
        return{statusCode:400,headers,body:JSON.stringify({error:"أدخل رقم الحجز ورقم الجوال أو الهوية"})};
   
-     const url=(process.env.SUPABASE_URL||"").replace(/\/+$/,"");
+     const url=(__supabaseBase(process.env.SUPABASE_URL)||"").replace(/\/+$/,"");
      const key=process.env.SUPABASE_SERVICE_ROLE_KEY||"";
      if(!url||!key)
        return{statusCode:500,headers,body:JSON.stringify({error:"إعدادات Supabase على الخادم غير مكتملة"})};
@@ -203,7 +209,7 @@ function __load_developer_login(){
    const password=String(payload.password||"");
    if(!email||!password)return{statusCode:400,headers,body:JSON.stringify({error:"أدخل البريد وكلمة المرور"})};
   
-   const url=(process.env.SUPABASE_URL||"").replace(/\/+$/,"");
+   const url=(__supabaseBase(process.env.SUPABASE_URL)||"").replace(/\/+$/,"");
    const key=process.env.SUPABASE_SERVICE_ROLE_KEY||"";
    if(!url||!key)return{statusCode:500,headers,body:JSON.stringify({error:"إعدادات Supabase على الخادم غير مكتملة"})};
   
@@ -214,7 +220,11 @@ function __load_developer_login(){
        body:JSON.stringify({email,password})
      });
      const loginBody=await login.json().catch(()=>({}));
-     if(!login.ok)return{statusCode:401,headers,body:JSON.stringify({error:loginBody?.msg||loginBody?.error_description||"بيانات الدخول غير صحيحة"})};
+     if(!login.ok){
+       const detail=String(loginBody?.msg||loginBody?.error_description||loginBody?.message||'');
+       const badPath=/invalid path|not found|404/i.test(detail);
+       return{statusCode:badPath?502:401,headers,body:JSON.stringify({error:badPath?'تعذر الوصول إلى خدمة تسجيل الدخول في Supabase. راجع SUPABASE_URL.':(detail||"بيانات الدخول غير صحيحة"),code:badPath?'SUPABASE_AUTH_PATH':'INVALID_CREDENTIALS'})};
+     }
   
      const userId=loginBody?.user?.id;
      if(!userId)return{statusCode:401,headers,body:JSON.stringify({error:"تعذر التحقق من المستخدم"})};
@@ -226,8 +236,8 @@ function __load_developer_login(){
      if(!pr.ok)return{statusCode:500,headers,body:JSON.stringify({error:rows?.message||"تعذر قراءة ملف المطور"})};
      const profile=Array.isArray(rows)?rows[0]:null;
      if(!profile)return{statusCode:403,headers,body:JSON.stringify({error:"ملف المطور غير موجود في profiles"})};
-     if(profile.role!=="developer")return{statusCode:403,headers,body:JSON.stringify({error:"هذا الحساب ليس حساب مطور"})};
-     if(profile.status!=="active")return{statusCode:403,headers,body:JSON.stringify({error:"حساب المطور غير نشط"})};
+     if(!['developer','مطور'].includes(String(profile.role||'').trim().toLowerCase()))return{statusCode:403,headers,body:JSON.stringify({error:"هذا الحساب ليس حساب مطور"})};
+     if(!['active','نشط','enabled','مفعل','مفعّل','1','true'].includes(String(profile.status||'').trim().toLowerCase()))return{statusCode:403,headers,body:JSON.stringify({error:"حساب المطور غير نشط"})};
   
      return{
        statusCode:200,headers,
@@ -245,6 +255,21 @@ function __load_developer_login(){
   return module.exports;
 }
 __mods["developer-login"]=__load_developer_login();
+function __load_auth_health(){
+  const module={exports:{}};const exports=module.exports;
+  exports.handler=async(event)=>{
+    const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
+    const url=__supabaseBase(process.env.SUPABASE_URL),key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+    if(!url||!key)return{statusCode:200,headers:H,body:JSON.stringify({ok:false,env:false,url_ok:!!url,key_ok:!!key})};
+    try{
+      const r=await fetch(`${url}/rest/v1/staff_users?select=id&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
+      const body=await r.json().catch(()=>null);
+      return{statusCode:200,headers:H,body:JSON.stringify({ok:r.ok,env:true,base_url:url.replace(/https?:\/\//,'').split('/')[0],staff_table:r.ok,status:r.status,error:r.ok?'':String(body?.message||body?.details||'')})};
+    }catch(e){return{statusCode:200,headers:H,body:JSON.stringify({ok:false,env:true,base_url:url.replace(/https?:\/\//,'').split('/')[0],staff_table:false,error:e.message||'network error'})}}
+  };return module.exports;
+}
+__mods["auth-health"]=__load_auth_health();
+
 function __load_platform_data(){
   const module={exports:{}};
   const exports=module.exports;
@@ -259,7 +284,7 @@ function __load_platform_data(){
   }
   exports.handler=async(event)=>{
    const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
-   const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+   const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
    if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server env missing'})};
    const auth=String(event.headers.authorization||'');const token=auth.startsWith('Bearer ')?auth.slice(7):'';let session=verify(token,key);
    if(!session)return{statusCode:401,headers:H,body:JSON.stringify({error:'انتهت جلسة الموظف. سجل الدخول مرة أخرى.'})};
@@ -338,14 +363,27 @@ function __load_staff_login(){
     let p={};try{p=JSON.parse(event.body||'{}')}catch{}
     const identity=String(p.identity||'').trim(),password=String(p.password||''),method=String(p.method||'username');
     if(!identity||!password)return{statusCode:400,headers:H,body:JSON.stringify({error:'أدخل بيانات الدخول'})};
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,''),key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,''),key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
     if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'إعدادات Supabase على الخادم غير مكتملة'})};
     const sh={apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'};
     try{
       // Load a bounded staff directory and compare normalized identities locally. This
       // keeps legacy usernames with casing/whitespace and formatted phone numbers working.
-      const r=await fetch(`${url}/rest/v1/staff_users?select=id,name,username,password,phone,role,branch_id,status,permissions,failed_login_attempts,locked_until,last_login_at,force_password_reset,security_meta&limit=1000`,{headers:sh});
-      const rows=await r.json().catch(()=>[]);if(!r.ok)return{statusCode:500,headers:H,body:JSON.stringify({error:rows?.message||'تعذر قراءة المستخدم'})};
+      const richSelect='id,name,username,password,phone,role,branch_id,status,permissions,failed_login_attempts,locked_until,last_login_at,force_password_reset,security_meta';
+      const minimalSelect='id,name,username,password,phone,role,branch_id,status,permissions';
+      let r=await fetch(`${url}/rest/v1/staff_users?select=${encodeURIComponent(richSelect)}&limit=1000`,{headers:sh});
+      let rows=await r.json().catch(()=>null);
+      let securityColumnsReady=true;
+      if(!r.ok){
+        // Compatibility fallback: login must not fail only because newer hardening columns are absent/stale in schema cache.
+        securityColumnsReady=false;
+        r=await fetch(`${url}/rest/v1/staff_users?select=${encodeURIComponent(minimalSelect)}&limit=1000`,{headers:sh});
+        rows=await r.json().catch(()=>null);
+      }
+      if(!r.ok){
+        const detail=String(rows?.message||rows?.details||rows?.hint||'');
+        return{statusCode:502,headers:H,body:JSON.stringify({error:detail||'تعذر قراءة المستخدم من Supabase',code:'STAFF_DIRECTORY_READ_FAILED'})};
+      }
       const list=Array.isArray(rows)?rows:[];
       let u=null;
       if(method==='phone'){
@@ -354,22 +392,24 @@ function __load_staff_login(){
         const target=normUser(identity);u=list.find(x=>String(x.username??'').trim()===identity)||list.find(x=>normUser(x.username)===target)||null;
       }
       if(!u)return{statusCode:401,headers:H,body:JSON.stringify({error:'اسم المستخدم أو كلمة المرور غير صحيحة'})};
-      if(u.locked_until&&new Date(u.locked_until).getTime()>Date.now())return{statusCode:429,headers:H,body:JSON.stringify({error:'تم إيقاف محاولات الدخول مؤقتاً. حاول لاحقاً.'})};
+      if(securityColumnsReady&&u.locked_until&&new Date(u.locked_until).getTime()>Date.now())return{statusCode:429,headers:H,body:JSON.stringify({error:'تم إيقاف محاولات الدخول مؤقتاً. حاول لاحقاً.'})};
       if(!verifyPassword(password,u.password)){
         const n=Number(u.failed_login_attempts||0)+1,lock=n>=5?new Date(Date.now()+15*60*1000).toISOString():null;
-        await patchUser(url,sh,u.id,{failed_login_attempts:n,locked_until:lock,security_meta:{...(u.security_meta||{}),last_failed_login_at:new Date().toISOString()}});
+        if(securityColumnsReady)await patchUser(url,sh,u.id,{failed_login_attempts:n,locked_until:lock,security_meta:{...(u.security_meta||{}),last_failed_login_at:new Date().toISOString()}});
         return{statusCode:401,headers:H,body:JSON.stringify({error:'اسم المستخدم أو كلمة المرور غير صحيحة'})};
       }
       if(!activeStatus(u.status))return{statusCode:403,headers:H,body:JSON.stringify({error:'هذا الحساب غير نشط'})};
-      const patch={failed_login_attempts:0,locked_until:null,last_login_at:new Date().toISOString(),security_meta:{...(u.security_meta||{}),last_login_ip:String(event.headers['cf-connecting-ip']||''),login_bridge_version:'9.6.0'}};
       const stored=String(u.password||'');
       const modern=stored.startsWith('scrypt$');
-      if(!modern){patch.password=hashPassword(password);patch.password_changed_at=new Date().toISOString();patch.security_meta={...patch.security_meta,legacy_password_migrated_at:new Date().toISOString()}}
-      // Security bookkeeping must never turn a verified password into a failed login.
-      await patchUser(url,sh,u.id,patch);
+      if(securityColumnsReady){
+        const patch={failed_login_attempts:0,locked_until:null,last_login_at:new Date().toISOString(),security_meta:{...(u.security_meta||{}),last_login_ip:String(event.headers['cf-connecting-ip']||''),login_bridge_version:'10.3.4-auth-recovery'}};
+        if(!modern){patch.password=hashPassword(password);patch.password_changed_at=new Date().toISOString();patch.security_meta={...patch.security_meta,legacy_password_migrated_at:new Date().toISOString()}}
+        // Security bookkeeping is best-effort and must never turn a verified login into failure.
+        await patchUser(url,sh,u.id,patch);
+      }
       const safe={id:u.id,name:u.name,username:String(u.username||'').trim(),phone:u.phone,role:u.role,branch_id:u.branch_id,status:u.status||'نشط',permissions:u.permissions||{},force_password_reset:!!u.force_password_reset};
       const session_token=issue({id:u.id,name:u.name,role:u.role,branch_id:u.branch_id||null,permissions:u.permissions||{}},key);
-      return{statusCode:200,headers:H,body:JSON.stringify({user:safe,session_token,password_migrated:!modern,login_bridge:'9.6.0'})};
+      return{statusCode:200,headers:H,body:JSON.stringify({user:safe,session_token,password_migrated:securityColumnsReady&&!modern,login_bridge:'10.3.4-auth-recovery',security_columns_ready:securityColumnsReady})};
     }catch(e){return{statusCode:502,headers:H,body:JSON.stringify({error:e.message||'تعذر تسجيل الدخول'})}}
   };return module.exports;
 }
@@ -419,7 +459,7 @@ function __load_staff_admin(){
   }
   exports.handler=async(event)=>{
    const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
-   const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+   const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
    if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server env missing'})};
    const auth=String(event.headers.authorization||'');const token=auth.startsWith('Bearer ')?auth.slice(7):'';let session=verify(token,key);
    if(!session)return{statusCode:401,headers:H,body:JSON.stringify({error:'انتهت جلسة الموظف. سجل الدخول مرة أخرى.'})};
@@ -681,7 +721,7 @@ function __load_cloud_core(){
   
   exports.handler = async (event) => {
     const H={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"};
-    const url=(process.env.SUPABASE_URL||"").replace(/\/+$/,"");
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||"").replace(/\/+$/,"");
     const key=process.env.SUPABASE_SERVICE_ROLE_KEY||"";
     if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:"Server env missing"})};
   
@@ -939,7 +979,7 @@ function __load_v9_admin_data(){
   async function safeFetchRows(url,sh,table,limit=200){try{return {rows:await fetchRows(url,sh,table,limit),missing:false}}catch(e){const msg=String(e?.message||e);if(/schema cache|Could not find the table|relation .* does not exist|PGRST205/i.test(msg))return {rows:[],missing:true,error:msg};return {rows:[],missing:false,error:msg}}}
   exports.handler=async(event)=>{
     const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
     if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server Supabase environment variables are missing'})};
     const auth=String(event.headers.authorization||'');const token=auth.startsWith('Bearer ')?auth.slice(7):'';const actor=await authorize(url,key,token);
     if(!actor)return{statusCode:403,headers:H,body:JSON.stringify({error:'مركز V9 متاح للمطور أو المدير العام فقط'})};
@@ -1120,7 +1160,7 @@ function __load_legacy_state(){
   }
   exports.handler=async(event)=>{
     const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server env missing'})};
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server env missing'})};
     const auth=String(event.headers.authorization||'');const token=auth.startsWith('Bearer ')?auth.slice(7):'';if(!token)return{statusCode:401,headers:H,body:JSON.stringify({error:'Unauthorized'})};
     const actor=await actorFromToken(url,key,token);if(!actor)return{statusCode:401,headers:H,body:JSON.stringify({error:'Invalid session'})};
     const sh={apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'};
@@ -1160,7 +1200,7 @@ function __load_system_release(){
   }
   exports.handler=async(event)=>{
     const H={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'};
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');
     const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
     if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'Server env missing'})};
     const sh={apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'};
@@ -1208,7 +1248,7 @@ function __load_customer_auth(){
     const sk='customer_state_'+userId;const h=authHeaders(key);const r=await fetch(`${url}/rest/v1/system_settings?key=eq.${encodeURIComponent(sk)}&select=value,updated_at&limit=1`,{headers:h});const rows=await r.json().catch(()=>[]);if(!r.ok)throw new Error(rows?.message||'تعذر تحميل بيانات العميل');const row=Array.isArray(rows)?rows[0]:null;const v=row?.value||{};return{savedTravelers:Array.isArray(v.savedTravelers)?v.savedTravelers:[],updated_at:row?.updated_at||null};
   }
   exports.handler=async(event)=>{
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'إعدادات Supabase على الخادم غير مكتملة'})};
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';if(!url||!key)return{statusCode:500,headers:H,body:JSON.stringify({error:'إعدادات Supabase على الخادم غير مكتملة'})};
     const action=String(event.queryStringParameters?.action||'').trim();let p={};if(event.httpMethod!=='GET'){try{p=JSON.parse(event.body||'{}')}catch{return{statusCode:400,headers:H,body:JSON.stringify({error:'Invalid JSON'})}}}
     try{
       if(event.httpMethod==='POST'&&action==='register'){
@@ -1516,7 +1556,7 @@ function __load_push_notifications(){
     return {ok:r.ok,status:r.status,text:await r.text().catch(()=> '')};
   }
   async function supa(){
-    const url=(process.env.SUPABASE_URL||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
+    const url=(__supabaseBase(process.env.SUPABASE_URL)||'').replace(/\/+$/,'');const key=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
     if(!url||!key)throw new Error('Server Supabase environment variables are missing');
     return {url,key,h:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
   }
@@ -1581,6 +1621,7 @@ const __handlers = {
   "create-booking": __mods["create-booking"].handler,
   "get-booking": __mods["get-booking"].handler,
   "developer-login": __mods["developer-login"].handler,
+  "auth-health": __mods["auth-health"].handler,
   "platform-data": __mods["platform-data"].handler,
   "staff-login": __mods["staff-login"].handler,
   "staff-admin": __mods["staff-admin"].handler,
