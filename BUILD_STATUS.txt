@@ -1,23 +1,46 @@
-AL-MAHER NEXT 1.0.0 — BUILD STATUS
+AL-MAHER NEXT 1.1.0 — BUILD STATUS
 =================================
 Architecture: React + Vite + Cloudflare Worker + Supabase
 Date: 2026-08-21
 
 PASS  worker/index.js node syntax
-PASS  /api/health runtime smoke test (200)
+PASS  /api/health runtime smoke test (200 / version 1.1.0)
 PASS  /api/auth/me unauthenticated smoke test (401)
+PASS  33 JS/JSX source files TypeScript JSX syntax transpile
 PASS  33 JS/JSX source files internal import resolution
 PASS  0 missing internal imports
-PASS  package.json JSON parse
+PASS  package.json JSON parse / version 1.1.0
 PASS  CSS basic brace validation
 PASS  index.html entry validation
 PASS  keep_vars = true
-PASS  Worker has no embedded legacy HTML application shell
-PASS  frontend contains no Supabase service-role secret
+PASS  frontend contains no SUPABASE_SERVICE_ROLE_KEY
+PASS  no localStorage/sessionStorage operational persistence in frontend
+PASS  branch-aware finance and module write guards present in Worker
+PASS  health/predeploy/regression endpoints report release 1.1.0
 
-NOT RUN HERE:
-- npm install / vite production build (execution environment has no outbound DNS/package access)
-- live Supabase integration test (requires production secrets/session)
+V1.1 FUNCTIONAL DEPTH
+- Trips + Trip Center
+- Bookings + passenger editor + conflict/version protection
+- Ticket + A4/80mm/58mm + WhatsApp action
+- QR scanner + scan modes
+- Seats + assignments
+- Housing + rooms/assignments/private stay logic
+- Fleet + branch guards
+- Finance + branch financial isolation
+- Refund Request -> Approve -> Complete workflow
+- Operations manifests across participating branches
+- CRM data module
+- Documents
+- Notifications + rules/templates/queue
+- Return operations
+- Staff + permissions
+- Reports
+- Customer Portal
+- Developer/System health + release/predeploy checks
+
+NOT RUN IN THIS BUILD CONTAINER:
+- npm install / vite production build (outbound package network is unavailable here)
+- live Supabase integration test (requires production Cloudflare secrets/session)
 - live Cloudflare deploy
 
-These are intentionally deferred to the connected Cloudflare/GitHub build environment.
+Production build is expected to run in the connected Cloudflare build environment.

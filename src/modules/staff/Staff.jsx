@@ -6,10 +6,10 @@ import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,PageHeader,Select,Table} from '../../components/UI.jsx';
 
 const PERMS=[
- ['branchBooking','إنشاء حجوزات'],['viewBookings','عرض الحجوزات'],['editBookings','تعديل الحجوزات'],['editPassenger','تعديل الركاب'],
- ['trips','إدارة الرحلات'],['operations','التشغيل'],['scanner','QR والمسح'],['housing','التسكين'],['seats','المقاعد'],['fleet','الأسطول'],
- ['finance','المالية'],['payments','التحصيل'],['refunds','الاسترداد'],['refund_request','طلب استرداد'],['refund_approve','اعتماد استرداد'],['refund_complete','تنفيذ استرداد'],
- ['crm','CRM'],['documents','المستندات'],['notifications','الإشعارات'],['reports','التقارير'],['manageUsers','إدارة الموظفين'],['allBranches','تشغيل كل الفروع'],['allBranchesFinance','مالية كل الفروع']
+ ['branchBooking','إنشاء حجوزات'],['viewBookings','عرض الحجوزات'],['editBookings','تعديل الحجوزات'],['editPassenger','تعديل الركاب'],['changeTrip','نقل الحجز بين الرحلات'],['printTickets','طباعة التذاكر'],
+ ['trips','إدارة الرحلات'],['operations','التشغيل'],['manifest','كشف التشغيل'],['housingManifest','كشف التسكين'],['scanner','QR والمسح'],['housing','التسكين'],['seats','المقاعد'],['fleet','الأسطول'],['vehicles','المركبات'],['returns','محرك العودة'],
+ ['finance','المالية'],['payments','التحصيل'],['expenses','المصروفات'],['shifts','الخزن والورديات'],['refunds','الاسترداد'],['refund_request','طلب استرداد'],['refund_approve','اعتماد استرداد'],['refund_complete','تنفيذ استرداد'],['approvals','الاعتمادات'],
+ ['crm','CRM'],['customers','العملاء'],['documents','المستندات'],['notifications','الإشعارات'],['automation','الأتمتة'],['reports','التقارير'],['printReports','طباعة التقارير'],['manageUsers','إدارة الموظفين'],['allBranches','تشغيل كل الفروع'],['allBranchesFinance','مالية كل الفروع']
 ];
 const ROLES=['موظف','مشرف','مدير فرع','محاسب','مشرف تشغيل','مدير عام'];
 function defaultForm(){return {id:'',name:'',username:'',phone:'',role:'موظف',branch_id:'',status:'نشط',password:'',permissions:{}}}

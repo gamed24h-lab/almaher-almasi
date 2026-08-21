@@ -12,6 +12,8 @@ export const api={
   logout:()=>request('/api/auth/logout',{method:'POST'}),
   bootstrap:()=>request('/api/bootstrap'),
   admin:(body)=>request('/api/admin',{method:'POST',body}),
+  platform:(body)=>request('/api/platform',{method:'POST',body}),
+  platformGet:(resource='platform')=>request(`/api/platform?resource=${encodeURIComponent(resource)}`),
   module:(resource)=>request(`/api/module?resource=${encodeURIComponent(resource)}`),
   moduleWrite:(body)=>request('/api/module',{method:'POST',body}),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),

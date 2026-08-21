@@ -112,8 +112,6 @@ function __load_get_booking(){
        return{statusCode:405,headers,body:JSON.stringify({error:"Method not allowed"})};
      }
   
-     console.log("lookup request", {bookingNo, hasVerification:!!verification, method:event.httpMethod});
-  
      if(!bookingNo||!verification)
        return{statusCode:400,headers,body:JSON.stringify({error:"أدخل رقم الحجز ورقم الجوال أو الهوية"})};
   
@@ -125,8 +123,6 @@ function __load_get_booking(){
      const h={apikey:key,Authorization:`Bearer ${key}`,Accept:"application/json"};
      const r=await fetch(`${url}/rest/v1/bookings?select=*&booking_number=eq.${encodeURIComponent(bookingNo)}&limit=1`,{headers:h});
      const rows=await r.json();
-     console.log("booking query status", r.status, "rows", Array.isArray(rows)?rows.length:"n/a");
-  
      if(!r.ok)
        return{statusCode:r.status,headers,body:JSON.stringify({error:rows?.message||"تعذر الاستعلام من Supabase"})};
      if(!rows?.length)
@@ -181,7 +177,12 @@ function __load_get_booking(){
        cloudSynced:true,
        cloudBookingId:b.id
      };
-     return{statusCode:200,headers,body:JSON.stringify({booking})};
+     const safePassengers=(passengers||[]).map(p=>({id:p.id,passenger_order:p.passenger_order,full_name:p.full_name||'',gender:p.gender||'',nationality:p.nationality||'',identity_number:p.identity_number||'',phone:p.phone||'',status:p.status||'',accommodation_status:p.accommodation_status||'',preferred_language:p.preferred_language||'ar'}));
+     async function safeRow(table,id){if(!id)return null;const rr=await fetch(`${url}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,{headers:h});const aa=await rr.json().catch(()=>[]);return rr.ok&&Array.isArray(aa)?aa[0]||null:null}
+     const [tripRow,returnRow,branchRow]=await Promise.all([safeRow('trips',b.trip_id),safeRow('trips',b.return_trip_id),safeRow('branches',b.branch_id)]);
+     const safeTrip=t=>t?{id:t.id,trip_code:t.trip_code||t.code||'',from_city:t.from_city||t.origin||'',to_city:t.to_city||t.destination||'',departure_date:t.departure_date||null,departure_time:t.departure_time||null,return_date:t.return_date||null,return_time:t.return_time||null,status:t.status||''}:null;
+     const safeBranch=branchRow?{id:branchRow.id,name:branchRow.name||'',address:branchRow.address||'',whatsapp:branchRow.whatsapp||'',phone:branchRow.phone||'',map_url:branchRow.map_url||branchRow.mapUrl||''}:null;
+     return{statusCode:200,headers,body:JSON.stringify({booking,passengers:safePassengers,trip:safeTrip(tripRow),returnTrip:safeTrip(returnRow),branch:safeBranch})};
    }catch(e){
      console.error("get-booking error",e);
      return{statusCode:502,headers,body:JSON.stringify({error:e.message||"تعذر الاستعلام"})};
@@ -586,7 +587,7 @@ function __load_staff_admin(){
      db.journey_mode=normalizeJourneyMode(b.journeyMode??old.journey_mode,{...old,...b});
      if(has(session,'confirmBookings')||has(session,'cancelBookings'))db.status=bookingStatusDb(b.status);
      const newPaid=Number(b.paidAmount??old.paid_amount??0);if(newPaid<Number(old.paid_amount||0)&&!has(session,'refunds'))return{statusCode:403,headers:H,body:JSON.stringify({error:'خفض المبلغ المدفوع يعتبر استردادًا ويتطلب صلاحية المرتجعات'})};
-     if(has(session,'payments')||has(session,'refunds')){db.paid_amount=newPaid;db.payment_method=b.paymentMethod||old.payment_method||null;}
+     if(has(session,'payments')||has(session,'refunds')){db.paid_amount=newPaid;db.payment_method=b.paymentMethod||b.payment_method||old.payment_method||null;db.payment_reference=b.paymentReference??b.payment_reference??old.payment_reference??null;}
      if(has(session,'editBookings'))Object.assign(db,{customer_name:b.name??old.customer_name,customer_phone:b.phone??old.customer_phone,customer_identity:b.identity??old.customer_identity,customer_gender:b.gender??old.customer_gender,customer_nationality:b.nationality??old.customer_nationality,notes:b.notes??old.notes,accommodation_type:b.accommodationType??old.accommodation_type,accommodation_label:b.accommodationLabel??old.accommodation_label,private_rooms:Number(b.privateRooms??old.private_rooms??0),private_room_types:Array.isArray(b.privateRoomTypes)?b.privateRoomTypes:(old.private_room_types||[]),total_price:Number(b.totalPrice??old.total_price??0),ticket_version:Number(b.ticketVersion??old.ticket_version??1)});
      if(has(session,'changeTrip')){db.trip_id=b.tripId||old.trip_id;db.return_trip_id=b.returnTripId||null;db.journey_mode=normalizeJourneyMode(b.journeyMode||old.journey_mode,{...old,...b});for(const tid of [db.trip_id,db.return_trip_id].filter(Boolean)){const tr=await fetch(`${url}/rest/v1/trips?id=eq.${encodeURIComponent(tid)}&select=id,branch_id&limit=1`,{headers:sh});const tb=await tr.json().catch(()=>[]);const t=Array.isArray(tb)?tb[0]:null;if(!t)return{statusCode:400,headers:H,body:JSON.stringify({error:'الرحلة الجديدة غير موجودة'})};if(!(await canOperateTrip(url,sh,session,tid)))return{statusCode:403,headers:H,body:JSON.stringify({error:'الرحلة الجديدة خارج التشغيل المصرح لفرعك'})};}}
      if(b.snapshot&&typeof b.snapshot==='object')db.snapshot=b.snapshot;else db.snapshot={...(old.snapshot||{}),...b,passengerDetails:undefined};
@@ -838,7 +839,7 @@ function __load_v9_admin_data(){
     fleet:['vehicles','vehicle_seats','trip_vehicles','vehicle_maintenance'],
     housing:['hotels','trip_hotels','hotel_rooms','room_assignments'],
     return_ops:['trip_status_events','trip_meeting_points','notifications'],
-    tickets:['bookings','booking_passengers','passenger_qr_tokens','ticket_templates','print_events','translation_entries'],
+    tickets:['bookings','booking_passengers','passenger_qr_tokens','ticket_templates','print_events','translation_entries','trip_vehicles','vehicles','seat_assignments','hotels','trip_hotels','hotel_rooms','room_assignments','trip_meeting_points'],
     customers:['bookings','booking_passengers','travel_groups','passenger_documents'],
     geo:['trip_meeting_points','passenger_meeting_points','trip_status_events'],
     cost_centers:['seasons','programs','trips','branches','expenses'],
@@ -1273,6 +1274,7 @@ function __load_mega_completion(){
   async function authorize(url,key,token){const s=verify(token,key);if(s)return s;return developer(url,key,token)}
   function isManager(a){return !!(a?.role==='مدير عام'||a?.role==='developer'||a?.permissions?.all)}
   function allFinance(a){return !!(isManager(a)||a?.permissions?.allBranchesFinance)}
+  function allOps(a){return !!(isManager(a)||a?.permissions?.allBranches)}
   async function rows(url,key,table,query='select=*&limit=500'){
     try{const r=await fetch(`${url}/rest/v1/${table}?${query}`,{headers:authHeaders(key)});const b=await r.json().catch(()=>[]);if(!r.ok)return [];return Array.isArray(b)?b:[]}catch{return []}
   }
@@ -1289,6 +1291,14 @@ function __load_mega_completion(){
     return upsert(url,key,'system_settings',{key:k,value,scope:'global',branch_id:null,updated_by:uuidOrNull(actor?.id),updated_at:now()},'key')
   }
   function branchFilter(a,row){return allFinance(a)||!a?.branch_id||!row?.branch_id||String(row.branch_id)===String(a.branch_id)}
+  async function canOperateTrip(url,key,a,tripId){
+    if(allOps(a))return true;
+    const bid=String(a?.branch_id||''),tid=String(tripId||'');if(!bid||!tid)return false;
+    const t=(await rows(url,key,'trips',`id=eq.${enc(tid)}&select=id,branch_id&limit=1`))[0];
+    if(t&&String(t.branch_id||'')===bid)return true;
+    const shared=await rows(url,key,'trip_branches',`trip_id=eq.${enc(tid)}&branch_id=eq.${enc(bid)}&select=id,active&limit=5`);
+    return shared.some(x=>x.active!==false);
+  }
   async function providerStatus(env){return {
     whatsapp:{configured:!!env.WHATSAPP_WEBHOOK_URL,secret:!!env.WHATSAPP_WEBHOOK_TOKEN},
     sms:{configured:!!env.SMS_WEBHOOK_URL,secret:!!env.SMS_WEBHOOK_TOKEN},
@@ -1345,7 +1355,7 @@ function __load_mega_completion(){
         const storageLimit=Number(env.SUPABASE_STORAGE_LIMIT_BYTES||0)||null,dbLimit=Number(env.SUPABASE_DB_LIMIT_BYTES||0)||null;
         return{statusCode:200,headers:H,body:JSON.stringify({ok:true,storage:{bytes:storageBytes,files:filesCount,buckets,limit_bytes:storageLimit,percent:storageLimit?Math.round(storageBytes/storageLimit*1000)/10:null},database:{bytes:null,limit_bytes:dbLimit,percent:null,note:'الحجم الفعلي لقاعدة البيانات غير متاح من مفاتيح التطبيق الحالية؛ لن يتم عرض رقم تقديري وهمي.'},checked_at:new Date().toISOString()})};
       }
-      if(action==='status'){const emergency={maintenance:await setting(url,key,'emergency.maintenance'),read_only:await setting(url,key,'emergency.read_only'),stop_new_bookings:await setting(url,key,'emergency.stop_new_bookings')};return{statusCode:200,headers:H,body:JSON.stringify({ok:true,build:'10.3.2-consolidated-fix',providers:await providerStatus(env),emergency,actor:{name:actor.name,role:actor.role,branch_id:uuidOrNull(actor.branch_id)}})}}
+      if(action==='status'){const emergency={maintenance:await setting(url,key,'emergency.maintenance'),read_only:await setting(url,key,'emergency.read_only'),stop_new_bookings:await setting(url,key,'emergency.stop_new_bookings')};return{statusCode:200,headers:H,body:JSON.stringify({ok:true,build:'1.1.0',providers:await providerStatus(env),emergency,actor:{name:actor.name,role:actor.role,branch_id:uuidOrNull(actor.branch_id)}})}}
       if(action==='developer_studio_get'){
         if(actor.role!=='developer')return{statusCode:200,headers:H,body:JSON.stringify({restricted:true,labels:{},profile:{},config:{}})};
         const labels=await setting(url,key,'developer.ui_labels.v1')||{},profile=await setting(url,key,'developer.profile.v1')||{},config=await setting(url,key,'developer.ui_config.v1')||{};
@@ -1432,10 +1442,10 @@ function __load_mega_completion(){
       }
       if(action==='financial_health'){const bs=(await rows(url,key,'bookings','select=id,booking_number,branch_id,total_price,paid_amount,status&limit=5000')).filter(x=>branchFilter(actor,x));let shifts=await rows(url,key,'cash_shifts','select=*&limit=1000');if(!allFinance(actor)&&actor?.branch_id){const regs=await rows(url,key,'cash_registers',`branch_id=eq.${enc(actor.branch_id)}&select=id&limit=500`);const allowed=new Set(regs.map(x=>String(x.id)));shifts=shifts.filter(x=>allowed.has(String(x.register_id||'')))}const issues=[];for(const b of bs){if(Number(b.paid_amount||0)<0)issues.push({type:'negative_payment',ref:b.booking_number});if(Number(b.paid_amount||0)>Number(b.total_price||0))issues.push({type:'overpayment',ref:b.booking_number,amount:Number(b.paid_amount)-Number(b.total_price)})}for(const s of shifts)if(s.status==='closed'&&Math.abs(Number(s.variance||0))>0.01)issues.push({type:'cash_variance',ref:s.id,variance:s.variance});await upsert(url,key,'financial_health_runs',{branch_id:uuidOrNull(actor.branch_id),status:issues.length?'warning':'ok',issues,created_by:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({status:issues.length?'warning':'ok',issues})}}
       if(action==='regression_run'){
-        if(!isManager(actor))return{statusCode:403,headers:H,body:JSON.stringify({error:'Manager/developer only'})};const required=['branches','trips','bookings','booking_passengers','staff_users','trip_branches','scan_events','room_assignments','seat_assignments','notifications','export_jobs','system_releases','post_trip_ratings','presence_sessions'];const checks=[];for(const t of required){const r=await fetch(`${url}/rest/v1/${t}?select=*&limit=1`,{headers:authHeaders(key)});checks.push({name:`table:${t}`,ok:r.ok,status:r.status})}const h=await health(url,key);checks.push({name:'health',ok:h.ok,status:h.latency_ms});const ok=checks.every(x=>x.ok);const saved=await upsert(url,key,'regression_runs',{release_version:'10.0.0',status:ok?'pass':'fail',checks,run_by:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok,checks,row:saved?.[0]||saved})};
+        if(!isManager(actor))return{statusCode:403,headers:H,body:JSON.stringify({error:'Manager/developer only'})};const required=['branches','trips','bookings','booking_passengers','staff_users','trip_branches','scan_events','room_assignments','seat_assignments','notifications','export_jobs','system_releases','post_trip_ratings','presence_sessions'];const checks=[];for(const t of required){const r=await fetch(`${url}/rest/v1/${t}?select=*&limit=1`,{headers:authHeaders(key)});checks.push({name:`table:${t}`,ok:r.ok,status:r.status})}const h=await health(url,key);checks.push({name:'health',ok:h.ok,status:h.latency_ms});const ok=checks.every(x=>x.ok);const saved=await upsert(url,key,'regression_runs',{release_version:'1.1.0',status:ok?'pass':'fail',checks,run_by:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok,checks,row:saved?.[0]||saved})};
       }
       if(action==='predeploy_run'){
-        if(!isManager(actor))return{statusCode:403,headers:H,body:JSON.stringify({error:'Manager/developer only'})};const h=await health(url,key),providers=await providerStatus(env),em={maintenance:await setting(url,key,'emergency.maintenance'),read_only:await setting(url,key,'emergency.read_only'),stop_new_bookings:await setting(url,key,'emergency.stop_new_bookings')};const failed=(await rows(url,key,'notifications','status=eq.failed&select=id&limit=1000')).length;const checks=[{name:'core_health',ok:h.ok,details:h},{name:'maintenance_off',ok:!em.maintenance?.enabled},{name:'read_only_off',ok:!em.read_only?.enabled},{name:'failed_notifications_under_100',ok:failed<100,details:{failed}},{name:'supabase_configured',ok:providers.supabase.configured}];const ok=checks.every(x=>x.ok);const saved=await upsert(url,key,'predeploy_runs',{release_version:String(p.release_version||'10.0.0'),status:ok?'pass':'warning',checks,run_by:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok,checks,row:saved?.[0]||saved})};
+        if(!isManager(actor))return{statusCode:403,headers:H,body:JSON.stringify({error:'Manager/developer only'})};const h=await health(url,key),providers=await providerStatus(env),em={maintenance:await setting(url,key,'emergency.maintenance'),read_only:await setting(url,key,'emergency.read_only'),stop_new_bookings:await setting(url,key,'emergency.stop_new_bookings')};const failed=(await rows(url,key,'notifications','status=eq.failed&select=id&limit=1000')).length;const checks=[{name:'core_health',ok:h.ok,details:h},{name:'maintenance_off',ok:!em.maintenance?.enabled},{name:'read_only_off',ok:!em.read_only?.enabled},{name:'failed_notifications_under_100',ok:failed<100,details:{failed}},{name:'supabase_configured',ok:providers.supabase.configured}];const ok=checks.every(x=>x.ok);const saved=await upsert(url,key,'predeploy_runs',{release_version:String(p.release_version||'1.1.0'),status:ok?'pass':'warning',checks,run_by:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok,checks,row:saved?.[0]||saved})};
       }
       if(action==='scheduler_run'){if(!isManager(actor)&&!actor?.permissions?.notifications)return{statusCode:403,headers:H,body:JSON.stringify({error:'Notifications permission required'})};const result=await runScheduler(url,key,env,actor);return{statusCode:200,headers:H,body:JSON.stringify({ok:true,result})}}
       if(action==='create_payment_intent'){
@@ -1444,9 +1454,22 @@ function __load_mega_completion(){
         const saved=await upsert(url,key,'payment_intents',row);return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:saved?.[0]||saved,payment_url,provider_configured:!!env.PAYMENT_WEBHOOK_URL})};
       }
       if(action==='quota_save'){const saved=await upsert(url,key,'resource_quotas',{id:p.id||undefined,resource_type:String(p.resource_type||'seat'),trip_id:uuidOrNull(p.trip_id),branch_id:uuidOrNull(p.branch_id)||uuidOrNull(actor.branch_id),agent_id:uuidOrNull(p.agent_id),quantity:Number(p.quantity||0),used_quantity:Number(p.used_quantity||0),release_at:p.release_at||null,status:String(p.status||'active'),notes:String(p.notes||''),updated_at:now(),created_by:actor.name||''});return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:saved?.[0]||saved})}}
-      if(action==='room_lock'){if(!isManager(actor)&&!actor?.permissions?.housing)return{statusCode:403,headers:H,body:JSON.stringify({error:'Housing permission required'})};const id=String(p.trip_hotel_id||'');const locked=!!p.locked;const got=await patch(url,key,'trip_hotels',`id=eq.${enc(id)}`,{rooming_locked:locked,rooming_locked_at:locked?now():null,rooming_locked_by:locked?(actor.name||''):null});return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:got?.[0]||got})}}
+      if(action==='room_lock'){
+        if(!isManager(actor)&&!actor?.permissions?.housing)return{statusCode:403,headers:H,body:JSON.stringify({error:'Housing permission required'})};
+        const id=String(p.trip_hotel_id||''),locked=!!p.locked;
+        const th=(await rows(url,key,'trip_hotels',`id=eq.${enc(id)}&select=id,trip_id&limit=1`))[0];
+        if(!th)return{statusCode:404,headers:H,body:JSON.stringify({error:'Trip hotel not found'})};
+        if(!await canOperateTrip(url,key,actor,th.trip_id))return{statusCode:403,headers:H,body:JSON.stringify({error:'الرحلة خارج نطاقك التشغيلي'})};
+        const got=await patch(url,key,'trip_hotels',`id=eq.${enc(id)}`,{rooming_locked:locked,rooming_locked_at:locked?now():null,rooming_locked_by:locked?(actor.name||''):null});return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:got?.[0]||got})}
+      }
       if(action==='bus_swap'){
-        if(!isManager(actor)&&!actor?.permissions?.fleet)return{statusCode:403,headers:H,body:JSON.stringify({error:'Fleet permission required'})};const tripVehicleId=String(p.trip_vehicle_id||''),newVehicleId=String(p.new_vehicle_id||'');const tv=(await rows(url,key,'trip_vehicles',`id=eq.${enc(tripVehicleId)}&select=*&limit=1`))[0],nv=(await rows(url,key,'vehicles',`id=eq.${enc(newVehicleId)}&select=*&limit=1`))[0];if(!tv||!nv)return{statusCode:404,headers:H,body:JSON.stringify({error:'Vehicle assignment not found'})};const seats=await rows(url,key,'seat_assignments',`trip_vehicle_id=eq.${enc(tripVehicleId)}&status=in.(assigned,blocked,hold)&select=id&limit=1000`);const cap=Number(nv.booking_capacity||nv.physical_capacity||49);if(seats.length>cap)return{statusCode:409,headers:H,body:JSON.stringify({error:'سعة الباص البديل أقل من المقاعد المستخدمة',used:seats.length,capacity:cap})};const got=await patch(url,key,'trip_vehicles',`id=eq.${enc(tripVehicleId)}`,{vehicle_id:newVehicleId,capacity:cap,booking_capacity:cap,status:'assigned',updated_at:now()});await upsert(url,key,'bus_swap_events',{trip_vehicle_id:tripVehicleId,old_vehicle_id:tv.vehicle_id||null,new_vehicle_id:newVehicleId,affected_seats:seats.length,actor_name:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:got?.[0]||got,affected_seats:seats.length})};
+        if(!isManager(actor)&&!actor?.permissions?.fleet)return{statusCode:403,headers:H,body:JSON.stringify({error:'Fleet permission required'})};
+        const tripVehicleId=String(p.trip_vehicle_id||''),newVehicleId=String(p.new_vehicle_id||'');
+        const tv=(await rows(url,key,'trip_vehicles',`id=eq.${enc(tripVehicleId)}&select=*&limit=1`))[0],nv=(await rows(url,key,'vehicles',`id=eq.${enc(newVehicleId)}&select=*&limit=1`))[0];
+        if(!tv||!nv)return{statusCode:404,headers:H,body:JSON.stringify({error:'Vehicle assignment not found'})};
+        if(!await canOperateTrip(url,key,actor,tv.trip_id))return{statusCode:403,headers:H,body:JSON.stringify({error:'الرحلة خارج نطاقك التشغيلي'})};
+        if(!allOps(actor)&&String(nv.branch_id||'')!==String(actor?.branch_id||''))return{statusCode:403,headers:H,body:JSON.stringify({error:'الباص البديل يجب أن يتبع فرعك'})};
+        const seats=await rows(url,key,'seat_assignments',`trip_vehicle_id=eq.${enc(tripVehicleId)}&status=in.(assigned,blocked,hold)&select=id&limit=1000`);const cap=Number(nv.booking_capacity||nv.physical_capacity||49);if(seats.length>cap)return{statusCode:409,headers:H,body:JSON.stringify({error:'سعة الباص البديل أقل من المقاعد المستخدمة',used:seats.length,capacity:cap})};const got=await patch(url,key,'trip_vehicles',`id=eq.${enc(tripVehicleId)}`,{vehicle_id:newVehicleId,capacity:cap,booking_capacity:cap,status:'assigned',updated_at:now()});await upsert(url,key,'bus_swap_events',{trip_vehicle_id:tripVehicleId,old_vehicle_id:tv.vehicle_id||null,new_vehicle_id:newVehicleId,affected_seats:seats.length,actor_name:actor.name||'',created_at:now()});return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:got?.[0]||got,affected_seats:seats.length})};
       }
       if(action==='draft_save'){const saved=await upsert(url,key,'user_drafts',{user_id:String(actor.id||actor.name),draft_key:String(p.draft_key||'default'),branch_id:uuidOrNull(actor.branch_id),payload:p.payload||{},updated_at:now()},'user_id,draft_key');return{statusCode:200,headers:H,body:JSON.stringify({ok:true,row:saved?.[0]||saved})}}
       if(action==='draft_load'){const d=await rows(url,key,'user_drafts',`user_id=eq.${enc(String(actor.id||actor.name))}&draft_key=eq.${enc(String(p.draft_key||event.queryStringParameters?.draft_key||'default'))}&select=*&limit=1`);return{statusCode:200,headers:H,body:JSON.stringify({row:d[0]||null})}}
@@ -1703,11 +1726,11 @@ async function nextRestRows(env,table,select='*',limit=10000){
 }
 async function nextScopeContext(env,actor){
   const bid=String(actor?.branch_id||'');
-  if(!bid)return {branchId:'',visibleTripIds:new Set(),ownBookingIds:new Set(),sharedBookingIds:new Set(),ownBookingNumbers:new Set(),sharedBookingNumbers:new Set(),ownPassengerIds:new Set(),sharedPassengerIds:new Set(),ownGroupIds:new Set(),sharedGroupIds:new Set(),visibleTripVehicleIds:new Set(),visibleTripHotelIds:new Set(),visibleRoomIds:new Set(),visibleMeetingIds:new Set()};
-  const [trips,tripBranches,bookings,passengers,tripVehicles,tripHotels,rooms,meetings]=await Promise.all([
+  if(!bid)return {branchId:'',visibleTripIds:new Set(),ownBookingIds:new Set(),sharedBookingIds:new Set(),ownBookingNumbers:new Set(),sharedBookingNumbers:new Set(),ownPassengerIds:new Set(),sharedPassengerIds:new Set(),ownGroupIds:new Set(),sharedGroupIds:new Set(),visibleTripVehicleIds:new Set(),ownVehicleIds:new Set(),visibleVehicleIds:new Set(),visibleTripHotelIds:new Set(),visibleRoomIds:new Set(),visibleMeetingIds:new Set()};
+  const [trips,tripBranches,bookings,passengers,tripVehicles,vehicles,tripHotels,rooms,meetings]=await Promise.all([
     nextRestRows(env,'trips','id,branch_id'),nextRestRows(env,'trip_branches','trip_id,branch_id,operations_access'),
     nextRestRows(env,'bookings','id,booking_number,branch_id,trip_id,return_trip_id,group_id'),nextRestRows(env,'booking_passengers','id,booking_id,group_id'),
-    nextRestRows(env,'trip_vehicles','id,trip_id'),nextRestRows(env,'trip_hotels','id,trip_id'),nextRestRows(env,'hotel_rooms','id,trip_hotel_id'),nextRestRows(env,'trip_meeting_points','id,trip_id,branch_id')
+    nextRestRows(env,'trip_vehicles','id,trip_id,vehicle_id'),nextRestRows(env,'vehicles','id,branch_id'),nextRestRows(env,'trip_hotels','id,trip_id'),nextRestRows(env,'hotel_rooms','id,trip_hotel_id'),nextRestRows(env,'trip_meeting_points','id,trip_id,branch_id')
   ]);
   const visibleTripIds=new Set(trips.filter(x=>String(x.branch_id||'')===bid).map(x=>String(x.id)));
   for(const x of tripBranches)if(String(x.branch_id||'')===bid&&x.operations_access!==false)visibleTripIds.add(String(x.trip_id));
@@ -1715,11 +1738,15 @@ async function nextScopeContext(env,actor){
   for(const b of bookings){const id=String(b.id),own=String(b.branch_id||'')===bid,shared=visibleTripIds.has(String(b.trip_id||''))||visibleTripIds.has(String(b.return_trip_id||''));if(own){ownBookingIds.add(id);if(b.booking_number)ownBookingNumbers.add(String(b.booking_number));if(b.group_id)ownGroupIds.add(String(b.group_id))}if(shared){sharedBookingIds.add(id);if(b.booking_number)sharedBookingNumbers.add(String(b.booking_number));if(b.group_id)sharedGroupIds.add(String(b.group_id))}}
   const ownPassengerIds=new Set(),sharedPassengerIds=new Set();
   for(const x of passengers){const bk=String(x.booking_id||'');if(ownBookingIds.has(bk)){ownPassengerIds.add(String(x.id));if(x.group_id)ownGroupIds.add(String(x.group_id))}if(sharedBookingIds.has(bk)){sharedPassengerIds.add(String(x.id));if(x.group_id)sharedGroupIds.add(String(x.group_id))}}
-  const visibleTripVehicleIds=new Set(tripVehicles.filter(x=>visibleTripIds.has(String(x.trip_id||''))).map(x=>String(x.id)));
+  const visibleTripVehicles=tripVehicles.filter(x=>visibleTripIds.has(String(x.trip_id||'')));
+  const visibleTripVehicleIds=new Set(visibleTripVehicles.map(x=>String(x.id)));
+  const ownVehicleIds=new Set(vehicles.filter(x=>String(x.branch_id||'')===bid).map(x=>String(x.id)));
+  const visibleVehicleIds=new Set(ownVehicleIds);
+  for(const x of visibleTripVehicles)if(x.vehicle_id)visibleVehicleIds.add(String(x.vehicle_id));
   const visibleTripHotelIds=new Set(tripHotels.filter(x=>visibleTripIds.has(String(x.trip_id||''))).map(x=>String(x.id)));
   const visibleRoomIds=new Set(rooms.filter(x=>visibleTripHotelIds.has(String(x.trip_hotel_id||''))).map(x=>String(x.id)));
   const visibleMeetingIds=new Set(meetings.filter(x=>visibleTripIds.has(String(x.trip_id||''))).map(x=>String(x.id)));
-  return {branchId:bid,visibleTripIds,ownBookingIds,sharedBookingIds,ownBookingNumbers,sharedBookingNumbers,ownPassengerIds,sharedPassengerIds,ownGroupIds,sharedGroupIds,visibleTripVehicleIds,visibleTripHotelIds,visibleRoomIds,visibleMeetingIds};
+  return {branchId:bid,visibleTripIds,ownBookingIds,sharedBookingIds,ownBookingNumbers,sharedBookingNumbers,ownPassengerIds,sharedPassengerIds,ownGroupIds,sharedGroupIds,visibleTripVehicleIds,ownVehicleIds,visibleVehicleIds,visibleTripHotelIds,visibleRoomIds,visibleMeetingIds};
 }
 function nextRedactForeignBooking(row,ctx){
   if(String(row?.branch_id||'')===ctx.branchId)return row;
@@ -1739,6 +1766,8 @@ function nextFilterModulePayload(payload,resource,ctx){
     else if(table==='booking_passengers')rows=rows.filter(x=>(resource==='operations'?ctx.sharedPassengerIds:ctx.ownPassengerIds).has(String(x.id))|| (resource==='operations'?ctx.sharedBookingIds:ctx.ownBookingIds).has(String(x.booking_id||'')));
     else if(table==='passenger_documents'||table==='passenger_qr_tokens')rows=rows.filter(x=>ctx.ownPassengerIds.has(String(x.passenger_id||''))||ctx.ownBookingIds.has(String(x.booking_id||'')));
     else if(table==='seat_assignments')rows=rows.filter(x=>ctx.visibleTripVehicleIds.has(String(x.trip_vehicle_id||'')));
+    else if(table==='vehicles')rows=rows.filter(x=>ctx.visibleVehicleIds.has(String(x.id||'')));
+    else if(table==='vehicle_seats'||table==='vehicle_maintenance')rows=rows.filter(x=>ctx.visibleVehicleIds.has(String(x.vehicle_id||'')));
     else if(table==='hotel_rooms')rows=rows.filter(x=>ctx.visibleTripHotelIds.has(String(x.trip_hotel_id||'')));
     else if(table==='room_assignments')rows=rows.filter(x=>ctx.visibleRoomIds.has(String(x.hotel_room_id||'')));
     else if(table==='passenger_meeting_points')rows=rows.filter(x=>ctx.visibleMeetingIds.has(String(x.meeting_point_id||'')));
@@ -1777,6 +1806,11 @@ async function nextGuardModuleWrite(env,actor,p,ctx){
     q.row={...row,branch_id:actor.branch_id};
   }
   if(NEXT_TRIP_TABLES.has(table)&&row.trip_id&&!ctx.visibleTripIds.has(String(row.trip_id)))return {ok:false,error:'الرحلة خارج نطاق تشغيل فرعك'};
+  if(table==='trip_meeting_points'&&row.branch_id&&String(row.branch_id)!==ctx.branchId)return {ok:false,error:'نقطة التجمع يجب أن تكون لفرعك'};
+  if(table==='notification_rules'){if(row.branch_id&&String(row.branch_id)!==ctx.branchId)return {ok:false,error:'قاعدة الإشعار يجب أن تكون لفرعك'};q.row={...row,branch_id:actor.branch_id};if(row.trip_id&&!ctx.visibleTripIds.has(String(row.trip_id)))return {ok:false,error:'رحلة قاعدة الإشعار خارج نطاق تشغيل فرعك'};}
+  if(table==='vehicles'){if(q.action==='insert')q.row={...row,branch_id:actor.branch_id};else if(q.id&&!ctx.ownVehicleIds.has(String(q.id)))return {ok:false,error:'لا يمكنك تعديل مركبة تتبع فرعًا آخر'};}
+  if((table==='vehicle_seats'||table==='vehicle_maintenance')&&row.vehicle_id&&!ctx.ownVehicleIds.has(String(row.vehicle_id)))return {ok:false,error:'لا يمكنك تعديل بيانات مركبة تتبع فرعًا آخر'};
+  if(table==='trip_vehicles'&&row.vehicle_id&&!ctx.ownVehicleIds.has(String(row.vehicle_id)))return {ok:false,error:'لا يمكنك تعيين مركبة تتبع فرعًا آخر'};
   if(table==='seat_assignments'&&row.trip_vehicle_id&&!ctx.visibleTripVehicleIds.has(String(row.trip_vehicle_id)))return {ok:false,error:'المركبة/الرحلة خارج نطاق تشغيل فرعك'};
   if(table==='hotel_rooms'&&row.trip_hotel_id&&!ctx.visibleTripHotelIds.has(String(row.trip_hotel_id)))return {ok:false,error:'فندق الرحلة خارج نطاق تشغيل فرعك'};
   if(table==='room_assignments'&&row.hotel_room_id&&!ctx.visibleRoomIds.has(String(row.hotel_room_id)))return {ok:false,error:'الغرفة خارج نطاق تشغيل فرعك'};
@@ -1810,7 +1844,7 @@ async function nextModuleBridge(request,env){
 }
 async function nextApi(request,env){
   const url=new URL(request.url), path=url.pathname;
-  if(path==='/api/health') return nextJson({ok:true,service:'almaher-next',architecture:'react-vite-worker',version:'1.0.0'});
+  if(path==='/api/health') return nextJson({ok:true,service:'almaher-next',architecture:'react-vite-worker',version:'1.1.0'});
   if(path==='/api/auth/login'&&request.method==='POST'){
     const result=await nextCall('staff-login',request);
     let body={};try{body=JSON.parse(result.body||'{}')}catch{}
