@@ -59,7 +59,7 @@ export default function TicketPage({bookingNo,go}){
   {!ops&&!error&&<Loading text="استكمال بيانات المقعد والسكن..."/>}
   <article className={`ticket-page ${dense}`}>
    <header className="ticket-head">
-    <div className="ticket-brand-lockup"><div className="ticket-brand-symbol">م</div><div><h1>الماهر الماسي</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div>
+    <div className="ticket-brand-lockup"><img className="ticket-logo" src="/almaher-logo.jpeg" alt="شعار الماهر الماسي"/><div><h1>الماهر الماسي</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div>
     <div className="ticket-number"><span>رقم الحجز</span><b>{b.booking_number}</b><Badge tone={b.status==='cancelled'?'red':'green'}>{b.status||'confirmed'}</Badge></div>
    </header>
    <section className="ticket-hero-grid">

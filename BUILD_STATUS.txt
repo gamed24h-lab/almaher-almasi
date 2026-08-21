@@ -1,22 +1,22 @@
-AL-MAHER NEXT 1.1.0 — BUILD STATUS
+AL-MAHER NEXT 1.2.0 — BUILD STATUS
 =================================
 Architecture: React + Vite + Cloudflare Worker + Supabase
 Date: 2026-08-21
 
 PASS  worker/index.js node syntax
-PASS  /api/health runtime smoke test (200 / version 1.1.0)
+PASS  /api/health runtime smoke test (200 / version 1.2.0)
 PASS  /api/auth/me unauthenticated smoke test (401)
 PASS  33 JS/JSX source files TypeScript JSX syntax transpile
 PASS  33 JS/JSX source files internal import resolution
 PASS  0 missing internal imports
-PASS  package.json JSON parse / version 1.1.0
+PASS  package.json JSON parse / version 1.2.0
 PASS  CSS basic brace validation
 PASS  index.html entry validation
 PASS  keep_vars = true
 PASS  frontend contains no SUPABASE_SERVICE_ROLE_KEY
 PASS  no localStorage/sessionStorage operational persistence in frontend
 PASS  branch-aware finance and module write guards present in Worker
-PASS  health/predeploy/regression endpoints report release 1.1.0
+PASS  health/predeploy/regression endpoints report release 1.2.0
 
 V1.1 FUNCTIONAL DEPTH
 - Trips + Trip Center
@@ -44,3 +44,8 @@ NOT RUN IN THIS BUILD CONTAINER:
 - live Cloudflare deploy
 
 Production build is expected to run in the connected Cloudflare build environment.
+
+PASS branches/company administration UI
+PASS original brand logo integrated
+PASS QR scanner Safari fallback source integrated
+PASS partners/workflow modules routed

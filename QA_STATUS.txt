@@ -1,0 +1,57 @@
+AL-MAHER NEXT 1.2.0 — COMPREHENSIVE QA STATUS
+================================================
+
+STATIC / RUNTIME CHECKS
+- PASS: worker/index.js syntax (node --check)
+- PASS: /api/health local Worker smoke test -> HTTP 200, version 1.2.0
+- PASS: /api/auth/me without session -> HTTP 401
+- PASS: 36 JS/JSX files relative import resolution
+- PASS: no missing local imports
+- PASS: package.json parses and version = 1.2.0
+- PASS: qr-scanner dependency declared
+- PASS: original Al-Maher logo asset included in public/
+- PASS: branches/company administration routes and UI included
+- PASS: suppliers/agents/workflow routes included
+- PASS: frontend secret-marker scan
+- PASS: keep_vars = true remains in wrangler.toml
+
+COMPREHENSIVE FUNCTIONAL AREAS INCLUDED
+- Authentication / secure cookie session
+- Dashboard / global search
+- Branches + company profile + contacts
+- Trips + shared branches + trip center
+- Bookings + passengers + editing
+- Seats
+- Housing
+- Tickets + QR + A4/80mm/58mm
+- QR scan modes + Safari/iPhone fallback
+- Fleet
+- Finance
+- Refund workflow
+- CRM
+- Suppliers + agents + contracts + payables
+- Tasks + approvals
+- Documents
+- Notifications / automation
+- Return operations
+- Staff / permissions
+- Reports
+- Customer portal
+- Developer / system checks
+
+NOT EXECUTED IN THIS BUILD ENVIRONMENT
+- npm install / Vite production build (network package installation timed out)
+- live Supabase writes with production credentials
+- live Cloudflare deployment
+
+PRODUCTION ACCEPTANCE STILL REQUIRES
+- Cloudflare build success
+- login/refresh/logout
+- branch CRUD + contacts
+- create/edit booking and passenger
+- seat/housing assignment
+- ticket print A4/80/58
+- QR camera on target iPhone and Windows Chrome/Edge
+- finance branch isolation
+- refund Request -> Approve -> Complete
+- second-device Supabase persistence
