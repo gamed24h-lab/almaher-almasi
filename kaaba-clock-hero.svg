@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800">
-<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#153f42"/><stop offset="1" stop-color="#d7b66a"/></linearGradient><linearGradient id="gold"><stop stop-color="#e6c56d"/><stop offset="1" stop-color="#9f7627"/></linearGradient></defs>
-<rect width="1600" height="800" fill="url(#sky)"/>
-<circle cx="1240" cy="155" r="72" fill="#f5df9c" opacity=".7"/>
-<g opacity=".36" fill="#efe2c0"><rect x="0" y="560" width="1600" height="240"/><path d="M0 590 Q300 500 600 590 T1200 590 T1800 590 V800 H0Z"/></g>
-<g transform="translate(1060 80)"><rect x="105" y="145" width="170" height="480" rx="8" fill="#e8e0ce"/><rect x="125" y="100" width="130" height="110" fill="#d4c8ad"/><path d="M190 0 L220 100 H160Z" fill="url(#gold)"/><circle cx="190" cy="155" r="47" fill="#f5f0d7" stroke="#b99138" stroke-width="10"/><circle cx="190" cy="155" r="5" fill="#173b37"/><path d="M190 155 l0 -30 M190 155 l24 12" stroke="#173b37" stroke-width="6" stroke-linecap="round"/><rect x="155" y="225" width="70" height="40" fill="#b99138"/></g>
-<g transform="translate(500 410)"><polygon points="0,65 235,0 470,65 235,135" fill="#171717"/><polygon points="0,65 235,135 235,390 0,305" fill="#090909"/><polygon points="470,65 235,135 235,390 470,305" fill="#111"/><path d="M0 125 L235 195 L470 125 L470 165 L235 235 L0 165Z" fill="url(#gold)"/><rect x="310" y="170" width="70" height="125" rx="3" fill="url(#gold)"/></g>
-<g fill="#fff" opacity=".68"><circle cx="250" cy="570" r="10"/><circle cx="290" cy="590" r="8"/><circle cx="330" cy="565" r="9"/><circle cx="380" cy="600" r="7"/><circle cx="970" cy="610" r="9"/><circle cx="1020" cy="580" r="8"/></g>
-</svg>
