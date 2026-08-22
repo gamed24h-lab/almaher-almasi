@@ -12,6 +12,30 @@ function normalizeAdminBody(body){
     return row;
   })};
 }
+function isWorkerSubrequestLimitError(err){
+  const m=String(err?.message||err||'');
+  return /single Worker invocation|subrequest|too many requests/i.test(m);
+}
+async function adminRequest(body){
+  const normalized=normalizeAdminBody(body);
+  if(normalized?.action!=='sync_trips'||!Array.isArray(normalized?.rows)||normalized.rows.length<=1){
+    return request('/api/admin',{method:'POST',body:normalized});
+  }
+  const chunkSize=3;
+  const results=[];
+  for(let i=0;i<normalized.rows.length;i+=chunkSize){
+    const chunk=normalized.rows.slice(i,i+chunkSize);
+    try{
+      results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:chunk}}));
+    }catch(err){
+      if(!isWorkerSubrequestLimitError(err)||chunk.length===1)throw err;
+      for(const row of chunk){
+        results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:[row]}}));
+      }
+    }
+  }
+  return {ok:true,batches:results.length,results};
+}
 export const api={
   health:()=>request('/api/health'),
   me:()=>request('/api/auth/me'),
@@ -19,7 +43,7 @@ export const api={
   developerLogin:(email,password)=>request('/api/auth/developer',{method:'POST',body:{email,password}}),
   logout:()=>request('/api/auth/logout',{method:'POST'}),
   bootstrap:()=>request('/api/bootstrap'),
-  admin:(body)=>request('/api/admin',{method:'POST',body:normalizeAdminBody(body)}),
+  admin:(body)=>adminRequest(body),
   platform:(body)=>request('/api/platform',{method:'POST',body}),
   platformGet:(resource='platform')=>request(`/api/platform?resource=${encodeURIComponent(resource)}`),
   module:(resource)=>request(`/api/module?resource=${encodeURIComponent(resource)}`),
