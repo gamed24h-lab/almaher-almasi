@@ -17,7 +17,7 @@ export default function TicketPage({bookingNo,go}){
  const {data}=useAppData();
  const b=data.bookings.find(x=>str(x.booking_number)===str(bookingNo));
  const passengers=data.passengers.filter(x=>str(x.booking_id)===str(b?.id));
- const [qr,setQr]=useState(''),[locationQr,setLocationQr]=useState(''),[ops,setOps]=useState(null),[terms,setTerms]=useState([]),[error,setError]=useState('');
+ const [qr,setQr]=useState(''),[locationQr,setLocationQr]=useState(''),[ops,setOps]=useState(null),[terms,setTerms]=useState([]),[developer,setDeveloper]=useState({display_name:'Mohamed Abdelrahman Hassan',title:'مطور النظام',phone:'00966509444960'}),[error,setError]=useState('');
  const trip=data.trips.find(x=>str(x.id)===str(b?.trip_id));
  const returnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
  const branch=data.branches.find(x=>str(x.id)===str(b?.branch_id));
@@ -30,7 +30,9 @@ export default function TicketPage({bookingNo,go}){
    if(!b)return;
    QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});
    if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});
-   api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{});
+   api.module('tickets').then(setOps).catch(e=>setError(e.message));
+   api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{});
+   api.mega('public_brand_profile',{},'GET').then(x=>{if(x?.profile)setDeveloper(d=>({...d,...x.profile}))}).catch(()=>{});
  },[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
@@ -61,40 +63,14 @@ export default function TicketPage({bookingNo,go}){
   <ErrorBox error={error}/>
   {!ops&&!error&&<Loading text="استكمال بيانات المقعد والسكن..."/>}
   <article className={`ticket-page ${dense} ${ticketCancelled?'ticket-cancelled':''}`}>
-   <header className="ticket-head">
-    <div className="ticket-brand-lockup"><img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/><div><h1>{branch?.name||'الماهر الماسي'}</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div>
-    <div className="ticket-number"><span>رقم الحجز</span><b>{b.booking_number}</b><Badge tone={b.status==='cancelled'?'red':'green'}>{b.status||'confirmed'}</Badge></div>
-   </header>
-   <section className="ticket-hero-grid">
-    <div><span>العميل</span><strong>{b.customer_name}</strong><small>{b.customer_phone}</small></div>
-    <div><span>نوع الرحلة</span><strong>{journeyLabel(b.journey_mode)}</strong><small>{branch?.name||''}</small></div>
-    <div><span>السكن</span><strong>{b.accommodation_label||b.accommodation_type||'بدون سكن'}</strong><small>{b.accommodation_type==='private'?[privateTypeLabel&&`غرفة ${privateTypeLabel}`,`${Number(b.private_rooms||snap.privateRooms||1)} غرفة`,snap.housingDays&&`${snap.housingDays} يوم`].filter(Boolean).join(' · '):''}</small></div>
-    <div><span>حالة السداد</span><strong>{remaining>0?`متبقي ${money(remaining)}`:'مسدد بالكامل'}</strong><small>{b.payment_method||''}</small></div>
-   </section>
-
-   <section className="ticket-journeys">
-    {showOutbound&&<JourneyBlock title="الذهاب" trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={tripBranch?.boarding_point||b.snapshot?.boardingPoint} boardingTime={tripBranch?.boarding_time||b.snapshot?.boardingTime}/>} 
-    {showReturn&&<JourneyBlock title="العودة" trip={returnInfo} date={returnDate} time={returnTime} reverse={!returnTrip&&lower(b.journey_mode)==='roundtrip'}/>} 
-   </section>
-
-   <section className="ticket-passenger-section"><div className="ticket-section-title"><h3>المسافرون</h3><span>{passengers.length} مسافر</span></div>
-    <div className="ticket-passengers">{passengers.map((p,i)=>{const seats=seatByPassenger.get(str(p.id))||[];const room=roomByPassenger.get(str(p.id));return <div className="ticket-passenger" key={p.id||i}>
-     <div className="ticket-pax-main"><b>{i+1}. {p.full_name}</b><span>{p.identity_number} · {p.nationality||''}</span></div>
-     <div className="ticket-pax-tags">{seats.length?seats.map((s,j)=><span key={s.id||j}><Armchair size={12}/> {s.seat_no||s.seat_number||'—'}{s.segment_type?` · ${s.segment_type}`:''}</span>):<span><Armchair size={12}/> المقعد غير محدد</span>}{room&&<span><Hotel size={12}/> {room.hotel?.name||'الفندق'} · غرفة {room.room?.room_no||'—'}</span>}</div>
-    </div>})}</div>
-   </section>
-
-   <section className="ticket-bottom">
-    <div className="ticket-finance"><div><span>الإجمالي</span><b>{money(total)}</b></div><div><span>المدفوع</span><b>{money(paid)}</b></div><div><span>المتبقي</span><b>{money(remaining)}</b></div></div>
-    <div className="ticket-qr-group">{qr&&<div><img src={qr} alt="QR الحجز"/><span>QR الحجز</span></div>}{locationQr&&<div><img src={locationQr} alt="QR الموقع"/><span>موقع الصعود</span></div>}</div>
-   </section>
-   <section className="ticket-terms"><h3>الشروط والأحكام</h3><ol>{(terms.length?terms:['الحضور قبل موعد الانطلاق بوقت كافٍ.','الاحتفاظ بالتذكرة والهوية/الإقامة أثناء الرحلة.','التذكرة الملغاة أو المستبدلة غير صالحة للاستخدام.']).map((x,i)=><li key={i}>{typeof x==='string'?x:x?.text}</li>)}</ol></section><footer className="ticket-contact"><div>{locationText&&<span><MapPin size={13}/> {locationText}</span>}{phone&&<span><Phone size={13}/> {phone}</span>}</div><small>تخضع الرحلة للشروط والأحكام المسجلة بالنظام وقت إصدار التذكرة.</small></footer>
+   <header className="ticket-head"><div className="ticket-brand-lockup"><img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/><div><h1>{branch?.name||'الماهر الماسي'}</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div><div className="ticket-number"><span>رقم الحجز</span><b>{b.booking_number}</b><Badge tone={b.status==='cancelled'?'red':'green'}>{b.status||'confirmed'}</Badge></div></header>
+   <section className="ticket-hero-grid"><div><span>العميل</span><strong>{b.customer_name}</strong><small>{b.customer_phone}</small></div><div><span>نوع الرحلة</span><strong>{journeyLabel(b.journey_mode)}</strong><small>{branch?.name||''}</small></div><div><span>السكن</span><strong>{b.accommodation_label||b.accommodation_type||'بدون سكن'}</strong><small>{b.accommodation_type==='private'?[privateTypeLabel&&`غرفة ${privateTypeLabel}`,`${Number(b.private_rooms||snap.privateRooms||1)} غرفة`,snap.housingDays&&`${snap.housingDays} يوم`].filter(Boolean).join(' · '):''}</small></div><div><span>حالة السداد</span><strong>{remaining>0?`متبقي ${money(remaining)}`:'مسدد بالكامل'}</strong><small>{b.payment_method||''}</small></div></section>
+   <section className="ticket-journeys">{showOutbound&&<JourneyBlock title="الذهاب" trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={tripBranch?.boarding_point||b.snapshot?.boardingPoint} boardingTime={tripBranch?.boarding_time||b.snapshot?.boardingTime}/>} {showReturn&&<JourneyBlock title="العودة" trip={returnInfo} date={returnDate} time={returnTime} reverse={!returnTrip&&lower(b.journey_mode)==='roundtrip'}/>}</section>
+   <section className="ticket-passenger-section"><div className="ticket-section-title"><h3>المسافرون</h3><span>{passengers.length} مسافر</span></div><div className="ticket-passengers">{passengers.map((p,i)=>{const seats=seatByPassenger.get(str(p.id))||[];const room=roomByPassenger.get(str(p.id));return <div className="ticket-passenger" key={p.id||i}><div className="ticket-pax-main"><b>{i+1}. {p.full_name}</b><span>{p.identity_number} · {p.nationality||''}</span></div><div className="ticket-pax-tags">{seats.length?seats.map((s,j)=><span key={s.id||j}><Armchair size={12}/> {s.seat_no||s.seat_number||'—'}{s.segment_type?` · ${s.segment_type}`:''}</span>):<span><Armchair size={12}/> المقعد غير محدد</span>}{room&&<span><Hotel size={12}/> {room.hotel?.name||'الفندق'} · غرفة {room.room?.room_no||'—'}</span>}</div></div>})}</div></section>
+   <section className="ticket-bottom"><div className="ticket-finance"><div><span>الإجمالي</span><b>{money(total)}</b></div><div><span>المدفوع</span><b>{money(paid)}</b></div><div><span>المتبقي</span><b>{money(remaining)}</b></div></div><div className="ticket-qr-group">{qr&&<div><img src={qr} alt="QR الحجز"/><span>QR الحجز</span></div>}{locationQr&&<div><img src={locationQr} alt="QR الموقع"/><span>موقع الصعود</span></div>}</div></section>
+   <section className="ticket-terms"><h3>الشروط والأحكام</h3><ol>{(terms.length?terms:['الحضور قبل موعد الانطلاق بوقت كافٍ.','الاحتفاظ بالتذكرة والهوية/الإقامة أثناء الرحلة.','التذكرة الملغاة أو المستبدلة غير صالحة للاستخدام.']).map((x,i)=><li key={i}>{typeof x==='string'?x:x?.text}</li>)}</ol></section>
+   <footer className="ticket-contact"><div>{locationText&&<span><MapPin size={13}/> {locationText}</span>}{phone&&<span><Phone size={13}/> {phone}</span>}</div><small>تخضع الرحلة للشروط والأحكام المسجلة بالنظام وقت إصدار التذكرة.</small><small>تطوير وإدارة النظام: {developer.display_name||'Mohamed Abdelrahman Hassan'}{developer.phone?` · ${developer.phone}`:''}</small></footer>
   </article>
  </>;
 }
-
-function JourneyBlock({title,trip,date,time,boardingPoint,boardingTime,reverse=false}){
- if(!trip)return <div className="journey-block"><strong>{title}</strong><span>بيانات الرحلة غير متاحة</span></div>;
- const from=reverse?(trip.to_city||trip.destination):(trip.from_city||trip.origin),to=reverse?(trip.from_city||trip.origin):(trip.to_city||trip.destination);
- return <div className="journey-block"><div className="journey-title"><BusFront size={17}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div><div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div><div className="journey-meta"><span>{weekdayAr(date)} · {date||'—'} {time||''}</span>{boardingPoint&&<span>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</span>}</div></div>
-}
+function JourneyBlock({title,trip,date,time,boardingPoint,boardingTime,reverse=false}){if(!trip)return <div className="journey-block"><strong>{title}</strong><span>بيانات الرحلة غير متاحة</span></div>;const from=reverse?(trip.to_city||trip.destination):(trip.from_city||trip.origin),to=reverse?(trip.from_city||trip.origin):(trip.to_city||trip.destination);return <div className="journey-block"><div className="journey-title"><BusFront size={17}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div><div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div><div className="journey-meta"><span>{weekdayAr(date)} · {date||'—'} {time||''}</span>{boardingPoint&&<span>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</span>}</div></div>}
