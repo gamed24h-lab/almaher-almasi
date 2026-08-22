@@ -1,17 +1,9 @@
 /* AL-MAHER desktop-first login refinement */
-@media (min-width: 900px){
-  .login-page{grid-template-columns:minmax(520px,1fr) minmax(520px,1fr);align-items:center;min-height:100vh;padding:clamp(28px,4vw,72px);gap:clamp(40px,7vw,120px)}
-  .login-brand{padding:30px;max-width:680px;width:100%;justify-self:center}
-  .login-logo{width:210px;max-width:210px}
-  .login-brand h1{display:block;font-size:42px;line-height:1.2;margin:24px 0 8px;color:#fff}
-  .login-brand p{font-size:18px;line-height:1.8;max-width:620px;margin:0}
-  .login-card{width:min(560px,100%);padding:36px 38px;border-radius:22px;justify-self:center;margin:0}
-  .login-card .field>span{font-size:15px}
-  .login-card input{min-height:52px;font-size:16px}
-  .login-card .btn.primary{min-height:54px;font-size:17px;width:100%}
-  .login-card small{font-size:12px;line-height:1.7}
-  .portal-link{font-size:16px;margin-top:16px}
-}
-@media (max-width:899px){
-  .login-brand h1{font-size:29px;margin:14px 0 4px;color:#fff}
-}
+.login-page{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:28px 18px;gap:18px;background:linear-gradient(145deg,#0a2444,#173f76 58%,#efe5c9)}
+.login-brand{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0;color:#fff;width:min(560px,100%)}
+.login-logo{width:190px;max-width:56vw;object-fit:contain;border-radius:20px;background:#fff;padding:8px;box-shadow:0 18px 45px #061a3533;animation:brandFloat 4s ease-in-out infinite}
+.login-brand p{font-size:16px;line-height:1.7;max-width:520px;margin:12px 0 0;color:#e2ebf5}
+.login-card{width:min(500px,100%);padding:30px 32px;border-radius:22px;margin:0;align-self:auto;justify-self:auto}
+.login-card form{display:grid;gap:14px}.login-card .field>span{font-size:14px}.login-card input{min-height:50px;font-size:16px}.login-card .btn.primary{min-height:52px;font-size:16px;width:100%}.login-card small{font-size:12px;line-height:1.7}.portal-link{font-size:15px;margin-top:14px}
+@media (min-width: 1100px){.login-page{padding:42px 24px;gap:20px}.login-logo{width:205px}.login-brand p{font-size:17px}.login-card{width:520px;padding:34px 38px}}
+@media (max-width:760px){.login-page{justify-content:flex-start;padding-top:34px;gap:14px}.login-logo{width:132px}.login-brand p{font-size:13px;max-width:330px;margin-top:8px}.login-card{width:min(430px,calc(100% - 12px));padding:22px 18px;border-radius:18px}.login-card input{min-height:46px;font-size:15px}.login-card .btn.primary{min-height:48px}}
