@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {Plus,RefreshCw,ShieldCheck,UserCog,Wand2,LockKeyhole,CheckCircle2,XCircle,KeyRound} from 'lucide-react';
+import {Plus,RefreshCw,ShieldCheck,UserCog,Wand2,LockKeyhole,CheckCircle2,XCircle,KeyRound,AlertTriangle} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
@@ -39,6 +39,7 @@ export default function Staff(){
  const {user}=useAuth();const {data,refresh}=useAppData();
  const [open,setOpen]=useState(false),[form,setForm]=useState(defaultForm()),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [approvals,setApprovals]=useState([]),[approvalBusy,setApprovalBusy]=useState('');
+ const [review,setReview]=useState(null),[reviewBusy,setReviewBusy]=useState(false);
  const branches=data.branches||[],users=data.users||[];
  const isDeveloper=String(user?.role||'').toLowerCase()==='developer';const actorRank=rankOf(user?.role);
  const canEditPermissions=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.managePermissions;
@@ -56,6 +57,7 @@ export default function Staff(){
  function applyTemplate(role=form.role){if(!canEditPermissions){setNotice('حسابك يملك إدارة بيانات الموظفين فقط ولا يملك إدارة الصلاحيات.');return}const keys=(ROLE_TEMPLATES[role]||[]).filter(canGrant);const out={};for(const k of keys)out[k]=true;if(isDeveloper){for(const k of SENSITIVE)if(form.permissions?.[k])out[k]=true}setForm(x=>({...x,role,permissions:{...out,_accountMode:x.permissions?._accountMode||'training'}}));setNotice(`تم تطبيق قالب صلاحيات «${role}». تم استبعاد أي صلاحية أعلى من صلاحياتك الحالية تلقائيًا.`)}
  function togglePerm(k,checked){if(!canGrant(k))return;setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:checked}}))}
  async function loadApprovals(){if(!canEditPermissions&&!canApprovePermissionChanges)return;try{const x=await api.admin({action:'security_permission_approvals_list'});setApprovals(x?.rows||[])}catch(_e){setApprovals([])}}
+ async function loadReview(){if(!canEditPermissions)return;setReviewBusy(true);setError('');try{setReview(await api.admin({action:'security_permission_review'}))}catch(e){setError(e.message)}finally{setReviewBusy(false)}}
  useEffect(()=>{loadApprovals()},[canEditPermissions,canApprovePermissionChanges]);
  async function save(e){e.preventDefault();setError('');setBusy(true);try{
    const isNew=!form.id;const existingUser=isNew?null:users.find(u=>String(u.id)===String(form.id));
@@ -72,13 +74,13 @@ export default function Staff(){
    delete row.accountMode;delete row.reauthPassword;if(!row.name||!row.username)throw new Error('الاسم واسم المستخدم مطلوبان');if(isNew&&!row.password)throw new Error('كلمة مرور الموظف الجديد مطلوبة');if(!row.password)delete row.password;
    const out=await api.admin({action:'sync_users',rows:[row],...(form.reauthPassword?{reauth_password:form.reauthPassword}:{})});
    if(out?.pending_approval){setOpen(false);setNotice(out.message||'تم إرسال التغيير للموافقة الثانية ولم يتم تطبيقه بعد.');await loadApprovals();return}
-   await refresh();setOpen(false);setNotice('تم حفظ بيانات الموظف بنجاح.');
+   await refresh();setOpen(false);setNotice('تم حفظ بيانات الموظف بنجاح.');if(review)loadReview();
  }catch(e2){setError(e2.message)}finally{setBusy(false)}}
  async function decideApproval(req,decision){
    if(!canApprovePermissionChanges){setError('لا توجد صلاحية اعتماد تغييرات الصلاحيات.');return}
    setApprovalBusy(req.id);setError('');try{
     const out=await api.admin({action:'security_permission_approval_decide',id:req.id,decision});
-    await Promise.all([refresh(),loadApprovals()]);setNotice(out?.message||'تم تحديث طلب الموافقة.');
+    await Promise.all([refresh(),loadApprovals()]);if(review)await loadReview();setNotice(out?.message||'تم تحديث طلب الموافقة.');
    }catch(e){setError(e.message)}finally{setApprovalBusy('')}
  }
  function approvalLabels(r){
@@ -103,7 +105,15 @@ export default function Staff(){
   {key:'requested_at',label:'وقت الطلب',render:r=>r.requested_at?new Date(r.requested_at).toLocaleString('ar-SA'):'—'},
   {key:'actions',label:'',render:r=>canApprovePermissionChanges?<div className="finance-actions"><Button disabled={approvalBusy===r.id||String(r.requested_by||'')===String(user?.id||'')} onClick={()=>decideApproval(r,'approve')}><CheckCircle2 size={15}/> اعتماد</Button><Button disabled={approvalBusy===r.id} onClick={()=>decideApproval(r,'reject')}><XCircle size={15}/> رفض</Button></div>:'—'}
  ];
- return <><PageHeader title="الموظفون والصلاحيات" subtitle="إدارة بيانات الموظفين منفصلة عن إدارة الصلاحيات، والتغييرات الحساسة تُراجع من الخادم وتحتاج إعادة تحقق وموافقة ثانية" actions={<><Button onClick={()=>{refresh();loadApprovals()}}><RefreshCw size={16}/> تحديث</Button>{(canManageUsers||canEditPermissions)&&<Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button>}</>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}<Card><div className="card-title"><h3>حسابات الموظفين</h3><Badge>{users.length}</Badge></div><Table rows={users} columns={cols}/></Card>
+ const reviewCols=[
+  {key:'severity',label:'الخطورة',render:r=><Badge tone={r.severity==='critical'||r.severity==='high'?'red':'orange'}>{r.severity==='critical'?'حرجة':r.severity==='high'?'عالية':'متوسطة'}</Badge>},
+  {key:'user_name',label:'الموظف',render:r=>r.user_name||'—'},
+  {key:'title',label:'الملاحظة',render:r=><strong>{r.title}</strong>},
+  {key:'details',label:'التفاصيل',render:r=>r.details||'—'}
+ ];
+ return <><PageHeader title="الموظفون والصلاحيات" subtitle="إدارة بيانات الموظفين منفصلة عن إدارة الصلاحيات، والتغييرات الحساسة تُراجع من الخادم وتحتاج إعادة تحقق وموافقة ثانية" actions={<><Button onClick={()=>{refresh();loadApprovals();if(review)loadReview()}}><RefreshCw size={16}/> تحديث</Button>{canEditPermissions&&<Button onClick={loadReview} disabled={reviewBusy}><ShieldCheck size={16}/>{reviewBusy?'جاري الفحص...':'مراجعة الصلاحيات'}</Button>}{(canManageUsers||canEditPermissions)&&<Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button>}</>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
+ {review&&<Card><div className="card-title"><h3><AlertTriangle size={18}/> مركز مراجعة الصلاحيات</h3><small>{review.checked_at?`آخر فحص: ${new Date(review.checked_at).toLocaleString('ar-SA')}`:''}</small></div><div className="stats-grid"><Card><div className="stat-card"><div><span>حرجة</span><strong>{review.counts?.critical||0}</strong></div></div></Card><Card><div className="stat-card"><div><span>عالية</span><strong>{review.counts?.high||0}</strong></div></div></Card><Card><div className="stat-card"><div><span>متوسطة</span><strong>{review.counts?.medium||0}</strong></div></div></Card><Card><div className="stat-card"><div><span>موافقات معلقة</span><strong>{review.counts?.pending_approvals||0}</strong></div></div></Card></div>{(review.issues||[]).length?<Table rows={review.issues} columns={reviewCols}/>:<div className="success-note">لم يكتشف الفحص الحالي تعارضات صلاحيات واضحة.</div>}</Card>}
+ <Card><div className="card-title"><h3>حسابات الموظفين</h3><Badge>{users.length}</Badge></div><Table rows={users} columns={cols}/></Card>
  {(canEditPermissions||canApprovePermissionChanges)&&<Card><div className="card-title"><h3><LockKeyhole size={18}/> الموافقات الحساسة المعلقة</h3><Badge tone={pendingPermissionApprovals.length?'orange':'green'}>{pendingPermissionApprovals.length}</Badge></div>{pendingPermissionApprovals.length?<Table rows={pendingPermissionApprovals} columns={approvalCols}/>:<div className="empty">لا توجد تغييرات صلاحيات حساسة بانتظار موافقة ثانية.</div>}</Card>}
  <Modal open={open} onClose={()=>setOpen(false)} title={form.id?'تعديل الموظف':'إضافة موظف'} wide><form onSubmit={save} className="form-grid">
   <Field label="الاسم"><Input value={form.name} onChange={e=>setForm(x=>({...x,name:e.target.value}))} required/></Field><Field label="اسم المستخدم"><Input value={form.username} onChange={e=>setForm(x=>({...x,username:e.target.value}))} required/></Field><Field label="الجوال"><Input value={form.phone||''} onChange={e=>setForm(x=>({...x,phone:e.target.value}))}/></Field>
