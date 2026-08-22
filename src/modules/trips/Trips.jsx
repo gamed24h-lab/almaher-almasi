@@ -8,9 +8,19 @@ import {useAuth} from '../../core/AuthContext.jsx';
 import {has} from '../../lib/permissions.js';
 
 const DEFAULT_CITIES=['مكة المكرمة','المدينة المنورة','تبوك','تيماء','عرعر','سكاكا','دومة الجندل','طبرجل','القريات','طريف','جدة','الرياض'];
+const DAY_NAMES=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const addDays=(d,n)=>{const x=new Date(d+'T12:00:00');x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)};
 const datesBetween=(s,e,days)=>{const out=[];for(let d=s;d&&d<=e;d=addDays(d,1)){const k=new Date(d+'T12:00:00').getDay();if(!days.length||days.includes(k))out.push(d)}return out};
 const blankStop=(branch)=>({branchId:branch.id,branchName:branch.name||'',city:branch.name||'',outboundTime:'',returnTime:'',order:1});
+const weekdayAr=d=>d?DAY_NAMES[new Date(d+'T12:00:00').getDay()]||'':'—';
+const dateCode=d=>String(d||'').replaceAll('-','').slice(2);
+function branchCode(name=''){
+ const n=String(name);
+ if(n.includes('تبوك'))return 'TAB';if(n.includes('تيماء'))return 'TYM';if(n.includes('عرعر'))return 'ARR';if(n.includes('سكاكا'))return 'SAK';
+ if(n.includes('دومة'))return 'DOM';if(n.includes('طبرجل'))return 'TBJ';if(n.includes('القريات'))return 'QUR';if(n.includes('طريف'))return 'TUR';
+ if(n.includes('مكة'))return 'MAK';if(n.includes('المدينة'))return 'MED';if(n.includes('جدة'))return 'JED';if(n.includes('الرياض'))return 'RUH';
+ return 'BRN';
+}
 
 export default function Trips({go}){
  const {user}=useAuth(),{data,refresh}=useAppData();
@@ -22,6 +32,13 @@ export default function Trips({go}){
  const cities=useMemo(()=>[...new Set([...DEFAULT_CITIES,...data.branches.flatMap(b=>[b.city,b.name]).filter(Boolean)])],[data.branches]);
  const relByTrip=useMemo(()=>{const m=new Map();for(const r of data.tripBranches||[]){const a=m.get(String(r.trip_id))||[];a.push(r);m.set(String(r.trip_id),a)}return m},[data.tripBranches]);
 
+ function makeTripCode(date,branchId){
+   const branch=data.branches.find(b=>String(b.id)===String(branchId));
+   const prefix=`MAH-${branchCode(branch?.name||branch?.city||'')}-${dateCode(date)}-`;
+   const used=data.trips.map(t=>String(t.trip_code||'')).filter(c=>c.startsWith(prefix)).map(c=>Number(c.slice(-3))).filter(Number.isFinite);
+   const next=(used.length?Math.max(...used):0)+1;
+   return `${prefix}${String(next).padStart(3,'0')}`;
+ }
  function reset(){setEditing(null);setMainBranch(data.scope?.branch_id||'');setShared([]);setStops({});setErr('');setScheduleMode('single');setRangeEnd('');setWeekdays([])}
  function openNew(){reset();const bid=data.scope?.branch_id||'';if(bid){const b=data.branches.find(x=>String(x.id)===String(bid));setStops({[bid]:blankStop(b||{id:bid,name:''})})}setOpen(true)}
  function openEdit(t){
@@ -40,18 +57,24 @@ export default function Trips({go}){
    const selected=[String(mainBranch),...shared.filter(x=>String(x)!==String(mainBranch))].filter(Boolean);
    const routeStops=selected.map((bid,i)=>{const b=data.branches.find(x=>String(x.id)===String(bid));const s=stops[bid]||{};return {branchId:bid,branchName:b?.name||'',city:s.city||b?.name||'',outboundTime:s.outboundTime||null,returnTime:s.returnTime||null,order:Number(s.order||i+1)}});
    const row={
-     ...(editing?.id?{id:editing.id}:{}),trip_code:String(f.trip_code||'').trim(),branch_id:mainBranch,from_city:String(f.from_city||'').trim(),to_city:String(f.to_city||'').trim(),
+     ...(editing?.id?{id:editing.id}:{}),trip_code:editing?.trip_code||makeTripCode(f.departure_date,mainBranch),branch_id:mainBranch,from_city:String(f.from_city||'').trim(),to_city:String(f.to_city||'').trim(),
      departure_date:f.departure_date,departure_time:f.departure_time||null,return_date:f.return_date||null,return_time:f.return_time||null,
      bus_capacity:Number(f.bus_capacity||49),booking_capacity:Number(f.bus_capacity||49),status:f.status||'active',
      price_one_way:Number(f.price_one_way||0),price_no_accommodation:Number(f.price_no_accommodation||0),price_shared:Number(f.price_shared||0),price_private_room:Number(f.price_private_room||0),
      operational_notes:f.operational_notes||editing?.operational_notes||'',_shared_branch_ids:shared.filter(x=>String(x)!==String(mainBranch)),route_stops:routeStops
    };
-   let rowsToSave=[row];if(!editing&&scheduleMode==='range'){const ds=datesBetween(f.departure_date,rangeEnd||f.departure_date,weekdays);if(!ds.length){setSaving(false);return setErr('لا توجد تواريخ مطابقة لاختيار التكرار.')}rowsToSave=ds.map((d,i)=>({...row,trip_code:`${row.trip_code}-${String(i+1).padStart(2,'0')}`,departure_date:d}))}try{await api.admin({action:'sync_trips',rows:rowsToSave});setOpen(false);await refresh()}catch(e2){setErr(e2.message)}finally{setSaving(false)}
+   let rowsToSave=[row];
+   if(!editing&&scheduleMode==='range'){
+     const ds=datesBetween(f.departure_date,rangeEnd||f.departure_date,weekdays);
+     if(!ds.length){setSaving(false);return setErr('لا توجد تواريخ مطابقة لاختيار التكرار.')}
+     rowsToSave=ds.map(d=>({...row,trip_code:makeTripCode(d,mainBranch),departure_date:d}));
+   }
+   try{await api.admin({action:'sync_trips',rows:rowsToSave});setOpen(false);await refresh()}catch(e2){setErr(e2.message)}finally{setSaving(false)}
  }
  const tripColumns=[
    {key:'trip_code',label:'الرحلة'},
    {key:'route',label:'المسار',render:r=><strong>{r.from_city||r.origin||'—'} ← {r.to_city||r.destination||'—'}</strong>},
-   {key:'departure_date',label:'التاريخ',render:r=><div>{r.departure_date||'—'}<div className="muted-small">{r.departure_time||''}</div></div>},
+   {key:'departure_date',label:'اليوم / التاريخ',render:r=><div><strong>{weekdayAr(r.departure_date)}</strong><div>{r.departure_date||'—'}</div><div className="muted-small">{r.departure_time||''}</div></div>},
    {key:'shared',label:'الفروع',render:r=>{const count=(relByTrip.get(String(r.id))||[]).length||1;return <Badge tone={count>1?'orange':'blue'}><UsersRound size={12}/> {count}</Badge>}},
    {key:'capacity',label:'السعة',render:r=>r.booking_capacity||r.default_bus_capacity||r.bus_capacity||'—'},
    {key:'price',label:'ذهاب',render:r=>money(r.price_one_way||0)},
@@ -63,11 +86,13 @@ export default function Trips({go}){
   <ErrorBox error={err}/><Card><Table rows={rows} onRow={r=>go('/trips/'+r.id)} columns={tripColumns}/></Card>
   <Modal open={open} onClose={()=>setOpen(false)} title={editing?`تعديل الرحلة ${editing.trip_code}`:'إنشاء رحلة جديدة'} wide>
    <form className="form-grid" onSubmit={save} key={editing?.id||'new'}>
-    <Field label="كود الرحلة"><Input name="trip_code" required defaultValue={editing?.trip_code||''} placeholder="MAH-260821-01"/></Field>
+    <div className="field"><span>كود الرحلة</span><div className="price-suggestion"><strong>{editing?.trip_code||'يُنشأ تلقائيًا عند الحفظ'}</strong></div></div>
     <Field label="الفرع الرئيسي"><Select value={mainBranch} onChange={e=>{const bid=e.target.value;setMainBranch(bid);setShared(a=>a.filter(x=>String(x)!==String(bid)));if(bid)setStops(x=>{const b=data.branches.find(y=>String(y.id)===String(bid));return {...x,[bid]:x[bid]||blankStop(b||{id:bid,name:''})}})}} required><option value="">اختر</option>{data.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
     <Field label="من"><Select name="from_city" required defaultValue={editing?.from_city||editing?.origin||''}><option value="">اختر وجهة الانطلاق</option>{cities.map(c=><option key={`from-${c}`} value={c}>{c}</option>)}</Select></Field>
     <Field label="إلى"><Select name="to_city" required defaultValue={editing?.to_city||editing?.destination||''}><option value="">اختر وجهة الوصول</option>{cities.map(c=><option key={`to-${c}`} value={c}>{c}</option>)}</Select></Field>
-    {!editing&&<Field label="إنشاء الرحلات"><Select value={scheduleMode} onChange={e=>setScheduleMode(e.target.value)}><option value="single">رحلة واحدة</option><option value="range">فترة / أسبوع / شهر / أيام محددة</option></Select></Field>}<Field label="تاريخ الذهاب"><Input type="date" name="departure_date" required defaultValue={editing?.departure_date||today}/></Field>{!editing&&scheduleMode==='range'&&<><Field label="حتى تاريخ"><Input type="date" min={today} value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} required/></Field><div className="schedule-days"><strong><CalendarDays size={16}/> الأيام المحددة</strong>{[['أحد',0],['اثنين',1],['ثلاثاء',2],['أربعاء',3],['خميس',4],['جمعة',5],['سبت',6]].map(([l,d])=><label key={d}><input type="checkbox" checked={weekdays.includes(d)} onChange={()=>setWeekdays(a=>a.includes(d)?a.filter(x=>x!==d):[...a,d])}/>{l}</label>)}<small>بدون تحديد أيام = كل يوم داخل الفترة.</small></div></>}
+    {!editing&&<Field label="إنشاء الرحلات"><Select value={scheduleMode} onChange={e=>setScheduleMode(e.target.value)}><option value="single">رحلة واحدة</option><option value="range">فترة / أسبوع / شهر / أيام محددة</option></Select></Field>}
+    <Field label="تاريخ الذهاب"><Input type="date" name="departure_date" required defaultValue={editing?.departure_date||today}/></Field>
+    {!editing&&scheduleMode==='range'&&<><Field label="حتى تاريخ"><Input type="date" min={today} value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} required/></Field><div className="schedule-days"><strong><CalendarDays size={16}/> الأيام المحددة</strong>{[['أحد',0],['اثنين',1],['ثلاثاء',2],['أربعاء',3],['خميس',4],['جمعة',5],['سبت',6]].map(([l,d])=><label key={d}><input type="checkbox" checked={weekdays.includes(d)} onChange={()=>setWeekdays(a=>a.includes(d)?a.filter(x=>x!==d):[...a,d])}/>{l}</label>)}<small>بدون تحديد أيام = كل يوم داخل الفترة.</small></div></>}
     <Field label="وقت الذهاب"><Input type="time" name="departure_time" required defaultValue={editing?.departure_time||''}/></Field>
     <Field label="تاريخ العودة"><Input type="date" name="return_date" defaultValue={editing?.return_date||''}/></Field>
     <Field label="وقت العودة"><Input type="time" name="return_time" defaultValue={editing?.return_time||''}/></Field>
