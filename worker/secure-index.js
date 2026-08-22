@@ -36,7 +36,7 @@ async function existingStaff(env,username){
   const url=String(env.SUPABASE_URL||'').replace(/\/+$/,'');
   const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
   if(!url||!key||!username)return null;
-  const r=await fetch(`${url}/rest/v1/staff_users?username=eq.${encodeURIComponent(String(username).trim())}&select=id,name,username,role,permissions,status&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
+  const r=await fetch(`${url}/rest/v1/staff_users?username=eq.${encodeURIComponent(String(username).trim())}&select=id,name,username,role,permissions,status,account_mode&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
   const rows=await r.json().catch(()=>[]);
   return r.ok&&Array.isArray(rows)?rows[0]||null:null;
 }
@@ -44,6 +44,12 @@ async function existingStaff(env,username){
 function sameSensitive(a={},b={}){
   for(const k of SENSITIVE_KEYS)if(!!a?.[k]!==!!b?.[k])return false;
   return true;
+}
+
+function canonicalPermissions(obj={}){
+  const out={};
+  for(const k of Object.keys(obj||{}).sort())out[k]=obj[k];
+  return JSON.stringify(out);
 }
 
 function canGrant(actor,key){
@@ -57,8 +63,9 @@ async function guardSyncUsers(request,env,payload){
   const actor=await currentActor(request,env);
   if(!actor)return json({error:'انتهت الجلسة. سجل الدخول من جديد.'},401);
   const isDeveloper=String(actor.role||'').toLowerCase()==='developer';
-  const canManage=isDeveloper||actor.role==='مدير عام'||actor.permissions?.all||actor.permissions?.manageUsers;
-  if(!canManage)return json({error:'لا توجد صلاحية إدارة الموظفين.'},403);
+  const canManageData=isDeveloper||actor.role==='مدير عام'||actor.permissions?.all||actor.permissions?.manageUsers;
+  const canManagePermissions=isDeveloper||actor.role==='مدير عام'||actor.permissions?.all||actor.permissions?.managePermissions;
+  if(!canManageData&&!canManagePermissions)return json({error:'لا توجد صلاحية إدارة الموظفين.'},403);
   if(isDeveloper)return null;
 
   const actorRank=rankOf(actor.role);
@@ -69,10 +76,27 @@ async function guardSyncUsers(request,env,payload){
     const oldPerms=old?.permissions||{};
     const newPerms=incoming.permissions&&typeof incoming.permissions==='object'?incoming.permissions:{};
 
-    if(old&&String(old.id)===String(actor.id))return json({error:'لا يمكنك تعديل دورك أو صلاحياتك من حسابك الحالي. اطلب ذلك من مستوى إداري أعلى.'},403);
+    if(old&&String(old.id)===String(actor.id))return json({error:'لا يمكنك تعديل حسابك أو صلاحياتك من حسابك الحالي. اطلب ذلك من مستوى إداري أعلى.'},403);
     if(old?.role==='developer'||truthyKeys(oldPerms).some(k=>SENSITIVE_KEYS.has(k)))return json({error:'هذا الحساب محمي ولا يمكن تعديله إلا من حساب المطور الحقيقي.'},403);
     if(String(incoming.role||'')==='developer')return json({error:'لا يمكن إنشاء أو تحويل أي موظف إلى مطور من إدارة الموظفين.'},403);
     if(old&&rankOf(old.role)>actorRank)return json({error:`لا يمكنك تعديل موظف أعلى منك في المستوى الإداري (${old.role}).`},403);
+
+    if(!canManagePermissions){
+      if(old){
+        if(String(incoming.role||old.role)!==String(old.role))return json({error:'تغيير الدور يتطلب صلاحية إدارة الصلاحيات.'},403);
+        if(canonicalPermissions(newPerms)!==canonicalPermissions(oldPerms))return json({error:'تغيير صلاحيات الموظف يتطلب صلاحية إدارة الصلاحيات.'},403);
+        const oldMode=String(old.account_mode||oldPerms?._accountMode||'training');
+        const newMode=String(incoming.account_mode||newPerms?._accountMode||oldMode);
+        if(newMode!==oldMode)return json({error:'تغيير وضع الحساب بين التدريب والتشغيل الفعلي يتطلب صلاحية إدارة الصلاحيات.'},403);
+      }else{
+        if(String(incoming.role||'موظف')!=='موظف')return json({error:'إنشاء موظف بدور وظيفي مخصص يتطلب صلاحية إدارة الصلاحيات.'},403);
+        const granted=truthyKeys(newPerms).filter(k=>!k.startsWith('_'));
+        if(granted.length)return json({error:'من لديه إدارة بيانات الموظفين فقط لا يمكنه منح صلاحيات للموظف الجديد.'},403);
+        if(String(incoming.account_mode||newPerms?._accountMode||'training')!=='training')return json({error:'الحساب الجديد يبدأ بوضع التدريب ما لم يملِك المنشئ صلاحية إدارة الصلاحيات.'},403);
+      }
+      continue;
+    }
+
     if(rankOf(incoming.role)>actorRank)return json({error:`لا يمكنك منح دور أعلى من مستواك الإداري (${incoming.role}).`},403);
     if(!sameSensitive(oldPerms,newPerms))return json({error:'صلاحيات المطور والصلاحيات السيادية لا يمكن تعديلها من إدارة الموظفين العادية.'},403);
 
