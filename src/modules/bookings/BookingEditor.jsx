@@ -7,6 +7,8 @@ import {Card,PageHeader,Button,Field,Input,Select,Textarea,ErrorBox,Badge} from 
 import {money,phoneWa,journeyLabel,tripDisplay} from '../../lib/format.js';
 import {allOps} from '../../lib/permissions.js';
 
+const NATIONALITIES=['السعودية','مصر','السودان','اليمن','سوريا','الأردن','فلسطين','لبنان','العراق','الكويت','البحرين','قطر','الإمارات','عُمان','المغرب','الجزائر','تونس','ليبيا','موريتانيا','تركيا','باكستان','الهند','بنغلاديش','أفغانستان','إندونيسيا','ماليزيا','نيجيريا','إثيوبيا','إريتريا','الصومال','تشاد','النيجر','السنغال','غينيا','مالي','بوركينا فاسو','الكاميرون','غانا','ساحل العاج','سيراليون','أوغندا','كينيا','تنزانيا','جنوب أفريقيا','فرنسا','إيطاليا','بريطانيا','ألمانيا','الولايات المتحدة','كندا'];
+const nationalityOptions=current=>{const v=String(current||'').trim();return v&&!NATIONALITIES.includes(v)?[v,...NATIONALITIES]:NATIONALITIES};
 const emptyP=()=>({name:'',gender:'male',nationality:'السعودية',identity:'',phone:'',preferredLanguage:'ar'});
 const n=v=>Number(v||0);
 
@@ -65,7 +67,12 @@ export default function BookingEditor({bookingNo,go}){
  const selectedBranch=data.branches.find(b=>String(b.id)===String(selectedBranchId));
  const remaining=Math.max(0,n(totalPrice)-n(existing?.paid_amount||0));
 
- function setCustomer(key,value){setCustomerDraft(x=>({...x,[key]:value}))}
+ function setCustomer(key,value){
+   setCustomerDraft(x=>({...x,[key]:value}));
+   if(!existing&&['name','phone','identity','nationality','gender'].includes(key)){
+     setPassengers(arr=>arr.map((p,i)=>i===0?{...p,[key==='identity'?'identity':key]:value}:p));
+   }
+ }
  function copyCustomerToFirst(){
    setPassengers(arr=>arr.map((p,i)=>i? p:{...p,name:customerDraft.name,phone:customerDraft.phone,identity:customerDraft.identity,nationality:customerDraft.nationality,gender:customerDraft.gender}));
  }
@@ -156,7 +163,7 @@ export default function BookingEditor({bookingNo,go}){
       <Field label="اسم العميل"><Input value={customerDraft.name} onChange={e=>setCustomer('name',e.target.value)} required/></Field>
       <Field label="الجوال"><Input value={customerDraft.phone} onChange={e=>setCustomer('phone',e.target.value)} inputMode="tel" required/></Field>
       <Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field>
-      <Field label="الجنسية"><Input value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}/></Field>
+      <Field label="الجنسية"><Select value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}>{nationalityOptions(customerDraft.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field>
       <Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>{const v=e.target.value;setCustomer('gender',v);if(isFemale(v)&&accommodation==='shared')setAccommodation('private')}}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
       <Field label="نوع السكن"><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option>{!isFemale(customerDraft.gender)&&!passengers.some(p=>isFemale(p.gender))&&<option value="shared">مشترك خماسي — رجال فقط</option>}<option value="private">غرفة خاصة</option></Select></Field>
       {accommodation==='private'&&<><Field label="نوع الغرفة الخاصة"><Select value={privateRoomType} onChange={e=>setPrivateRoomType(e.target.value)}><option value="single">مفردة</option><option value="double">مزدوجة</option><option value="triple">ثلاثية</option><option value="quad">رباعية</option><option value="quint">خماسية</option></Select></Field><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}
@@ -170,16 +177,17 @@ export default function BookingEditor({bookingNo,go}){
      <div className="booking-summary-strip"><span>{journeyLabel(journeyMode)}</span><span>{selectedBranch?.name||'الفرع'}</span><strong>المتبقي الحالي: {money(remaining)}</strong></div>
     </Card>
     <Card>
-     <div className="card-title"><h3>المسافرون</h3><div className="row-actions"><Button type="button" onClick={copyCustomerToFirst}><Copy size={15}/> نسخ العميل للأول</Button><Button type="button" onClick={()=>setPassengers(p=>[...p,emptyP()])}><Plus size={16}/> إضافة</Button></div></div>
+     <div className="card-title"><h3>المسافرون</h3><div className="row-actions">{existing&&<Button type="button" onClick={copyCustomerToFirst}><Copy size={15}/> نسخ العميل للأول</Button>}<Button type="button" onClick={()=>setPassengers(p=>[...p,emptyP()])}><Plus size={16}/> إضافة</Button></div></div>
+     {!existing&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>بيانات المسافر الأول تتزامن تلقائيًا مع بيانات العميل أثناء إنشاء الحجز.</div>}
      <div className="passengers-editor">{passengers.map((p,i)=><div className="passenger-box" key={p.id||i}>
       <div className="passenger-number">{i+1}</div>
       <div className="form-grid compact">
-       <Field label="الاسم"><Input value={p.name} onChange={e=>updatePassenger(i,'name',e.target.value)} required/></Field>
-       <Field label="الهوية"><Input value={p.identity} onChange={e=>updatePassenger(i,'identity',e.target.value)} required/></Field>
-       <Field label="الجنسية"><Input value={p.nationality||''} onChange={e=>updatePassenger(i,'nationality',e.target.value)}/></Field>
-       <Field label="الجوال"><Input value={p.phone||''} onChange={e=>updatePassenger(i,'phone',e.target.value)} inputMode="tel"/></Field>
-       <Field label="الجنس"><Select value={p.gender||'male'} onChange={e=>updatePassenger(i,'gender',e.target.value)}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
-       <Field label="لغة التواصل"><Select value={p.preferredLanguage||'ar'} onChange={e=>updatePassenger(i,'preferredLanguage',e.target.value)}><option value="ar">العربية</option><option value="en">English</option><option value="ur">اردو</option></Select></Field>
+       <Field label="الاسم"><Input value={p.name} onChange={e=>updatePassenger(i,'name',e.target.value)} required readOnly={!existing&&i===0}/></Field>
+       <Field label="الهوية"><Input value={p.identity} onChange={e=>updatePassenger(i,'identity',e.target.value)} required readOnly={!existing&&i===0}/></Field>
+       <Field label="الجنسية"><Select value={p.nationality||'السعودية'} onChange={e=>updatePassenger(i,'nationality',e.target.value)} disabled={!existing&&i===0}>{nationalityOptions(p.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field>
+       <Field label="الجوال"><Input value={p.phone||''} onChange={e=>updatePassenger(i,'phone',e.target.value)} inputMode="tel" readOnly={!existing&&i===0}/></Field>
+       <Field label="الجنس"><Select value={p.gender||'male'} onChange={e=>updatePassenger(i,'gender',e.target.value)} disabled={!existing&&i===0}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
+       <Field label="لغة التواصل"><Select value={p.preferredLanguage||'ar'} onChange={e=>updatePassenger(i,'preferredLanguage',e.target.value)}><option value="ar">العربية</option><option value="en">English</option><option value="tr">Türkçe</option><option value="hi">हिन्दी</option><option value="it">Italiano</option><option value="fr">Français</option><option value="ur">اردو</option></Select></Field>
       </div>
       {passengers.length>1&&<button className="remove-passenger" type="button" onClick={()=>setPassengers(a=>a.filter((_,j)=>j!==i))}><Trash2 size={16}/></button>}
      </div>)}</div>
