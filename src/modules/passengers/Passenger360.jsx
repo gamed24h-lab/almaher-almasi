@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
+import './passenger360.css';
 import {ArrowRight,Ticket,MessageCircle,UserRound,MapPin,Armchair,Hotel,WalletCards,FileText,BusFront,Phone,Languages} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {api} from '../../lib/api.js';
