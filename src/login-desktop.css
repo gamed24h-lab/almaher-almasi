@@ -1,0 +1,17 @@
+/* AL-MAHER desktop-first login refinement */
+@media (min-width: 900px){
+  .login-page{grid-template-columns:minmax(520px,1fr) minmax(520px,1fr);align-items:center;min-height:100vh;padding:clamp(28px,4vw,72px);gap:clamp(40px,7vw,120px)}
+  .login-brand{padding:30px;max-width:680px;width:100%;justify-self:center}
+  .login-logo{width:210px;max-width:210px}
+  .login-brand h1{display:block;font-size:42px;line-height:1.2;margin:24px 0 8px;color:#fff}
+  .login-brand p{font-size:18px;line-height:1.8;max-width:620px;margin:0}
+  .login-card{width:min(560px,100%);padding:36px 38px;border-radius:22px;justify-self:center;margin:0}
+  .login-card .field>span{font-size:15px}
+  .login-card input{min-height:52px;font-size:16px}
+  .login-card .btn.primary{min-height:54px;font-size:17px;width:100%}
+  .login-card small{font-size:12px;line-height:1.7}
+  .portal-link{font-size:16px;margin-top:16px}
+}
+@media (max-width:899px){
+  .login-brand h1{font-size:29px;margin:14px 0 4px;color:#fff}
+}
