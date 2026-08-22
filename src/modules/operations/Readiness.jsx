@@ -1,5 +1,6 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {ArrowRight,Armchair,BusFront,CheckCircle2,FileWarning,Hotel,RefreshCw,ScanLine,Users,XCircle} from 'lucide-react';
+import './readiness.css';
+import {ArrowRight,CheckCircle2,FileWarning,RefreshCw,ScanLine,Users,XCircle} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Loading,PageHeader,Select,Field,Table} from '../../components/UI.jsx';
@@ -37,7 +38,6 @@ export default function Readiness({initialTrip='',go}){
   const documentProblems=passengers.filter(p=>['unknown','missing','expired'].includes(low(p.document_status||'unknown')) && !(docsByPassenger.get(s(p.id))||[]).length);
   const scans=(cloud.scanner?.scan_events||[]).filter(x=>s(x.trip_id)===s(tripId)&&low(x.scan_mode)==='outbound_boarding'&&successScan(x));
   const boarded=new Set(scans.map(x=>s(x.passenger_id)).filter(Boolean));
-  // Some legacy scans are booking-level only; treat every passenger in that booking as boarded.
   const boardedBookings=new Set(scans.map(x=>s(x.booking_id)).filter(Boolean));for(const p of passengers)if(boardedBookings.has(s(p.booking_id)))boarded.add(s(p.id));
   const tripVehicles=(cloud.fleet?.trip_vehicles||[]).filter(x=>s(x.trip_id)===s(tripId)&&!['cancelled','released'].includes(low(x.status)));
   const departure=trip.departure_date?new Date(`${trip.departure_date}T${trip.departure_time||'00:00:00'}`):null;
