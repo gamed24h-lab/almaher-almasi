@@ -4,7 +4,7 @@ import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import {Card,PageHeader,Button,Field,Input,Select,Textarea,ErrorBox,Badge} from '../../components/UI.jsx';
-import {money,phoneWa,journeyLabel} from '../../lib/format.js';
+import {money,phoneWa,journeyLabel,tripDisplay} from '../../lib/format.js';
 import {allOps} from '../../lib/permissions.js';
 
 const emptyP=()=>({name:'',gender:'male',nationality:'السعودية',identity:'',phone:'',preferredLanguage:'ar'});
@@ -151,8 +151,8 @@ export default function BookingEditor({bookingNo,go}){
      <div className="form-grid">
       <Field label="الفرع"><Select name="branch_id" defaultValue={selectedBranchId} required>{availableBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
       <Field label="نوع الرحلة"><Select value={journeyMode} onChange={e=>{setJourneyMode(e.target.value);if(!['separate','roundtrip'].includes(e.target.value))setReturnTripId('')}}><option value="oneway">ذهاب فقط</option><option value="roundtrip">ذهاب وعودة</option><option value="separate">ذهاب + عودة من رحلة أخرى</option><option value="returnonly">عودة فقط</option></Select></Field>
-      <Field label={tripLabel}><Select value={tripId} onChange={e=>setTripId(e.target.value)} required><option value="">اختر الرحلة</option>{trips.map(t=><option key={t.id} value={t.id}>{t.trip_code} — {t.from_city||t.origin} ← {t.to_city||t.destination} — {t.departure_date||''}</option>)}</Select></Field>
-      <Field label={journeyMode==='separate'?'رحلة العودة المنفصلة':'رحلة العودة (اختيارية)'} hint={journeyMode==='roundtrip'?'اتركها بدون إذا كانت العودة مدمجة في نفس الرحلة.':undefined}><Select value={returnTripId} onChange={e=>setReturnTripId(e.target.value)} disabled={!['separate','roundtrip'].includes(journeyMode)} required={journeyMode==='separate'}><option value="">بدون</option>{trips.map(t=><option key={t.id} value={t.id}>{t.trip_code} — {t.from_city||t.origin} ← {t.to_city||t.destination} — {t.departure_date||''}</option>)}</Select></Field>
+      <Field label={tripLabel}><Select value={tripId} onChange={e=>setTripId(e.target.value)} required><option value="">اختر الرحلة</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field>
+      <Field label={journeyMode==='separate'?'رحلة العودة المنفصلة':'رحلة العودة (اختيارية)'} hint={journeyMode==='roundtrip'?'اتركها بدون إذا كانت العودة مدمجة في نفس الرحلة.':undefined}><Select value={returnTripId} onChange={e=>setReturnTripId(e.target.value)} disabled={!['separate','roundtrip'].includes(journeyMode)} required={journeyMode==='separate'}><option value="">بدون</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field>
       <Field label="اسم العميل"><Input value={customerDraft.name} onChange={e=>setCustomer('name',e.target.value)} required/></Field>
       <Field label="الجوال"><Input value={customerDraft.phone} onChange={e=>setCustomer('phone',e.target.value)} inputMode="tel" required/></Field>
       <Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field>
