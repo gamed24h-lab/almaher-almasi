@@ -157,6 +157,32 @@ async function decidePermissionApproval(request,env,payload){
   return json({ok:true,status,message:decision==='approve'?'تم اعتماد التغيير وتطبيقه.':'تم رفض التغيير ولم تُعدّل الصلاحيات.'});
 }
 
+async function permissionReview(request,env){
+  const actor=await currentActor(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
+  if(!(elevated(actor)||actor.permissions?.managePermissions))return json({error:'لا توجد صلاحية مراجعة الصلاحيات.'},403);
+  const url=supaUrl(env),h=authHeaders(env);
+  const [ur,ar]=await Promise.all([
+    fetch(`${url}/rest/v1/staff_users?select=id,name,username,role,branch_id,status,permissions,account_mode&order=name.asc`,{headers:h}),
+    fetch(`${url}/rest/v1/approval_requests?request_type=eq.staff_permission_change&status=eq.pending&select=id,entity_id,requested_by,requested_at`,{headers:h})
+  ]);
+  const users=await ur.json().catch(()=>[]),pending=await ar.json().catch(()=>[]);
+  if(!ur.ok)return json({error:users?.message||'تعذر جمع بيانات مراجعة الصلاحيات.'},500);
+  const issues=[];const rows=Array.isArray(users)?users:[];
+  for(const u of rows){
+    const p=u.permissions||{},role=String(u.role||'موظف'),stopped=String(u.status||'نشط').includes('موق')||String(u.status||'').toLowerCase()==='inactive';
+    const devKeys=truthyKeys(p).filter(k=>SENSITIVE_KEYS.has(k));
+    if(role!=='developer'&&devKeys.length)issues.push({severity:'critical',user_id:u.id,user_name:u.name||u.username,title:'صلاحيات مطور على حساب غير مطور',details:devKeys.join(', ')});
+    const risky=truthyKeys(p).filter(k=>APPROVAL_KEYS.has(k));
+    if(stopped&&risky.length)issues.push({severity:'high',user_id:u.id,user_name:u.name||u.username,title:'حساب موقوف ما زال يحمل صلاحيات حساسة',details:risky.join(', ')});
+    if(p.allBranchesFinance&&rankOf(role)<70)issues.push({severity:'high',user_id:u.id,user_name:u.name||u.username,title:'مالية كل الفروع لمستوى إداري منخفض',details:role});
+    if(p.managePermissions&&!p.manageUsers&&role!=='developer'&&role!=='مدير عام')issues.push({severity:'medium',user_id:u.id,user_name:u.name||u.username,title:'إدارة صلاحيات بدون إدارة مستخدمين',details:'راجع هل الفصل مقصود لهذا الحساب.'});
+    const branchOps=['branchBooking','viewBookings','operations','finance','payments','expenses'].some(k=>!!p[k]);
+    if(!u.branch_id&&rankOf(role)<90&&branchOps&&!p.allBranches)issues.push({severity:'medium',user_id:u.id,user_name:u.name||u.username,title:'حساب تشغيلي غير مربوط بفرع',details:'قد يسبب رفض عمليات نطاق الفرع أو سلوكًا غير متوقع.'});
+  }
+  const counts={critical:issues.filter(x=>x.severity==='critical').length,high:issues.filter(x=>x.severity==='high').length,medium:issues.filter(x=>x.severity==='medium').length,pending_approvals:Array.isArray(pending)?pending.length:0,users:rows.length};
+  return json({ok:true,counts,issues,checked_at:new Date().toISOString()});
+}
+
 async function guardSyncUsers(request,env,payload){
   const actor=await currentActor(request,env);
   if(!actor)return json({error:'انتهت الجلسة. سجل الدخول من جديد.'},401);
@@ -217,6 +243,7 @@ export default {
         let body={};try{body=await request.clone().json()}catch{}
         if(body?.action==='security_permission_approvals_list')return listPermissionApprovals(request,env);
         if(body?.action==='security_permission_approval_decide')return decidePermissionApproval(request,env,body);
+        if(body?.action==='security_permission_review')return permissionReview(request,env);
         if(body?.action==='sync_users'){
           const denied=await guardSyncUsers(request,env,body);
           if(denied)return denied;
