@@ -14,7 +14,7 @@ export default function TicketPage({bookingNo,go}){
  const {data}=useAppData();
  const b=data.bookings.find(x=>str(x.booking_number)===str(bookingNo));
  const passengers=data.passengers.filter(x=>str(x.booking_id)===str(b?.id));
- const [qr,setQr]=useState(''),[locationQr,setLocationQr]=useState(''),[ops,setOps]=useState(null),[error,setError]=useState('');
+ const [qr,setQr]=useState(''),[locationQr,setLocationQr]=useState(''),[ops,setOps]=useState(null),[terms,setTerms]=useState([]),[error,setError]=useState('');
  const trip=data.trips.find(x=>str(x.id)===str(b?.trip_id));
  const returnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
  const branch=data.branches.find(x=>str(x.id)===str(b?.branch_id));
@@ -27,7 +27,7 @@ export default function TicketPage({bookingNo,go}){
    if(!b)return;
    QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});
    if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});
-   api.module('tickets').then(setOps).catch(e=>setError(e.message));
+   api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{});
  },[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
@@ -43,7 +43,7 @@ export default function TicketPage({bookingNo,go}){
  const doPrint=mode=>{document.body.dataset.printMode=mode;const cleanup=()=>{delete document.body.dataset.printMode;window.removeEventListener('afterprint',cleanup)};window.addEventListener('afterprint',cleanup);window.print();setTimeout(cleanup,1500)};
  const wa=()=>{const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';const msg=[`شركة الماهر الماسي`,`تذكرة الحجز: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${trip.departure_date} ${trip.departure_time||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
  const phone=first(branchContact?.phone,branchContact?.whatsapp,branch?.whatsapp,branch?.phone);
- const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';
+ const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};const privateType=snap.privateRoomType||(Array.isArray(b.private_room_types)?b.private_room_types[0]:'');const privateTypeLabel={single:'مفردة',double:'مزدوجة',triple:'ثلاثية',quad:'رباعية',quint:'خماسية'}[privateType]||privateType;const ticketCancelled=['cancelled','refunded'].includes(lower(b.status))||lower(trip?.status)==='cancelled';
  const showOutbound=lower(b.journey_mode)!=='returnonly';
  const showReturn=['roundtrip','separate','returnonly'].includes(lower(b.journey_mode));
  const returnInfo=returnTrip||trip;
@@ -65,7 +65,7 @@ export default function TicketPage({bookingNo,go}){
    <section className="ticket-hero-grid">
     <div><span>العميل</span><strong>{b.customer_name}</strong><small>{b.customer_phone}</small></div>
     <div><span>نوع الرحلة</span><strong>{journeyLabel(b.journey_mode)}</strong><small>{branch?.name||''}</small></div>
-    <div><span>السكن</span><strong>{b.accommodation_label||b.accommodation_type||'بدون سكن'}</strong><small>{b.snapshot?.housingDays?`${b.snapshot.housingDays} يوم`:''}</small></div>
+    <div><span>السكن</span><strong>{b.accommodation_label||b.accommodation_type||'بدون سكن'}</strong><small>{b.accommodation_type==='private'?[privateTypeLabel&&`غرفة ${privateTypeLabel}`,`${Number(b.private_rooms||snap.privateRooms||1)} غرفة`,snap.housingDays&&`${snap.housingDays} يوم`].filter(Boolean).join(' · '):''}</small></div>
     <div><span>حالة السداد</span><strong>{remaining>0?`متبقي ${money(remaining)}`:'مسدد بالكامل'}</strong><small>{b.payment_method||''}</small></div>
    </section>
 
@@ -85,7 +85,7 @@ export default function TicketPage({bookingNo,go}){
     <div className="ticket-finance"><div><span>الإجمالي</span><b>{money(total)}</b></div><div><span>المدفوع</span><b>{money(paid)}</b></div><div><span>المتبقي</span><b>{money(remaining)}</b></div></div>
     <div className="ticket-qr-group">{qr&&<div><img src={qr} alt="QR الحجز"/><span>QR الحجز</span></div>}{locationQr&&<div><img src={locationQr} alt="QR الموقع"/><span>موقع الصعود</span></div>}</div>
    </section>
-   <footer className="ticket-contact"><div>{locationText&&<span><MapPin size={13}/> {locationText}</span>}{phone&&<span><Phone size={13}/> {phone}</span>}</div><small>يرجى الحضور قبل موعد الانطلاق والاحتفاظ بالتذكرة والهوية. تخضع الرحلة لشروط وأحكام شركة الماهر الماسي المسجلة بالنظام.</small></footer>
+   <section className="ticket-terms"><h3>الشروط والأحكام</h3><ol>{(terms.length?terms:['الحضور قبل موعد الانطلاق بوقت كافٍ.','الاحتفاظ بالتذكرة والهوية/الإقامة أثناء الرحلة.','التذكرة الملغاة أو المستبدلة غير صالحة للاستخدام.']).map((x,i)=><li key={i}>{typeof x==='string'?x:x?.text}</li>)}</ol></section><footer className="ticket-contact"><div>{locationText&&<span><MapPin size={13}/> {locationText}</span>}{phone&&<span><Phone size={13}/> {phone}</span>}</div><small>تخضع الرحلة للشروط والأحكام المسجلة بالنظام وقت إصدار التذكرة.</small></footer>
   </article>
  </>;
 }

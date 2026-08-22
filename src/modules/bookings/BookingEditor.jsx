@@ -10,12 +10,13 @@ import {allOps} from '../../lib/permissions.js';
 const emptyP=()=>({name:'',gender:'male',nationality:'السعودية',identity:'',phone:'',preferredLanguage:'ar'});
 const n=v=>Number(v||0);
 
-function calcPrice({mode,type,travelers,rooms,days,trip,returnTrip}){
+function calcPrice({mode,type,roomType='double',travelers,rooms,days,trip,returnTrip}){
  if(!trip)return 0;
  const count=Math.max(1,Number(travelers||1));
  const stayDays=Math.max(1,Number(days||1));
- const one=n(trip.price_one_way),none=n(trip.price_no_accommodation),shared=n(trip.price_shared),priv=n(trip.price_private_room);
- const privateCost=type==='private'?priv*Math.max(1,Number(rooms||1))*stayDays:0;
+ const one=n(trip.price_one_way),none=n(trip.price_no_accommodation),shared=n(trip.price_shared);
+ const roomRate=roomType==='single'?n(trip.price_private_single||trip.price_private_room):roomType==='triple'?n(trip.price_private_triple||trip.price_private_room):roomType==='quad'?n(trip.price_private_quad||trip.price_private_room):roomType==='quint'?n(trip.price_private_quint||trip.price_private_room):n(trip.price_private_double||trip.price_private_room);
+ const privateCost=type==='private'?roomRate*Math.max(1,Number(rooms||1))*stayDays:0;
  if(mode==='oneway'||mode==='returnonly')return one*count+privateCost;
  if(mode==='separate'){
    const outbound=type==='shared'?shared*count:none*count+privateCost;
@@ -46,6 +47,7 @@ export default function BookingEditor({bookingNo,go}){
  const [accommodation,setAccommodation]=useState(existing?.accommodation_type||snap.accommodationType||'none');
  const [housingDays,setHousingDays]=useState(Number(snap.housingDays||0));
  const [privateRooms,setPrivateRooms]=useState(Number(existing?.private_rooms||snap.privateRooms||1));
+ const [privateRoomType,setPrivateRoomType]=useState(String(snap.privateRoomType||(existing?.private_room_types||[])[0]||'double'));
  const [totalPrice,setTotalPrice]=useState(Number(existing?.total_price||snap.totalPrice||0));
  const [err,setErr]=useState(''),[saving,setSaving]=useState(false);
  const [customerDraft,setCustomerDraft]=useState({
@@ -57,7 +59,7 @@ export default function BookingEditor({bookingNo,go}){
  const trips=useMemo(()=>data.trips.filter(t=>!['cancelled','completed'].includes(String(t.status).toLowerCase())&&(!t.departure_date||t.departure_date>=today)),[data.trips,today]);
  const trip=trips.find(t=>String(t.id)===String(tripId));
  const returnTrip=trips.find(t=>String(t.id)===String(returnTripId));
- const suggested=calcPrice({mode:journeyMode,type:accommodation,travelers:passengers.length,rooms:privateRooms,days:housingDays,trip,returnTrip});
+ const suggested=calcPrice({mode:journeyMode,type:accommodation,roomType:privateRoomType,travelers:passengers.length,rooms:privateRooms,days:housingDays,trip,returnTrip});
  const availableBranches=allOps(user)?data.branches:data.branches.filter(b=>String(b.id)===String(data.scope?.branch_id||user?.branch_id||''));
  const selectedBranchId=existing?.branch_id||data.scope?.branch_id||user?.branch_id||'';
  const selectedBranch=data.branches.find(b=>String(b.id)===String(selectedBranchId));
@@ -67,13 +69,13 @@ export default function BookingEditor({bookingNo,go}){
  function copyCustomerToFirst(){
    setPassengers(arr=>arr.map((p,i)=>i? p:{...p,name:customerDraft.name,phone:customerDraft.phone,identity:customerDraft.identity,nationality:customerDraft.nationality,gender:customerDraft.gender}));
  }
- function updatePassenger(i,key,value){setPassengers(a=>a.map((x,j)=>j===i?{...x,[key]:value}:x))}
+ function updatePassenger(i,key,value){setPassengers(a=>a.map((x,j)=>j===i?{...x,[key]:value}:x));if(key==='gender'&&isFemale(value)&&accommodation==='shared')setAccommodation('private')}
  function applySuggested(){setTotalPrice(suggested)}
  function validate(paid){
    if(!tripId)return 'اختر الرحلة.';
    if(journeyMode==='separate'&&!returnTripId)return 'اختر رحلة العودة المنفصلة.';
    if(journeyMode==='separate'&&String(returnTripId)===String(tripId))return 'رحلة العودة المنفصلة يجب أن تكون مختلفة عن رحلة الذهاب.';
-   if(accommodation==='shared'&&passengers.some(p=>isFemale(p.gender)))return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';
+   if(accommodation==='shared'&&(isFemale(customerDraft.gender)||passengers.some(p=>isFemale(p.gender))))return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';
    if(accommodation==='private'&&Number(housingDays)<1)return 'عدد أيام السكن إلزامي عند اختيار غرفة خاصة.';
    if(accommodation==='private'&&Number(privateRooms)<1)return 'عدد الغرف الخاصة يجب أن يكون غرفة واحدة على الأقل.';
    if(!passengers.length)return 'أضف مسافرًا واحدًا على الأقل.';
@@ -98,14 +100,14 @@ export default function BookingEditor({bookingNo,go}){
    const branchRel=(data.tripBranches||[]).find(x=>String(x.trip_id)===String(tripId)&&String(x.branch_id)===String(branchId));
    const snapshot={
      ...snap,journeyMode,tripId,returnTripId:returnTripId||null,accommodationType:accommodation,
-     housingDays:accommodation==='private'?Number(housingDays):0,privateRooms:accommodation==='private'?Number(privateRooms):0,
+     housingDays:accommodation==='private'?Number(housingDays):0,privateRooms:accommodation==='private'?Number(privateRooms):0,privateRoomType:accommodation==='private'?privateRoomType:null,
      totalPrice:n(totalPrice),paidAmount:paid,passengerDetails:passengers,boardingPoint:branchRel?.boarding_point||null,boardingTime:branchRel?.boarding_time||null
    };
    const base={
      booking_number:bookingNumber,branch_id:branchId,trip_id:tripId||null,return_trip_id:returnTripId||null,journey_mode:journeyMode,
      customer_name:customerDraft.name.trim(),customer_phone:customerDraft.phone.trim(),customer_identity:customerDraft.identity.trim(),
      customer_gender:customerDraft.gender,customer_nationality:customerDraft.nationality.trim(),accommodation_type:accommodation,accommodation_label:accommodationLabel,
-     private_rooms:accommodation==='private'?Number(privateRooms):0,private_room_types:accommodation==='private'?Array.from({length:Number(privateRooms)},()=> 'double'):[],
+     private_rooms:accommodation==='private'?Number(privateRooms):0,private_room_types:accommodation==='private'?Array.from({length:Number(privateRooms)},()=> privateRoomType):[],
      total_price:n(totalPrice),original_price:n(suggested||totalPrice),paid_amount:paid,payment_method:f.payment_method||null,
      payment_reference:String(f.payment_reference||'').trim()||null,notes:f.notes||'',terms_accepted:true,source:'branch',
      version_no:Number(existing?.version_no||1),status:existing?.status||'confirmed',snapshot
@@ -155,9 +157,9 @@ export default function BookingEditor({bookingNo,go}){
       <Field label="الجوال"><Input value={customerDraft.phone} onChange={e=>setCustomer('phone',e.target.value)} inputMode="tel" required/></Field>
       <Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field>
       <Field label="الجنسية"><Input value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}/></Field>
-      <Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>setCustomer('gender',e.target.value)}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
-      <Field label="نوع السكن"><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option><option value="shared">مشترك خماسي</option><option value="private">غرفة خاصة</option></Select></Field>
-      {accommodation==='private'&&<><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}
+      <Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>{const v=e.target.value;setCustomer('gender',v);if(isFemale(v)&&accommodation==='shared')setAccommodation('private')}}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
+      <Field label="نوع السكن"><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option>{!isFemale(customerDraft.gender)&&!passengers.some(p=>isFemale(p.gender))&&<option value="shared">مشترك خماسي — رجال فقط</option>}<option value="private">غرفة خاصة</option></Select></Field>
+      {accommodation==='private'&&<><Field label="نوع الغرفة الخاصة"><Select value={privateRoomType} onChange={e=>setPrivateRoomType(e.target.value)}><option value="single">مفردة</option><option value="double">مزدوجة</option><option value="triple">ثلاثية</option><option value="quad">رباعية</option><option value="quint">خماسية</option></Select></Field><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}
       <Field label="السعر المقترح"><div className="price-suggestion"><strong>{money(suggested)}</strong><Button type="button" onClick={applySuggested}><Calculator size={15}/> اعتماد السعر</Button></div></Field>
       <Field label="الإجمالي النهائي"><Input type="number" min="0" step="0.01" value={totalPrice} onChange={e=>setTotalPrice(Number(e.target.value))}/></Field>
       <Field label="المدفوع"><Input type="number" min="0" max={Math.max(0,n(totalPrice))} step="0.01" name="paid_amount" defaultValue={existing?.paid_amount||0}/></Field>
