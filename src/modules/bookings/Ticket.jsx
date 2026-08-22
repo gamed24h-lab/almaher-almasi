@@ -5,9 +5,12 @@ import {useAppData} from '../../core/AppDataContext.jsx';
 import {api} from '../../lib/api.js';
 import {PageHeader,Button,Card,Loading,ErrorBox,Badge} from '../../components/UI.jsx';
 import {money,phoneWa,journeyLabel} from '../../lib/format.js';
+import {branchLogo} from '../../lib/branding.js';
 
 const str=v=>String(v??'');
 const lower=v=>str(v).toLowerCase();
+const DAY_NAMES=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const weekdayAr=d=>d?DAY_NAMES[new Date(d+'T12:00:00').getDay()]||'':'';
 function first(...vals){return vals.find(v=>v!==undefined&&v!==null&&str(v).trim()!=='')??''}
 
 export default function TicketPage({bookingNo,go}){
@@ -41,7 +44,7 @@ export default function TicketPage({bookingNo,go}){
  if(!b)return <Card>الحجز غير موجود في البيانات الحالية.</Card>;
  const paid=Number(b.paid_amount||0),total=Number(b.total_price||0),remaining=Math.max(0,total-paid);
  const doPrint=mode=>{document.body.dataset.printMode=mode;const cleanup=()=>{delete document.body.dataset.printMode;window.removeEventListener('afterprint',cleanup)};window.addEventListener('afterprint',cleanup);window.print();setTimeout(cleanup,1500)};
- const wa=()=>{const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';const msg=[`شركة الماهر الماسي`,`تذكرة الحجز: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${trip.departure_date} ${trip.departure_time||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
+ const wa=()=>{const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';const msg=[`شركة الماهر الماسي`,`تذكرة الحجز: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
  const phone=first(branchContact?.phone,branchContact?.whatsapp,branch?.whatsapp,branch?.phone);
  const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};const privateType=snap.privateRoomType||(Array.isArray(b.private_room_types)?b.private_room_types[0]:'');const privateTypeLabel={single:'مفردة',double:'مزدوجة',triple:'ثلاثية',quad:'رباعية',quint:'خماسية'}[privateType]||privateType;const ticketCancelled=['cancelled','refunded'].includes(lower(b.status))||lower(trip?.status)==='cancelled';
  const showOutbound=lower(b.journey_mode)!=='returnonly';
@@ -57,9 +60,9 @@ export default function TicketPage({bookingNo,go}){
   </>}/>
   <ErrorBox error={error}/>
   {!ops&&!error&&<Loading text="استكمال بيانات المقعد والسكن..."/>}
-  <article className={`ticket-page ${dense}`}>
+  <article className={`ticket-page ${dense} ${ticketCancelled?'ticket-cancelled':''}`}>
    <header className="ticket-head">
-    <div className="ticket-brand-lockup"><img className="ticket-logo" src="/almaher-logo.jpeg" alt="شعار الماهر الماسي"/><div><h1>الماهر الماسي</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div>
+    <div className="ticket-brand-lockup"><img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/><div><h1>{branch?.name||'الماهر الماسي'}</h1><span>نُيسر دربك... لنطمئن قلبك</span></div></div>
     <div className="ticket-number"><span>رقم الحجز</span><b>{b.booking_number}</b><Badge tone={b.status==='cancelled'?'red':'green'}>{b.status||'confirmed'}</Badge></div>
    </header>
    <section className="ticket-hero-grid">
@@ -93,5 +96,5 @@ export default function TicketPage({bookingNo,go}){
 function JourneyBlock({title,trip,date,time,boardingPoint,boardingTime,reverse=false}){
  if(!trip)return <div className="journey-block"><strong>{title}</strong><span>بيانات الرحلة غير متاحة</span></div>;
  const from=reverse?(trip.to_city||trip.destination):(trip.from_city||trip.origin),to=reverse?(trip.from_city||trip.origin):(trip.to_city||trip.destination);
- return <div className="journey-block"><div className="journey-title"><BusFront size={17}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div><div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div><div className="journey-meta"><span>{date||'—'} {time||''}</span>{boardingPoint&&<span>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</span>}</div></div>
+ return <div className="journey-block"><div className="journey-title"><BusFront size={17}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div><div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div><div className="journey-meta"><span>{weekdayAr(date)} · {date||'—'} {time||''}</span>{boardingPoint&&<span>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</span>}</div></div>
 }
