@@ -1,3 +1,35 @@
-import React,{useEffect,useMemo} from 'react';import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft} from 'lucide-react';import {useAppData} from '../../core/AppDataContext.jsx';import {useLanguage} from '../../core/LanguageContext.jsx';import {Card,PageHeader,Loading,ErrorBox,Badge} from '../../components/UI.jsx';import {money,statusLabel} from '../../lib/format.js';
-export default function Dashboard({go}){const {data,loading,error,refresh}=useAppData();const {t}=useLanguage();useEffect(()=>{if(!data.scope)refresh().catch(()=>{})},[]);const stats=useMemo(()=>{const active=data.trips.filter(t=>!['cancelled','completed'].includes(String(t.status))).length,book=data.bookings.length,pax=data.passengers.filter(p=>p.status!=='cancelled').length,dues=data.bookings.reduce((n,b)=>n+Math.max(0,Number(b.total_price||0)-Number(b.paid_amount||0)),0);return {active,book,pax,dues}},[data]);if(loading&&!data.scope)return <Loading/>;return <><PageHeader title={t('dashboardTitle')} subtitle={t('dashboardSubtitle')}/><ErrorBox error={error}/><div className="stats-grid"><Stat icon={<BusFront/>} label={t('activeTrips')} value={stats.active}/><Stat icon={<ClipboardList/>} label={t('bookings')} value={stats.book}/><Stat icon={<Users/>} label={t('passengers')} value={stats.pax}/><Stat icon={<WalletCards/>} label={t('remainingTotal')} value={money(stats.dues)}/></div><div className="dashboard-grid"><Card><div className="card-title"><h3>{t('nearestTrips')}</h3><button className="text-btn" onClick={()=>go('/trips')}>{t('viewAll')} <ArrowLeft size={16}/></button></div><div className="stack-list">{data.trips.slice(0,6).map(tr=><button key={tr.id} className="list-row" onClick={()=>go('/trips/'+tr.id)}><div><strong>{tr.trip_code||t('trip')}</strong><span>{tr.from_city||tr.origin||'—'} ← {tr.to_city||tr.destination||'—'}</span></div><div><span>{tr.departure_date||'—'} {tr.departure_time||''}</span><Badge tone="blue">{statusLabel(tr.status)}</Badge></div></button>)}</div></Card><Card><div className="card-title"><h3>{t('needsAction')}</h3><AlertTriangle size={20}/></div><div className="alert-list"><Alert text={`${data.passengers.filter(x=>!x.seat_id&&!x.seat_number&&x.status!=='cancelled').length} ${t('withoutSeat')}`} onClick={()=>go('/seats')}/><Alert text={`${data.passengers.filter(x=>String(x.accommodation_status||'').toLowerCase()==='pending').length} ${t('needsHousing')}`} onClick={()=>go('/housing')}/><Alert text={`${data.bookings.filter(b=>Number(b.paid_amount||0)<Number(b.total_price||0)).length} ${t('bookingDue')}`} onClick={()=>go('/finance')}/></div></Card></div></>}
-function Stat({icon,label,value}){return <Card className="stat-card"><div className="stat-icon">{icon}</div><div><span>{label}</span><strong>{value}</strong></div></Card>}function Alert({text,onClick}){return <button className="alert-row" onClick={onClick}><span>{text}</span><ArrowLeft size={17}/></button>}
+import React,{useEffect,useMemo} from 'react';
+import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft} from 'lucide-react';
+import {useAppData} from '../../core/AppDataContext.jsx';
+import {useLanguage} from '../../core/LanguageContext.jsx';
+import {Card,PageHeader,Loading,ErrorBox,Badge} from '../../components/UI.jsx';
+import {money,statusLabel,tripWeekday,tripDate} from '../../lib/format.js';
+
+const tripStamp=t=>{
+ const d=String(t?.departure_date||'').slice(0,10),tm=String(t?.departure_time||'00:00:00').slice(0,8);
+ const x=new Date(`${d||'1970-01-01'}T${tm||'00:00:00'}`);
+ return Number.isNaN(x.getTime())?0:x.getTime();
+};
+const isUpcoming=t=>{
+ const status=String(t?.status||'').toLowerCase();
+ if(['cancelled','canceled','completed','closed'].includes(status))return false;
+ const day=String(t?.departure_date||'').slice(0,10);
+ if(!day)return false;
+ const today=new Date();today.setHours(0,0,0,0);
+ const dep=new Date(`${day}T00:00:00`);
+ return !Number.isNaN(dep.getTime())&&dep>=today;
+};
+
+export default function Dashboard({go}){
+ const {data,loading,error,refresh}=useAppData();const {t}=useLanguage();
+ useEffect(()=>{if(!data.scope)refresh().catch(()=>{})},[]);
+ const upcoming=useMemo(()=>[...(data.trips||[])].filter(isUpcoming).sort((a,b)=>tripStamp(a)-tripStamp(b)),[data.trips]);
+ const stats=useMemo(()=>{
+  const active=upcoming.length,book=data.bookings.length,pax=data.passengers.filter(p=>p.status!=='cancelled').length,dues=data.bookings.reduce((n,b)=>n+Math.max(0,Number(b.total_price||0)-Number(b.paid_amount||0)),0);
+  return {active,book,pax,dues};
+ },[data,upcoming]);
+ if(loading&&!data.scope)return <Loading/>;
+ return <><PageHeader title={t('dashboardTitle')} subtitle={t('dashboardSubtitle')}/><ErrorBox error={error}/><div className="stats-grid"><Stat icon={<BusFront/>} label={t('activeTrips')} value={stats.active}/><Stat icon={<ClipboardList/>} label={t('bookings')} value={stats.book}/><Stat icon={<Users/>} label={t('passengers')} value={stats.pax}/><Stat icon={<WalletCards/>} label={t('remainingTotal')} value={money(stats.dues)}/></div><div className="dashboard-grid"><Card><div className="card-title"><h3>{t('nearestTrips')}</h3><button className="text-btn" onClick={()=>go('/trips')}>{t('viewAll')} <ArrowLeft size={16}/></button></div><div className="stack-list">{upcoming.length?upcoming.slice(0,6).map(tr=><button key={tr.id} className="list-row" onClick={()=>go('/trips/'+tr.id)}><div><strong>{tr.trip_code||t('trip')}</strong><span>{tr.from_city||tr.origin||'—'} ← {tr.to_city||tr.destination||'—'}</span></div><div><span>{tripWeekday(tr.departure_date)} — {tripDate(tr.departure_date)}{tr.departure_time?` — ${String(tr.departure_time).slice(0,5)}`:''}</span><Badge tone="blue">{statusLabel(tr.status)}</Badge></div></button>):<div className="empty-state">لا توجد رحلات قادمة حاليًا.</div>}</div></Card><Card><div className="card-title"><h3>{t('needsAction')}</h3><AlertTriangle size={20}/></div><div className="alert-list"><Alert text={`${data.passengers.filter(x=>!x.seat_id&&!x.seat_number&&x.status!=='cancelled').length} ${t('withoutSeat')}`} onClick={()=>go('/seats')}/><Alert text={`${data.passengers.filter(x=>String(x.accommodation_status||'').toLowerCase()==='pending').length} ${t('needsHousing')}`} onClick={()=>go('/housing')}/><Alert text={`${data.bookings.filter(b=>Number(b.paid_amount||0)<Number(b.total_price||0)).length} ${t('bookingDue')}`} onClick={()=>go('/finance')}/></div></Card></div></>;
+}
+function Stat({icon,label,value}){return <Card className="stat-card"><div className="stat-icon">{icon}</div><div><span>{label}</span><strong>{value}</strong></div></Card>}
+function Alert({text,onClick}){return <button className="alert-row" onClick={onClick}><span>{text}</span><ArrowLeft size={17}/></button>}
