@@ -1,0 +1,75 @@
+/* AL-MAHER print layer — served statically so browser print rules are not processed by Vite. */
+@media print {
+  @page { size: A4; margin: 10mm; }
+
+  html, body { background:#fff !important; }
+  body[data-housing-print="1"] .sidebar,
+  body[data-housing-print="1"] .topbar,
+  body[data-housing-print="1"] .page-head,
+  body[data-housing-print="1"] .page-actions,
+  body[data-housing-print="1"] .housing-toolbar,
+  body[data-housing-print="1"] .housing-actions,
+  body[data-housing-print="1"] .housing-summary,
+  body[data-housing-print="1"] .room-grid,
+  body[data-housing-print="1"] .empty,
+  body[data-housing-print="1"] .no-print,
+  body[data-housing-print="1"] .bottom-nav { display:none !important; }
+
+  body[data-housing-print="1"] main,
+  body[data-housing-print="1"] .content-shell,
+  body[data-housing-print="1"] .app-shell { display:block !important; margin:0 !important; padding:0 !important; width:100% !important; max-width:none !important; }
+
+  body[data-housing-print="1"] .housing-manifest {
+    display:block !important;
+    width:100% !important;
+    margin:0 !important;
+    padding:0 !important;
+    color:#111 !important;
+    direction:rtl;
+  }
+
+  body[data-housing-print="1"] .print-report-head {
+    display:flex !important;
+    align-items:center !important;
+    justify-content:space-between !important;
+    gap:18px;
+    border-bottom:2px solid #173f76;
+    padding:0 0 10px !important;
+    margin:0 0 14px !important;
+  }
+  body[data-housing-print="1"] .print-report-head img { width:95px !important; height:auto !important; object-fit:contain; }
+  body[data-housing-print="1"] .print-report-head h2 { margin:0 !important; font-size:24px !important; color:#173f76 !important; }
+  body[data-housing-print="1"] .print-report-head small { font-size:12px !important; color:#555 !important; }
+
+  body[data-housing-print="1"] .housing-manifest table {
+    width:100% !important;
+    border-collapse:collapse !important;
+    table-layout:auto !important;
+    font-size:12px !important;
+  }
+  body[data-housing-print="1"] .housing-manifest th {
+    background:#eef3f9 !important;
+    color:#173f76 !important;
+    font-weight:800 !important;
+    padding:8px 6px !important;
+    border:1px solid #b9c5d3 !important;
+    white-space:nowrap;
+  }
+  body[data-housing-print="1"] .housing-manifest td {
+    padding:8px 6px !important;
+    border:1px solid #cbd5df !important;
+    vertical-align:middle !important;
+  }
+  body[data-housing-print="1"] .housing-manifest tr { break-inside:avoid; page-break-inside:avoid; }
+
+  body[data-report-print="1"] .sidebar,
+  body[data-report-print="1"] .topbar,
+  body[data-report-print="1"] .page-head,
+  body[data-report-print="1"] .page-actions,
+  body[data-report-print="1"] .no-print,
+  body[data-report-print="1"] .bottom-nav { display:none !important; }
+  body[data-report-print="1"] main,
+  body[data-report-print="1"] .content-shell,
+  body[data-report-print="1"] .app-shell { display:block !important; margin:0 !important; padding:0 !important; width:100% !important; max-width:none !important; }
+  body[data-report-print="1"] .printable-report { box-shadow:none !important; border:0 !important; margin:0 !important; padding:0 !important; }
+}
