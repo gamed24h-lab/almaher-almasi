@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
+import './seats-queue.css';
 import {Armchair,RefreshCw,UserRoundCheck,XCircle,Lock,Clock3,PlayCircle} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {api} from '../../lib/api.js';
