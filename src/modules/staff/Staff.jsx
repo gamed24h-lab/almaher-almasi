@@ -34,7 +34,6 @@ const modeOf=u=>u?.account_mode==='production'||u?.permissions?._accountMode==='
 const permLabel=k=>GENERAL_PERMS.find(x=>x[0]===k)?.[1]||DEVELOPER_PERMS.find(x=>x[0]===k)?.[1]||k;
 function defaultForm(){return {id:'',name:'',username:'',phone:'',role:'موظف',branch_id:'',status:'نشط',password:'',accountMode:'training',permissions:{},reauthPassword:''}}
 function newStaffId(){try{return `staff-${crypto.randomUUID()}`}catch{return `staff-${Date.now()}-${Math.random().toString(36).slice(2,10)}`}}
-function changedRiskKeys(before={},after={}){const out=[];for(const k of HIGH_RISK)if(!!before?.[k]!==!!after?.[k])out.push(k);return out}
 
 export default function Staff(){
  const {user}=useAuth();const {data,refresh}=useAppData();
@@ -44,31 +43,20 @@ export default function Staff(){
  const isDeveloper=String(user?.role||'').toLowerCase()==='developer';const actorRank=rankOf(user?.role);
  const canEditPermissions=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.managePermissions;
  const canManageUsers=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.manageUsers;
- const canApprovePermissionChanges=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.approvals;
+ const canApprovePermissionChanges=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.managePermissions||!!user?.permissions?.approvals;
  const branchMap=useMemo(()=>Object.fromEntries(branches.map(b=>[String(b.id),b.name||b.branch_name||b.id])),[branches]);
  const userMap=useMemo(()=>Object.fromEntries(users.map(u=>[String(u.id),u])),[users]);
  const canGrant=k=>canEditPermissions&&(isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.[k]);
  const visibleGeneralPerms=canEditPermissions?GENERAL_PERMS.filter(([k])=>canGrant(k)):[];
  const allowedRoles=canEditPermissions?ROLES.filter(r=>isDeveloper||rankOf(r)<=actorRank):['موظف'];
- const pendingPermissionApprovals=approvals.filter(x=>x.request_type==='permission_change'&&x.status==='pending');
+ const pendingPermissionApprovals=approvals.filter(x=>x.request_type==='staff_permission_change'&&x.status==='pending');
  function canManageTarget(u){if(isDeveloper)return true;if(String(u?.id)===String(user?.id))return false;if(String(u?.role||'').toLowerCase()==='developer')return false;if(Object.keys(u?.permissions||{}).some(k=>SENSITIVE.has(k)&&u.permissions[k]))return false;return rankOf(u?.role)<=actorRank}
  function edit(u){if(!canManageTarget(u)){setError('لا يمكنك تعديل هذا الحساب لأنه أعلى منك إداريًا أو حساب محمي.');return}setForm({...defaultForm(),...u,branch_id:u.branch_id||'',password:'',accountMode:modeOf(u),permissions:u.permissions||{},reauthPassword:''});setError('');setNotice('');setOpen(true)}
  function add(){if(!canManageUsers&&!canEditPermissions){setError('لا توجد صلاحية إضافة موظفين.');return}setForm(defaultForm());setError('');setNotice('');setOpen(true)}
  function applyTemplate(role=form.role){if(!canEditPermissions){setNotice('حسابك يملك إدارة بيانات الموظفين فقط ولا يملك إدارة الصلاحيات.');return}const keys=(ROLE_TEMPLATES[role]||[]).filter(canGrant);const out={};for(const k of keys)out[k]=true;if(isDeveloper){for(const k of SENSITIVE)if(form.permissions?.[k])out[k]=true}setForm(x=>({...x,role,permissions:{...out,_accountMode:x.permissions?._accountMode||'training'}}));setNotice(`تم تطبيق قالب صلاحيات «${role}». تم استبعاد أي صلاحية أعلى من صلاحياتك الحالية تلقائيًا.`)}
  function togglePerm(k,checked){if(!canGrant(k))return;setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:checked}}))}
- async function loadApprovals(){if(!canEditPermissions&&!canApprovePermissionChanges)return;try{const x=await api.module('approvals');setApprovals(x?.approval_requests||[])}catch(_e){setApprovals([])}}
+ async function loadApprovals(){if(!canEditPermissions&&!canApprovePermissionChanges)return;try{const x=await api.admin({action:'security_permission_approvals_list'});setApprovals(x?.rows||[])}catch(_e){setApprovals([])}}
  useEffect(()=>{loadApprovals()},[canEditPermissions,canApprovePermissionChanges]);
- async function reauthenticate(password){
-   if(isDeveloper)return true;
-   if(!password)throw new Error('أدخل كلمة مرورك الحالية لإعادة التحقق قبل التغيير الحساس.');
-   const ident=String(user?.username||user?.phone||'').trim();if(!ident)throw new Error('تعذر تحديد حسابك لإعادة التحقق.');
-   const method=/^[+\d][\d\s()-]{6,}$/.test(ident)?'phone':'username';
-   const out=await api.login(ident,password,method);if(String(out?.user?.id||'')!==String(user?.id||''))throw new Error('تعذر تأكيد هوية المستخدم الحالي.');return true;
- }
- async function requestDualApproval(targetRow,riskKeys){
-   const row={request_type:'permission_change',entity_type:'staff_user',entity_id:String(targetRow.id),branch_id:targetRow.branch_id||null,requested_by:String(user?.name||user?.username||user?.id||''),approver_role:'manager',status:'pending',request_payload:{target_user_id:String(targetRow.id),target_name:targetRow.name||'',proposed_row:targetRow,risk_keys:riskKeys,requested_by_id:String(user?.id||''),requested_by_name:String(user?.name||''),requested_at:new Date().toISOString()}};
-   await api.moduleWrite({action:'insert',table:'approval_requests',row});await loadApprovals();
- }
  async function save(e){e.preventDefault();setError('');setBusy(true);try{
    const isNew=!form.id;const existingUser=isNew?null:users.find(u=>String(u.id)===String(form.id));
    if(existingUser&&!canManageTarget(existingUser))throw new Error('لا يمكنك تعديل موظف أعلى منك إداريًا أو حساب محمي.');
@@ -82,27 +70,23 @@ export default function Staff(){
    const accountMode=!canEditPermissions&&existingUser?modeOf(existingUser):form.accountMode;
    const row={...form,id:isNew?newStaffId():form.id,name:String(form.name||'').trim(),username:String(form.username||'').trim(),phone:String(form.phone||'').trim(),role,branch_id:form.branch_id||null,account_mode:accountMode==='production'?'production':'training',permissions};
    delete row.accountMode;delete row.reauthPassword;if(!row.name||!row.username)throw new Error('الاسم واسم المستخدم مطلوبان');if(isNew&&!row.password)throw new Error('كلمة مرور الموظف الجديد مطلوبة');if(!row.password)delete row.password;
-   const riskKeys=changedRiskKeys(existingUser?.permissions||{},permissions);const roleEscalation=existingUser&&rankOf(row.role)>rankOf(existingUser.role);
-   if((riskKeys.length||roleEscalation)&&!isDeveloper){
-     await reauthenticate(form.reauthPassword);
-     await requestDualApproval(row,[...riskKeys,...(roleEscalation?['role_escalation']:[])]);
-     setOpen(false);setNotice('تم إرسال التغيير الحساس للموافقة الثانية ولم يتم تطبيقه بعد.');return;
-   }
-   await api.admin({action:'sync_users',rows:[row]});await refresh();setOpen(false);
+   const out=await api.admin({action:'sync_users',rows:[row],...(form.reauthPassword?{reauth_password:form.reauthPassword}:{})});
+   if(out?.pending_approval){setOpen(false);setNotice(out.message||'تم إرسال التغيير للموافقة الثانية ولم يتم تطبيقه بعد.');await loadApprovals();return}
+   await refresh();setOpen(false);setNotice('تم حفظ بيانات الموظف بنجاح.');
  }catch(e2){setError(e2.message)}finally{setBusy(false)}}
  async function decideApproval(req,decision){
    if(!canApprovePermissionChanges){setError('لا توجد صلاحية اعتماد تغييرات الصلاحيات.');return}
-   const payload=req.request_payload||{};if(String(payload.requested_by_id||'')===String(user?.id||'')){setError('لا يمكن لنفس الشخص طلب واعتماد التغيير الحساس.');return}
    setApprovalBusy(req.id);setError('');try{
-    if(decision==='approved'){
-      const proposed=payload.proposed_row;if(!proposed?.id)throw new Error('بيانات التغيير المطلوبة غير مكتملة.');
-      const target=userMap[String(proposed.id)];if(target&&!canManageTarget(target)&&!isDeveloper)throw new Error('الحساب المستهدف أعلى من مستوى صلاحيتك.');
-      if(!isDeveloper&&rankOf(proposed.role)>actorRank)throw new Error('لا يمكنك اعتماد دور أعلى من مستواك الإداري.');
-      await api.admin({action:'sync_users',rows:[proposed]});
-    }
-    await api.moduleWrite({action:'update',table:'approval_requests',id:req.id,row:{status:decision,approver_id:String(user?.id||''),decision_notes:decision==='approved'?'اعتماد ثانٍ لتغيير صلاحيات حساس':'تم رفض تغيير الصلاحيات',decided_at:new Date().toISOString()}});
-    await Promise.all([refresh(),loadApprovals()]);setNotice(decision==='approved'?'تمت الموافقة الثانية وتطبيق التغيير.':'تم رفض طلب تغيير الصلاحيات.');
+    const out=await api.admin({action:'security_permission_approval_decide',id:req.id,decision});
+    await Promise.all([refresh(),loadApprovals()]);setNotice(out?.message||'تم تحديث طلب الموافقة.');
    }catch(e){setError(e.message)}finally{setApprovalBusy('')}
+ }
+ function approvalLabels(r){
+   const changes=r.request_payload?.changes||{},target=userMap[String(r.entity_id)]||{},before=target.permissions||{},after=changes.permissions||{};const labels=[];
+   for(const k of HIGH_RISK)if(!!before[k]!==!!after[k])labels.push(permLabel(k));
+   if(changes.role&&changes.role!==target.role)labels.push(`الدور: ${target.role||'—'} ← ${changes.role}`);
+   if(changes.account_mode&&changes.account_mode!==modeOf(target))labels.push(changes.account_mode==='production'?'تحويل إلى تشغيل فعلي':'تحويل إلى تدريب');
+   return labels.length?labels:['تغيير صلاحيات حساس'];
  }
  const cols=[
   {key:'name',label:'الموظف',render:r=><div><strong>{r.name||'—'}</strong><div className="muted-small">@{r.username||'—'} · {r.phone||'—'}</div></div>},
@@ -114,12 +98,12 @@ export default function Staff(){
  ];
  const approvalCols=[
   {key:'target',label:'الموظف',render:r=>r.request_payload?.target_name||userMap[String(r.entity_id)]?.name||r.entity_id||'—'},
-  {key:'risk',label:'التغيير الحساس',render:r=><div>{(r.request_payload?.risk_keys||[]).map(k=><Badge key={k} tone="orange">{k==='role_escalation'?'رفع مستوى الدور':permLabel(k)}</Badge>)}</div>},
-  {key:'requested_by',label:'طالب التغيير',render:r=>r.requested_by||r.request_payload?.requested_by_name||'—'},
+  {key:'risk',label:'التغيير الحساس',render:r=><div className="finance-actions">{approvalLabels(r).map(x=><Badge key={x} tone="orange">{x}</Badge>)}</div>},
+  {key:'requested_by',label:'طالب التغيير',render:r=>r.requested_by||'—'},
   {key:'requested_at',label:'وقت الطلب',render:r=>r.requested_at?new Date(r.requested_at).toLocaleString('ar-SA'):'—'},
-  {key:'actions',label:'',render:r=>canApprovePermissionChanges?<div className="finance-actions"><Button disabled={approvalBusy===r.id||String(r.request_payload?.requested_by_id||'')===String(user?.id||'')} onClick={()=>decideApproval(r,'approved')}><CheckCircle2 size={15}/> اعتماد</Button><Button disabled={approvalBusy===r.id} onClick={()=>decideApproval(r,'rejected')}><XCircle size={15}/> رفض</Button></div>:'—'}
+  {key:'actions',label:'',render:r=>canApprovePermissionChanges?<div className="finance-actions"><Button disabled={approvalBusy===r.id||String(r.requested_by||'')===String(user?.id||'')} onClick={()=>decideApproval(r,'approve')}><CheckCircle2 size={15}/> اعتماد</Button><Button disabled={approvalBusy===r.id} onClick={()=>decideApproval(r,'reject')}><XCircle size={15}/> رفض</Button></div>:'—'}
  ];
- return <><PageHeader title="الموظفون والصلاحيات" subtitle="إدارة بيانات الموظفين منفصلة عن إدارة الصلاحيات، والتغييرات الحساسة تحتاج إعادة تحقق وموافقة ثانية" actions={<><Button onClick={()=>{refresh();loadApprovals()}}><RefreshCw size={16}/> تحديث</Button>{(canManageUsers||canEditPermissions)&&<Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button>}</>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}<Card><div className="card-title"><h3>حسابات الموظفين</h3><Badge>{users.length}</Badge></div><Table rows={users} columns={cols}/></Card>
+ return <><PageHeader title="الموظفون والصلاحيات" subtitle="إدارة بيانات الموظفين منفصلة عن إدارة الصلاحيات، والتغييرات الحساسة تُراجع من الخادم وتحتاج إعادة تحقق وموافقة ثانية" actions={<><Button onClick={()=>{refresh();loadApprovals()}}><RefreshCw size={16}/> تحديث</Button>{(canManageUsers||canEditPermissions)&&<Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button>}</>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}<Card><div className="card-title"><h3>حسابات الموظفين</h3><Badge>{users.length}</Badge></div><Table rows={users} columns={cols}/></Card>
  {(canEditPermissions||canApprovePermissionChanges)&&<Card><div className="card-title"><h3><LockKeyhole size={18}/> الموافقات الحساسة المعلقة</h3><Badge tone={pendingPermissionApprovals.length?'orange':'green'}>{pendingPermissionApprovals.length}</Badge></div>{pendingPermissionApprovals.length?<Table rows={pendingPermissionApprovals} columns={approvalCols}/>:<div className="empty">لا توجد تغييرات صلاحيات حساسة بانتظار موافقة ثانية.</div>}</Card>}
  <Modal open={open} onClose={()=>setOpen(false)} title={form.id?'تعديل الموظف':'إضافة موظف'} wide><form onSubmit={save} className="form-grid">
   <Field label="الاسم"><Input value={form.name} onChange={e=>setForm(x=>({...x,name:e.target.value}))} required/></Field><Field label="اسم المستخدم"><Input value={form.username} onChange={e=>setForm(x=>({...x,username:e.target.value}))} required/></Field><Field label="الجوال"><Input value={form.phone||''} onChange={e=>setForm(x=>({...x,phone:e.target.value}))}/></Field>
@@ -127,10 +111,9 @@ export default function Staff(){
   <Field label="الفرع"><Select value={form.branch_id||''} onChange={e=>setForm(x=>({...x,branch_id:e.target.value}))}><option value="">غير محدد / إدارة عامة</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name||b.branch_name||b.id}</option>)}</Select></Field>
   <Field label="وضع الحساب"><Select disabled={!canEditPermissions&&!!form.id} value={form.accountMode||'training'} onChange={e=>setForm(x=>({...x,accountMode:e.target.value}))}><option value="training">تدريب — بيانات تجريبية</option><option value="production">تشغيل فعلي — بيانات رسمية</option></Select></Field>
   <Field label={form.id?'كلمة مرور جديدة (اختياري)':'كلمة المرور'}><Input type="password" value={form.password||''} onChange={e=>setForm(x=>({...x,password:e.target.value}))} required={!form.id}/></Field><Field label="الحالة"><Select value={form.status||'نشط'} onChange={e=>setForm(x=>({...x,status:e.target.value}))}><option>نشط</option><option>موقوف</option></Select></Field>
-  {notice&&<div className="training-banner" style={{gridColumn:'1/-1',background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
-  {canEditPermissions&&<div className="permissions-box" style={{gridColumn:'1/-1'}}><div className="card-title"><h3><ShieldCheck size={18}/> الصلاحيات التشغيلية</h3><small>لا يمكن منح أي صلاحية لا يملكها المستخدم الحالي. الصلاحيات السيادية تحتاج موافقة ثانية.</small></div><div className="permission-grid">{visibleGeneralPerms.map(([k,label])=><label className="permission-item" key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>togglePerm(k,e.target.checked)}/><span>{label}{HIGH_RISK.has(k)?' 🔐':''}</span></label>)}</div></div>}
+  {canEditPermissions&&<div className="permissions-box" style={{gridColumn:'1/-1'}}><div className="card-title"><h3><ShieldCheck size={18}/> الصلاحيات التشغيلية</h3><small>لا يمكن منح أي صلاحية لا يملكها المستخدم الحالي. الصلاحيات السيادية عليها 🔐 ولا تُطبّق مباشرة.</small></div><div className="permission-grid">{visibleGeneralPerms.map(([k,label])=><label className="permission-item" key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>togglePerm(k,e.target.checked)}/><span>{label}{HIGH_RISK.has(k)?' 🔐':''}</span></label>)}</div></div>}
   {isDeveloper&&<div className="permissions-box developer-permissions" style={{gridColumn:'1/-1'}}><div className="card-title"><h3><LockKeyhole size={18}/> صلاحيات المطور الحساسة</h3><small>لا تظهر ولا يمكن تعديلها إلا من حساب المطور الحقيقي.</small></div><div className="permission-grid">{DEVELOPER_PERMS.map(([k,label])=><label className="permission-item" key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:e.target.checked}}))}/><span>{label}</span></label>)}</div></div>}
-  {!isDeveloper&&canEditPermissions&&<div className="permissions-box" style={{gridColumn:'1/-1'}}><div className="card-title"><h3><KeyRound size={18}/> إعادة التحقق للعمليات الحساسة</h3><small>إذا غيّرت دورًا للأعلى أو صلاحية عليها 🔐، لن يُطبق التغيير فورًا؛ سيُطلب تأكيد كلمة مرورك ثم موافقة مستخدم آخر مخول.</small></div><Field label="كلمة مرورك الحالية"><Input type="password" value={form.reauthPassword||''} onChange={e=>setForm(x=>({...x,reauthPassword:e.target.value}))} autoComplete="current-password"/></Field></div>}
+  {!isDeveloper&&canEditPermissions&&form.id&&<div className="permissions-box" style={{gridColumn:'1/-1'}}><div className="card-title"><h3><KeyRound size={18}/> إعادة التحقق للعمليات الحساسة</h3><small>عند رفع الدور، تحويل الحساب إلى Production أو تغيير صلاحية عليها 🔐، أدخل كلمة مرورك الحالية. سيُنشئ الخادم طلب موافقة ثانية بدل التطبيق المباشر.</small></div><Field label="كلمة مرورك الحالية"><Input type="password" value={form.reauthPassword||''} onChange={e=>setForm(x=>({...x,reauthPassword:e.target.value}))} autoComplete="current-password"/></Field></div>}
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ...':'حفظ الموظف'}</Button></div>
  </form></Modal></>;
 }
