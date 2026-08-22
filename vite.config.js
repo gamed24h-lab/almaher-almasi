@@ -7,6 +7,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     target: 'es2022',
-    emptyOutDir: true
+    emptyOutDir: true,
+    cssMinify: 'esbuild'
   }
 });
