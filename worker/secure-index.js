@@ -1,9 +1,15 @@
 import baseWorker from './index.js';
+import * as crypto from 'node:crypto';
 
 const SENSITIVE_KEYS=new Set([
   'developer_console_access','developer_backup','developer_restore','developer_purge',
   'developer_templates','developer_labels','developer_languages','developer_rules',
   'all','v9Admin','next_bridge'
+]);
+
+const APPROVAL_KEYS=new Set([
+  'managePermissions','manageUsers','allBranches','allBranchesFinance','addBranches',
+  'manageCompanyProfile','refund_approve','refund_complete','approvals'
 ]);
 
 const ROLE_RANK={
@@ -21,6 +27,8 @@ const ROLE_RANK={
 const rankOf=role=>ROLE_RANK[String(role||'').trim()]||20;
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 const truthyKeys=obj=>Object.entries(obj&&typeof obj==='object'?obj:{}).filter(([,v])=>!!v).map(([k])=>k);
+const authHeaders=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,'Content-Type':'application/json',Accept:'application/json'}};
+const supaUrl=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 
 async function currentActor(request,env){
   try{
@@ -33,17 +41,31 @@ async function currentActor(request,env){
 }
 
 async function existingStaff(env,username){
-  const url=String(env.SUPABASE_URL||'').replace(/\/+$/,'');
-  const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
+  const url=supaUrl(env);const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
   if(!url||!key||!username)return null;
-  const r=await fetch(`${url}/rest/v1/staff_users?username=eq.${encodeURIComponent(String(username).trim())}&select=id,name,username,role,permissions,status,account_mode&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
+  const r=await fetch(`${url}/rest/v1/staff_users?username=eq.${encodeURIComponent(String(username).trim())}&select=id,name,username,role,branch_id,permissions,status,account_mode&limit=1`,{headers:authHeaders(env)});
   const rows=await r.json().catch(()=>[]);
   return r.ok&&Array.isArray(rows)?rows[0]||null:null;
 }
 
+async function verifyCurrentPassword(env,actor,password){
+  if(actor?.role==='developer')return true;
+  const url=supaUrl(env);if(!url||!actor?.id||!password)return false;
+  const r=await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(actor.id)}&select=password&limit=1`,{headers:authHeaders(env)});
+  const rows=await r.json().catch(()=>[]),stored=String(Array.isArray(rows)?rows[0]?.password||'':'');
+  if(!r.ok||!stored)return false;
+  if(!stored.startsWith('scrypt$'))return stored===String(password);
+  try{
+    const [,salt,expectedHex]=stored.split('$');
+    if(!salt||!expectedHex)return false;
+    const actual=crypto.scryptSync(String(password),salt,64);
+    const expected=Buffer.from(expectedHex,'hex');
+    return actual.length===expected.length&&crypto.timingSafeEqual(actual,expected);
+  }catch{return false}
+}
+
 async function publicSetting(env,keyName){
-  const url=String(env.SUPABASE_URL||'').replace(/\/+$/,'');
-  const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
+  const url=supaUrl(env);const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
   if(!url||!key)return null;
   try{
     const r=await fetch(`${url}/rest/v1/system_settings?key=eq.${encodeURIComponent(keyName)}&select=value&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
@@ -74,6 +96,66 @@ function canonicalPermissions(obj={}){const out={};for(const k of Object.keys(ob
 function canGrant(actor,key){if(actor?.role==='developer')return true;if(SENSITIVE_KEYS.has(key))return false;if(actor?.role==='مدير عام'||actor?.permissions?.all)return true;return !!actor?.permissions?.[key]}
 function elevated(actor){return !!(actor&&(actor.role==='developer'||actor.role==='مدير عام'||actor.permissions?.all))}
 function canBranch(actor,key){if(elevated(actor))return true;const p=actor?.permissions||{};if(p.manageBranches)return true;return !!p[key]}
+function requiresApproval(old,incoming){
+  if(!old)return false;
+  const a=old.permissions||{},b=incoming.permissions||{};
+  for(const k of APPROVAL_KEYS)if(!!a[k]!==!!b[k])return true;
+  if(rankOf(incoming.role)>rankOf(old.role))return true;
+  const oldMode=String(old.account_mode||a._accountMode||'training');
+  const newMode=String(incoming.account_mode||b._accountMode||oldMode);
+  return oldMode!=='production'&&newMode==='production';
+}
+
+async function createPermissionApproval(env,actor,old,incoming){
+  const url=supaUrl(env),h=authHeaders(env);
+  const pending=await fetch(`${url}/rest/v1/approval_requests?request_type=eq.staff_permission_change&entity_id=eq.${encodeURIComponent(old.id)}&status=eq.pending&select=id&limit=1`,{headers:h});
+  const pendingRows=await pending.json().catch(()=>[]);
+  if(pending.ok&&Array.isArray(pendingRows)&&pendingRows.length)return json({error:'يوجد بالفعل طلب تعديل صلاحيات معلق لهذا الموظف.',code:'APPROVAL_ALREADY_PENDING'},409);
+  const row={
+    request_type:'staff_permission_change',entity_type:'staff_user',entity_id:String(old.id),branch_id:old.branch_id||null,
+    requested_by:String(actor.id||actor.name||''),approver_role:'مدير عام',status:'pending',
+    request_payload:{target_username:old.username,target_name:old.name||old.username,changes:{role:incoming.role||old.role,branch_id:incoming.branch_id??old.branch_id,status:incoming.status||old.status,account_mode:incoming.account_mode||old.account_mode||'training',permissions:incoming.permissions||old.permissions||{}}}
+  };
+  const r=await fetch(`${url}/rest/v1/approval_requests`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify([row])});
+  const body=await r.json().catch(()=>[]);
+  if(!r.ok)return json({error:body?.message||'تعذر إنشاء طلب الموافقة'},500);
+  return json({ok:true,pending_approval:true,approval:Array.isArray(body)?body[0]:body,message:'تم إرسال التغيير للموافقة الثانية ولم يتم تطبيقه بعد.'},202);
+}
+
+async function listPermissionApprovals(request,env){
+  const actor=await currentActor(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
+  if(!(elevated(actor)||actor.permissions?.managePermissions||actor.permissions?.approvals))return json({error:'لا توجد صلاحية مراجعة طلبات الصلاحيات.'},403);
+  const url=supaUrl(env),h=authHeaders(env);
+  const r=await fetch(`${url}/rest/v1/approval_requests?request_type=eq.staff_permission_change&select=*&order=requested_at.desc&limit=100`,{headers:h});
+  const rows=await r.json().catch(()=>[]);if(!r.ok)return json({error:rows?.message||'تعذر قراءة طلبات الموافقة'},500);
+  return json({ok:true,rows:Array.isArray(rows)?rows:[]});
+}
+
+async function decidePermissionApproval(request,env,payload){
+  const actor=await currentActor(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
+  if(!(elevated(actor)||actor.permissions?.managePermissions||actor.permissions?.approvals))return json({error:'لا توجد صلاحية اعتماد تغييرات الصلاحيات.'},403);
+  const id=String(payload?.id||''),decision=String(payload?.decision||'');
+  if(!id||!['approve','reject'].includes(decision))return json({error:'بيانات قرار الموافقة غير مكتملة.'},400);
+  const url=supaUrl(env),h=authHeaders(env);
+  const r=await fetch(`${url}/rest/v1/approval_requests?id=eq.${encodeURIComponent(id)}&request_type=eq.staff_permission_change&select=*&limit=1`,{headers:h});
+  const rows=await r.json().catch(()=>[]),req=Array.isArray(rows)?rows[0]:null;
+  if(!r.ok||!req)return json({error:'طلب الموافقة غير موجود.'},404);
+  if(req.status!=='pending')return json({error:'تم اتخاذ قرار على هذا الطلب بالفعل.'},409);
+  if(String(req.requested_by||'')===String(actor.id||''))return json({error:'لا يمكن لطالب التغيير اعتماد طلبه بنفسه. يلزم مستخدم مخول آخر.'},403);
+  const changes=req.request_payload?.changes||{};
+  if(decision==='approve'){
+    const target=await existingStaff(env,req.request_payload?.target_username||'');
+    if(!target)return json({error:'الموظف المستهدف لم يعد موجودًا.'},404);
+    if(actor.role!=='developer'&&rankOf(target.role)>rankOf(actor.role))return json({error:'لا يمكنك اعتماد تغيير لموظف أعلى منك إداريًا.'},403);
+    const patch={role:changes.role||target.role,branch_id:changes.branch_id??target.branch_id,status:changes.status||target.status,permissions:changes.permissions||target.permissions||{},account_mode:changes.account_mode||target.account_mode||'training',updated_at:new Date().toISOString()};
+    let ur=await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(target.id)}`,{method:'PATCH',headers:{...h,Prefer:'return=minimal'},body:JSON.stringify(patch)});
+    if(!ur.ok){const eb=await ur.json().catch(()=>({}));if(/account_mode/i.test(String(eb?.message||''))){delete patch.account_mode;ur=await fetch(`${url}/rest/v1/staff_users?id=eq.${encodeURIComponent(target.id)}`,{method:'PATCH',headers:{...h,Prefer:'return=minimal'},body:JSON.stringify(patch)});}if(!ur.ok)return json({error:eb?.message||'تعذر تطبيق التغيير المعتمد'},500)}
+  }
+  const status=decision==='approve'?'approved':'rejected';
+  const ar=await fetch(`${url}/rest/v1/approval_requests?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:{...h,Prefer:'return=minimal'},body:JSON.stringify({status,approver_id:String(actor.id||actor.name||''),decision_notes:String(payload?.notes||''),decided_at:new Date().toISOString()})});
+  if(!ar.ok)return json({error:'تم تنفيذ القرار وتعذر تحديث سجل الموافقة.'},500);
+  return json({ok:true,status,message:decision==='approve'?'تم اعتماد التغيير وتطبيقه.':'تم رفض التغيير ولم تُعدّل الصلاحيات.'});
+}
 
 async function guardSyncUsers(request,env,payload){
   const actor=await currentActor(request,env);
@@ -115,20 +197,14 @@ async function guardSyncUsers(request,env,payload){
     if(rankOf(incoming.role)>actorRank)return json({error:`لا يمكنك منح دور أعلى من مستواك الإداري (${incoming.role}).`},403);
     if(!sameSensitive(oldPerms,newPerms))return json({error:'صلاحيات المطور والصلاحيات السيادية لا يمكن تعديلها من إدارة الموظفين العادية.'},403);
     for(const k of truthyKeys(newPerms)){if(k.startsWith('_'))continue;if(!canGrant(actor,k))return json({error:`لا يمكنك منح صلاحية لا تملكها: ${k}`},403)}
-  }
-  return null;
-}
 
-async function guardBranchAdmin(request,payload){
-  const actor=await currentActor(request,request.__env);
-  if(!actor)return json({error:'انتهت الجلسة. سجل الدخول من جديد.'},401);
-  const action=payload?.action;
-  if(action==='save_branch'){
-    const editing=!!payload?.row?.id;
-    const needed=editing?'editBranches':'addBranches';
-    if(!canBranch(actor,needed))return json({error:editing?'لا تملك صلاحية تعديل الفروع.':'لا تملك صلاحية إضافة الفروع.'},403);
+    if(!old&&[...APPROVAL_KEYS].some(k=>!!newPerms[k]))return json({error:'أنشئ الموظف أولًا بصلاحيات عادية، ثم اطلب الصلاحيات الحساسة بموافقة منفصلة.'},409);
+    if(old&&requiresApproval(old,incoming)){
+      if(!payload?.reauth_password)return json({error:'أعد إدخال كلمة مرورك الحالية لإرسال هذا التغيير للموافقة الثانية.',code:'REAUTH_REQUIRED'},428);
+      if(!(await verifyCurrentPassword(env,actor,payload.reauth_password)))return json({error:'كلمة المرور الحالية غير صحيحة.',code:'REAUTH_FAILED'},401);
+      return createPermissionApproval(env,actor,old,incoming);
+    }
   }
-  if(action==='company_settings_save'&&!canBranch(actor,'manageCompanyProfile'))return json({error:'لا تملك صلاحية تعديل بيانات الشركة العامة.'},403);
   return null;
 }
 
@@ -139,6 +215,8 @@ export default {
       if(url.pathname==='/api/mega'&&url.searchParams.get('action')==='public_brand_profile'&&request.method==='GET')return json(await publicBrandPayload(env));
       if(url.pathname==='/api/admin'&&request.method==='POST'){
         let body={};try{body=await request.clone().json()}catch{}
+        if(body?.action==='security_permission_approvals_list')return listPermissionApprovals(request,env);
+        if(body?.action==='security_permission_approval_decide')return decidePermissionApproval(request,env,body);
         if(body?.action==='sync_users'){
           const denied=await guardSyncUsers(request,env,body);
           if(denied)return denied;
