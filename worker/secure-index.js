@@ -64,9 +64,7 @@ async function publicBrandPayload(env){
   return {
     ok:true,
     profile:{display_name:String(p.display_name||''),title:String(p.title||''),phone:String(p.phone||''),email:String(p.email||''),footer_note:String(p.footer_note||'')},
-    labels:{
-      system_name:String(l.system_name||''),system_subtitle:String(l.system_subtitle||''),dashboard_title:String(l.dashboard_title||''),dashboard_subtitle:String(l.dashboard_subtitle||''),ticket_footer:String(l.ticket_footer||''),report_footer:String(l.report_footer||'')
-    },
+    labels:{system_name:String(l.system_name||''),system_subtitle:String(l.system_subtitle||''),dashboard_title:String(l.dashboard_title||''),dashboard_subtitle:String(l.dashboard_subtitle||''),ticket_footer:String(l.ticket_footer||''),report_footer:String(l.report_footer||'')},
     config:{show_profile_all_pages:c.show_profile_all_pages!==false,show_profile_tickets:c.show_profile_tickets!==false,show_profile_reports:c.show_profile_reports!==false,show_profile_receipts:c.show_profile_receipts!==false}
   };
 }
@@ -74,6 +72,8 @@ async function publicBrandPayload(env){
 function sameSensitive(a={},b={}){for(const k of SENSITIVE_KEYS)if(!!a?.[k]!==!!b?.[k])return false;return true}
 function canonicalPermissions(obj={}){const out={};for(const k of Object.keys(obj||{}).sort())out[k]=obj[k];return JSON.stringify(out)}
 function canGrant(actor,key){if(actor?.role==='developer')return true;if(SENSITIVE_KEYS.has(key))return false;if(actor?.role==='مدير عام'||actor?.permissions?.all)return true;return !!actor?.permissions?.[key]}
+function elevated(actor){return !!(actor&&(actor.role==='developer'||actor.role==='مدير عام'||actor.permissions?.all))}
+function canBranch(actor,key){if(elevated(actor))return true;const p=actor?.permissions||{};if(p.manageBranches)return true;return !!p[key]}
 
 async function guardSyncUsers(request,env,payload){
   const actor=await currentActor(request,env);
@@ -91,7 +91,6 @@ async function guardSyncUsers(request,env,payload){
     const old=await existingStaff(env,incoming.username);
     const oldPerms=old?.permissions||{};
     const newPerms=incoming.permissions&&typeof incoming.permissions==='object'?incoming.permissions:{};
-
     if(old&&String(old.id)===String(actor.id))return json({error:'لا يمكنك تعديل حسابك أو صلاحياتك من حسابك الحالي. اطلب ذلك من مستوى إداري أعلى.'},403);
     if(old?.role==='developer'||truthyKeys(oldPerms).some(k=>SENSITIVE_KEYS.has(k)))return json({error:'هذا الحساب محمي ولا يمكن تعديله إلا من حساب المطور الحقيقي.'},403);
     if(String(incoming.role||'')==='developer')return json({error:'لا يمكن إنشاء أو تحويل أي موظف إلى مطور من إدارة الموظفين.'},403);
@@ -120,6 +119,19 @@ async function guardSyncUsers(request,env,payload){
   return null;
 }
 
+async function guardBranchAdmin(request,payload){
+  const actor=await currentActor(request,request.__env);
+  if(!actor)return json({error:'انتهت الجلسة. سجل الدخول من جديد.'},401);
+  const action=payload?.action;
+  if(action==='save_branch'){
+    const editing=!!payload?.row?.id;
+    const needed=editing?'editBranches':'addBranches';
+    if(!canBranch(actor,needed))return json({error:editing?'لا تملك صلاحية تعديل الفروع.':'لا تملك صلاحية إضافة الفروع.'},403);
+  }
+  if(action==='company_settings_save'&&!canBranch(actor,'manageCompanyProfile'))return json({error:'لا تملك صلاحية تعديل بيانات الشركة العامة.'},403);
+  return null;
+}
+
 export default {
   async fetch(request,env){
     try{
@@ -130,6 +142,15 @@ export default {
         if(body?.action==='sync_users'){
           const denied=await guardSyncUsers(request,env,body);
           if(denied)return denied;
+        }
+        if(body?.action==='save_branch'||body?.action==='company_settings_save'){
+          const actor=await currentActor(request,env);
+          if(!actor)return json({error:'انتهت الجلسة. سجل الدخول من جديد.'},401);
+          if(body.action==='save_branch'){
+            const editing=!!body?.row?.id;
+            if(!canBranch(actor,editing?'editBranches':'addBranches'))return json({error:editing?'لا تملك صلاحية تعديل الفروع.':'لا تملك صلاحية إضافة الفروع.'},403);
+          }
+          if(body.action==='company_settings_save'&&!canBranch(actor,'manageCompanyProfile'))return json({error:'لا تملك صلاحية تعديل بيانات الشركة العامة.'},403);
         }
       }
       return baseWorker.fetch(request,env);
