@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
+import './trip-settlement.css';
 import {ArrowRight,CheckCircle2,Printer,RefreshCw,WalletCards,ReceiptText,RotateCcw,TrendingUp,LockKeyhole} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
