@@ -11,9 +11,13 @@ const SENSITIVE_EXPLICIT_PERMISSIONS=new Set([
 
 export function has(user,key){
   if(!user)return false;
-  // Developer/system-console capabilities are always explicit. They are not
-  // inherited by the general manager or by broad `all` permissions.
-  if(SENSITIVE_EXPLICIT_PERMISSIONS.has(key))return !!user.permissions?.[key];
+  // The real developer account always retains system-console capabilities.
+  // Other roles — including General Manager and broad `all` — must receive
+  // these sensitive permissions explicitly.
+  if(SENSITIVE_EXPLICIT_PERMISSIONS.has(key)){
+    if(user.role==='developer')return true;
+    return !!user.permissions?.[key];
+  }
   if(user.role==='مدير عام'||user.role==='developer'||user.permissions?.all)return true;
   return !!user.permissions?.[key];
 }
