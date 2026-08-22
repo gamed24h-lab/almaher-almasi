@@ -1,18 +1,20 @@
 import React,{useMemo,useState} from 'react';
-import {Plus,RefreshCw,ShieldCheck,UserCog,Wand2} from 'lucide-react';
+import {Plus,RefreshCw,ShieldCheck,UserCog,Wand2,LockKeyhole} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,PageHeader,Select,Table} from '../../components/UI.jsx';
 
-const PERMS=[
+const GENERAL_PERMS=[
  ['branchBooking','إنشاء حجوزات'],['viewBookings','عرض الحجوزات'],['editBookings','تعديل الحجوزات'],['editPassenger','تعديل الركاب'],['changeTrip','نقل الحجز بين الرحلات'],['printTickets','طباعة التذاكر'],
  ['trips','إدارة الرحلات'],['operations','التشغيل'],['manifest','كشف التشغيل'],['housingManifest','كشف التسكين'],['scanner','QR والمسح'],['housing','التسكين'],['seats','المقاعد'],['fleet','الأسطول'],['vehicles','المركبات'],['returns','محرك العودة'],
  ['finance','المالية'],['payments','التحصيل'],['expenses','المصروفات'],['shifts','الخزن والورديات'],['refunds','الاسترداد'],['refund_request','طلب استرداد'],['refund_approve','اعتماد استرداد'],['refund_complete','تنفيذ استرداد'],['approvals','الاعتمادات'],
- ['crm','CRM'],['customers','العملاء'],['documents','المستندات'],['notifications','الإشعارات'],['automation','الأتمتة'],['reports','التقارير'],['printReports','طباعة التقارير'],['manageUsers','إدارة الموظفين'],['allBranches','تشغيل كل الفروع'],['allBranchesFinance','مالية كل الفروع'],
+ ['crm','CRM'],['customers','العملاء'],['documents','المستندات'],['notifications','الإشعارات'],['automation','الأتمتة'],['reports','التقارير'],['printReports','طباعة التقارير'],['manageUsers','إدارة الموظفين'],['allBranches','تشغيل كل الفروع'],['allBranchesFinance','مالية كل الفروع']
+];
+const DEVELOPER_PERMS=[
  ['developer_console_access','الدخول إلى المطور والنظام'],['developer_backup','نسخ احتياطي'],['developer_restore','استعادة نسخة احتياطية'],['developer_purge','حذف نهائي للبيانات'],['developer_templates','إدارة القوالب'],['developer_labels','إدارة المسميات'],['developer_languages','إدارة اللغات'],['developer_rules','إدارة قواعد النظام']
 ];
-const SENSITIVE=new Set(['developer_console_access','developer_backup','developer_restore','developer_purge','developer_templates','developer_labels','developer_languages','developer_rules']);
+const SENSITIVE=new Set(DEVELOPER_PERMS.map(([k])=>k));
 const ROLES=['موظف حجوزات','محاسب','مشرف تشغيل','موظف تسكين','خدمة عملاء','مدير فرع','مدير عام','موظف'];
 const ROLE_TEMPLATES={
  'موظف حجوزات':['branchBooking','viewBookings','editBookings','editPassenger','changeTrip','printTickets','customers','documents'],
@@ -21,22 +23,29 @@ const ROLE_TEMPLATES={
  'موظف تسكين':['viewBookings','editPassenger','housing','housingManifest','documents','printReports'],
  'خدمة عملاء':['viewBookings','customers','crm','notifications','documents','printTickets'],
  'مدير فرع':['branchBooking','viewBookings','editBookings','editPassenger','changeTrip','printTickets','trips','operations','manifest','housingManifest','scanner','housing','seats','fleet','vehicles','returns','finance','payments','expenses','shifts','refunds','refund_request','approvals','crm','customers','documents','notifications','reports','printReports'],
- 'مدير عام':PERMS.map(([k])=>k).filter(k=>!SENSITIVE.has(k))
+ 'مدير عام':GENERAL_PERMS.map(([k])=>k)
 };
 const modeOf=u=>u?.account_mode==='production'||u?.permissions?._accountMode==='production'?'production':'training';
 function defaultForm(){return {id:'',name:'',username:'',phone:'',role:'موظف حجوزات',branch_id:'',status:'نشط',password:'',accountMode:'training',permissions:{}}}
 function newStaffId(){try{return `staff-${crypto.randomUUID()}`}catch{return `staff-${Date.now()}-${Math.random().toString(36).slice(2,10)}`}}
-function templatePermissions(role,current={}){const keys=ROLE_TEMPLATES[role]||[];const out={};for(const k of keys)out[k]=true;for(const k of SENSITIVE)if(current?.[k])out[k]=true;return {...out,_accountMode:current?._accountMode||'training'}}
+function templatePermissions(role,current={},allowDeveloper=false){const keys=ROLE_TEMPLATES[role]||[];const out={};for(const k of keys)out[k]=true;if(allowDeveloper){for(const k of SENSITIVE)if(current?.[k])out[k]=true}return {...out,_accountMode:current?._accountMode||'training'}}
 export default function Staff(){
  const {user}=useAuth();const {data,refresh}=useAppData();const [open,setOpen]=useState(false),[form,setForm]=useState(defaultForm()),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
- const branches=data.branches||[],users=data.users||[];
+ const branches=data.branches||[],users=data.users||[];const isDeveloper=String(user?.role||'').toLowerCase()==='developer';
  const branchMap=useMemo(()=>Object.fromEntries(branches.map(b=>[String(b.id),b.name||b.branch_name||b.id])),[branches]);
  function edit(u){setForm({...defaultForm(),...u,branch_id:u.branch_id||'',password:'',accountMode:modeOf(u),permissions:u.permissions||{}});setError('');setNotice('');setOpen(true)}
  function add(){setForm(defaultForm());setError('');setNotice('');setOpen(true)}
- function applyTemplate(role=form.role){setForm(x=>({...x,role,permissions:templatePermissions(role,x.permissions)}));setNotice(`تم تطبيق قالب صلاحيات «${role}». الصلاحيات الحساسة للمطور لا تُمنح تلقائيًا ويمكن ضبطها يدويًا.`)}
+ function applyTemplate(role=form.role){setForm(x=>({...x,role,permissions:templatePermissions(role,x.permissions,isDeveloper)}));setNotice(`تم تطبيق قالب صلاحيات «${role}». يمكنك تعديل الصلاحيات العادية يدويًا.${isDeveloper?' صلاحيات المطور لها قسم مستقل بالأسفل.':''}`)}
  async function save(e){e.preventDefault();setError('');setBusy(true);try{
+   const isNew=!form.id;const existingUser=isNew?null:users.find(u=>String(u.id)===String(form.id));
    const permissions={...(form.permissions||{}),_accountMode:form.accountMode==='production'?'production':'training'};
-   const isNew=!form.id;
+   if(!isDeveloper){
+     // A user with manageUsers may manage normal staff permissions, but can never
+     // grant, revoke or alter developer/system-console permissions.
+     for(const k of SENSITIVE){
+       if(existingUser?.permissions?.[k])permissions[k]=true;else delete permissions[k];
+     }
+   }
    const row={...form,id:isNew?newStaffId():form.id,name:String(form.name||'').trim(),username:String(form.username||'').trim(),phone:String(form.phone||'').trim(),branch_id:form.branch_id||null,account_mode:form.accountMode==='production'?'production':'training',permissions};
    delete row.accountMode;
    if(!row.name||!row.username)throw new Error('الاسم واسم المستخدم مطلوبان');if(isNew&&!row.password)throw new Error('كلمة مرور الموظف الجديد مطلوبة');if(!row.password)delete row.password;
@@ -47,7 +56,7 @@ export default function Staff(){
    {key:'role',label:'الدور',render:r=><Badge>{r.role||'موظف'}</Badge>},{key:'branch',label:'الفرع',render:r=>branchMap[String(r.branch_id)]||'كلّي/غير محدد'},
    {key:'mode',label:'وضع الحساب',render:r=>modeOf(r)==='production'?<Badge tone="green">تشغيل فعلي</Badge>:<Badge tone="orange">تدريب</Badge>},
    {key:'status',label:'الحالة',render:r=><Badge tone={String(r.status||'نشط').includes('موق')?'red':'green'}>{r.status||'نشط'}</Badge>},
-   {key:'permissions',label:'الصلاحيات',render:r=>r.permissions?.all?'كاملة':`${Object.entries(r.permissions||{}).filter(([k,v])=>!k.startsWith('_')&&!!v).length} صلاحية`},
+   {key:'permissions',label:'الصلاحيات',render:r=>r.permissions?.all?'كاملة':`${Object.entries(r.permissions||{}).filter(([k,v])=>!k.startsWith('_')&&!SENSITIVE.has(k)&&!!v).length} صلاحية تشغيلية`},
    {key:'edit',label:'',render:r=><Button onClick={ev=>{ev.stopPropagation();edit(r)}}><UserCog size={15}/> تعديل</Button>}
  ];
  return <><PageHeader title="الموظفون والصلاحيات" subtitle="قوالب صلاحيات جاهزة مع إمكانية التعديل اليدوي لكل موظف" actions={<><Button onClick={()=>refresh()}><RefreshCw size={16}/> تحديث</Button><Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button></>}/><ErrorBox error={error}/><Card><div className="card-title"><h3>حسابات الموظفين</h3><Badge>{users.length}</Badge></div><Table rows={users} columns={cols}/></Card>
@@ -61,7 +70,9 @@ export default function Staff(){
   <Field label={form.id?'كلمة مرور جديدة (اختياري)':'كلمة المرور'}><Input type="password" value={form.password||''} onChange={e=>setForm(x=>({...x,password:e.target.value}))} required={!form.id}/></Field>
   <Field label="الحالة"><Select value={form.status||'نشط'} onChange={e=>setForm(x=>({...x,status:e.target.value}))}><option>نشط</option><option>موقوف</option></Select></Field>
   {notice&&<div className="training-banner" style={{gridColumn:'1/-1',background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
-  <div className="permissions-box"><div className="card-title"><h3><ShieldCheck size={18}/> الصلاحيات</h3><small>القالب نقطة بداية فقط. صلاحيات المطور الحساسة لا يرثها المدير العام تلقائيًا.</small></div><div className="permission-grid">{PERMS.map(([k,l])=><label className={`check permission-check ${SENSITIVE.has(k)?'sensitive-permission':''}`} key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:e.target.checked}}))}/><span>{l}{SENSITIVE.has(k)?' 🔐':''}</span></label>)}</div></div>
+  <div className="permissions-box"><div className="card-title"><h3><ShieldCheck size={18}/> الصلاحيات التشغيلية</h3><small>هذه الصلاحيات يمكن لمن لديه إدارة الموظفين ضبطها حسب دوره.</small></div><div className="permission-grid">{GENERAL_PERMS.map(([k,l])=><label className="check permission-check" key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:e.target.checked}}))}/><span>{l}</span></label>)}</div></div>
+  {isDeveloper&&<div className="permissions-box" style={{borderColor:'#e8c36a',background:'#fffaf0'}}><div className="card-title"><h3><LockKeyhole size={18}/> صلاحيات المطور الحساسة</h3><small>هذا القسم يظهر ويُعدّل من حساب المطور الحقيقي فقط، ولا يظهر لمدير عام أو لمن لديه إدارة الموظفين.</small></div><div className="permission-grid">{DEVELOPER_PERMS.map(([k,l])=><label className="check permission-check sensitive-permission" key={k}><input type="checkbox" checked={!!form.permissions?.[k]} onChange={e=>setForm(x=>({...x,permissions:{...(x.permissions||{}),[k]:e.target.checked}}))}/><span>{l} 🔐</span></label>)}</div></div>}
+  {!isDeveloper&&<div className="muted-small" style={{gridColumn:'1/-1'}}>صلاحيات المطور والنظام غير متاحة من إدارة الموظفين العادية، حتى لو كان الحساب مديرًا عامًا.</div>}
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ...':'حفظ الموظف'}</Button></div>
  </form></Modal></>
 }
