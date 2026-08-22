@@ -8,6 +8,6 @@ export default defineConfig({
     sourcemap: false,
     target: 'es2022',
     emptyOutDir: true,
-    cssMinify: 'esbuild'
+    cssMinify: false
   }
 });
