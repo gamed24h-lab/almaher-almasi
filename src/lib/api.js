@@ -1,7 +1,31 @@
+export function arabicError(value,status){
+  const m=String(value||'').trim();
+  if(!m)return 'تعذر تنفيذ العملية. حاول مرة أخرى.';
+  const rules=[
+    [/Return date cannot be before departure date/i,'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب.'],
+    [/duplicate key value.*staff_users_pkey/i,'يوجد حساب موظف بنفس المعرّف. أعد فتح شاشة إضافة الموظف وحاول مرة أخرى.'],
+    [/duplicate key value/i,'يوجد سجل بنفس البيانات بالفعل. راجع البيانات ثم حاول مرة أخرى.'],
+    [/violates check constraint.*trips_status_check/i,'حالة الرحلة غير مقبولة في إعدادات النظام الحالية.'],
+    [/Too many subrequests|single Worker invocation|subrequest/i,'العملية كبيرة وتم تجاوز حد الطلبات الداخلية. سيحاول النظام تنفيذها على دفعات أصغر.'],
+    [/Failed to fetch|NetworkError|Load failed/i,'تعذر الاتصال بالخادم. تحقق من الإنترنت ثم حاول مرة أخرى.'],
+    [/Unauthorized|authentication required|access required/i,'انتهت الجلسة أو لا توجد صلاحية كافية. سجل الدخول مرة أخرى.'],
+    [/Forbidden/i,'لا توجد لديك صلاحية لتنفيذ هذه العملية.'],
+    [/not found/i,'لم يتم العثور على البيانات المطلوبة.'],
+    [/timeout|timed out/i,'استغرق الخادم وقتًا أطول من المتوقع. حاول مرة أخرى.'],
+    [/Invalid JSON/i,'استجابة الخادم غير صالحة. أعد المحاولة.'],
+    [/Server Supabase environment variables are missing|Supabase.*missing/i,'إعدادات قاعدة البيانات على الخادم غير مكتملة.']
+  ];
+  for(const [rx,msg] of rules)if(rx.test(m))return msg;
+  if(status===401)return 'انتهت الجلسة أو بيانات الدخول غير صحيحة.';
+  if(status===403)return 'لا توجد لديك صلاحية لتنفيذ هذه العملية.';
+  if(status===404)return 'لم يتم العثور على البيانات المطلوبة.';
+  if(Number(status)>=500)return 'حدث خطأ بالخادم أثناء تنفيذ العملية. حاول مرة أخرى.';
+  return m;
+}
 async function request(path,{method='GET',body,headers={}}={}){
   const response=await fetch(path,{method,credentials:'include',headers:{Accept:'application/json',...(body!==undefined?{'Content-Type':'application/json'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
   const text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
-  if(!response.ok){const e=new Error(data?.error||data?.message||`HTTP ${response.status}`);e.status=response.status;e.data=data;throw e}
+  if(!response.ok){const raw=data?.error||data?.message||`HTTP ${response.status}`;const e=new Error(arabicError(raw,response.status));e.status=response.status;e.data=data;e.rawMessage=raw;throw e}
   return data;
 }
 function normalizeAdminBody(body){
@@ -13,7 +37,7 @@ function normalizeAdminBody(body){
   })};
 }
 function isWorkerSubrequestLimitError(err){
-  const m=String(err?.message||err||'');
+  const m=String(err?.rawMessage||err?.message||err||'');
   return /single Worker invocation|subrequest|too many requests/i.test(m);
 }
 async function adminRequest(body){
