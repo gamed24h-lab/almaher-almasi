@@ -41,23 +41,39 @@ async function existingStaff(env,username){
   return r.ok&&Array.isArray(rows)?rows[0]||null:null;
 }
 
-function sameSensitive(a={},b={}){
-  for(const k of SENSITIVE_KEYS)if(!!a?.[k]!==!!b?.[k])return false;
-  return true;
+async function publicSetting(env,keyName){
+  const url=String(env.SUPABASE_URL||'').replace(/\/+$/,'');
+  const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');
+  if(!url||!key)return null;
+  try{
+    const r=await fetch(`${url}/rest/v1/system_settings?key=eq.${encodeURIComponent(keyName)}&select=value&limit=1`,{headers:{apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json'}});
+    const rows=await r.json().catch(()=>[]);
+    return r.ok&&Array.isArray(rows)?rows[0]?.value??null:null;
+  }catch{return null}
 }
 
-function canonicalPermissions(obj={}){
-  const out={};
-  for(const k of Object.keys(obj||{}).sort())out[k]=obj[k];
-  return JSON.stringify(out);
+async function publicBrandPayload(env){
+  const [profile,labels,config]=await Promise.all([
+    publicSetting(env,'developer.profile.v1'),
+    publicSetting(env,'developer.ui_labels.v1'),
+    publicSetting(env,'developer.ui_config.v1')
+  ]);
+  const p=profile&&typeof profile==='object'?profile:{};
+  const l=labels&&typeof labels==='object'?labels:{};
+  const c=config&&typeof config==='object'?config:{};
+  return {
+    ok:true,
+    profile:{display_name:String(p.display_name||''),title:String(p.title||''),phone:String(p.phone||''),email:String(p.email||''),footer_note:String(p.footer_note||'')},
+    labels:{
+      system_name:String(l.system_name||''),system_subtitle:String(l.system_subtitle||''),dashboard_title:String(l.dashboard_title||''),dashboard_subtitle:String(l.dashboard_subtitle||''),ticket_footer:String(l.ticket_footer||''),report_footer:String(l.report_footer||'')
+    },
+    config:{show_profile_all_pages:c.show_profile_all_pages!==false,show_profile_tickets:c.show_profile_tickets!==false,show_profile_reports:c.show_profile_reports!==false,show_profile_receipts:c.show_profile_receipts!==false}
+  };
 }
 
-function canGrant(actor,key){
-  if(actor?.role==='developer')return true;
-  if(SENSITIVE_KEYS.has(key))return false;
-  if(actor?.role==='مدير عام'||actor?.permissions?.all)return true;
-  return !!actor?.permissions?.[key];
-}
+function sameSensitive(a={},b={}){for(const k of SENSITIVE_KEYS)if(!!a?.[k]!==!!b?.[k])return false;return true}
+function canonicalPermissions(obj={}){const out={};for(const k of Object.keys(obj||{}).sort())out[k]=obj[k];return JSON.stringify(out)}
+function canGrant(actor,key){if(actor?.role==='developer')return true;if(SENSITIVE_KEYS.has(key))return false;if(actor?.role==='مدير عام'||actor?.permissions?.all)return true;return !!actor?.permissions?.[key]}
 
 async function guardSyncUsers(request,env,payload){
   const actor=await currentActor(request,env);
@@ -99,11 +115,7 @@ async function guardSyncUsers(request,env,payload){
 
     if(rankOf(incoming.role)>actorRank)return json({error:`لا يمكنك منح دور أعلى من مستواك الإداري (${incoming.role}).`},403);
     if(!sameSensitive(oldPerms,newPerms))return json({error:'صلاحيات المطور والصلاحيات السيادية لا يمكن تعديلها من إدارة الموظفين العادية.'},403);
-
-    for(const k of truthyKeys(newPerms)){
-      if(k.startsWith('_'))continue;
-      if(!canGrant(actor,k))return json({error:`لا يمكنك منح صلاحية لا تملكها: ${k}`},403);
-    }
+    for(const k of truthyKeys(newPerms)){if(k.startsWith('_'))continue;if(!canGrant(actor,k))return json({error:`لا يمكنك منح صلاحية لا تملكها: ${k}`},403)}
   }
   return null;
 }
@@ -112,6 +124,7 @@ export default {
   async fetch(request,env){
     try{
       const url=new URL(request.url);
+      if(url.pathname==='/api/mega'&&url.searchParams.get('action')==='public_brand_profile'&&request.method==='GET')return json(await publicBrandPayload(env));
       if(url.pathname==='/api/admin'&&request.method==='POST'){
         let body={};try{body=await request.clone().json()}catch{}
         if(body?.action==='sync_users'){
