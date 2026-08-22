@@ -11,9 +11,10 @@ const SENSITIVE_EXPLICIT_PERMISSIONS=new Set([
 
 export function has(user,key){
   if(!user)return false;
-  // The real developer account always retains system-console capabilities.
-  // Other roles — including General Manager and broad `all` — must receive
-  // these sensitive permissions explicitly.
+  if(key==='manageBranches'){
+    if(user.role==='مدير عام'||user.role==='developer'||user.permissions?.all)return true;
+    return !!(user.permissions?.manageBranches||user.permissions?.viewBranches||user.permissions?.addBranches||user.permissions?.editBranches||user.permissions?.manageCompanyProfile);
+  }
   if(SENSITIVE_EXPLICIT_PERMISSIONS.has(key)){
     if(user.role==='developer')return true;
     return !!user.permissions?.[key];
