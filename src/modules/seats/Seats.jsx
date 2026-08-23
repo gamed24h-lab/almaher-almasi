@@ -18,7 +18,7 @@ export default function Seats({tripId:initialTrip=''}){
  const seats=useMemo(()=>{const rows=(payload?.vehicle_seats||[]).filter(x=>s(x.vehicle_id)===s(tv?.vehicle_id)&&x.active!==false);if(rows.length)return [...rows].sort((a,b)=>Number(a.seat_index||a.seat_no||0)-Number(b.seat_index||b.seat_no||0));const cap=Number(tv?.booking_capacity||tv?.capacity||vehicle?.booking_capacity||vehicle?.physical_capacity||49);return Array.from({length:cap},(_,i)=>({id:`virtual-${i+1}`,seat_no:String(i+1),seat_index:i+1,seat_type:'passenger',active:true}))},[payload,tv,vehicle]);
  const assignments=useMemo(()=>(payload?.seat_assignments||[]).filter(x=>s(x.trip_vehicle_id)===s(tripVehicleId)&&s(x.segment_type||'outbound')===segment&&active(x)),[payload,tripVehicleId,segment]);
  const bySeat=useMemo(()=>new Map(assignments.map(x=>[s(x.seat_no),x])),[assignments]);
- const tripBookings=useMemo(()=>data.bookings.filter(b=>segment==='outbound'?s(b.trip_id)===s(tripId):(s(b.return_trip_id)===s(tripId)||(s(b.trip_id)===s(tripId)&&['roundtrip','returnonly'].includes(low(b.journey_mode)))),[data.bookings,tripId,segment]);
+ const tripBookings=useMemo(()=>data.bookings.filter(b=>segment==='outbound'?s(b.trip_id)===s(tripId):(s(b.return_trip_id)===s(tripId)||["roundtrip","returnonly"].includes(low(b.journey_mode)))),[data.bookings,tripId,segment]);
  const bookingIds=useMemo(()=>new Set(tripBookings.map(b=>s(b.id))),[tripBookings]);
  const passengers=useMemo(()=>data.passengers.filter(p=>bookingIds.has(s(p.booking_id))&&low(p.status)!=='cancelled'),[data.passengers,bookingIds]);
  const passengerMap=useMemo(()=>new Map(data.passengers.map(p=>[s(p.id),p])),[data.passengers]);const bookingMap=useMemo(()=>new Map(data.bookings.map(b=>[s(b.id),b])),[data.bookings]);
