@@ -20,12 +20,25 @@ set search_path = public
 as $$
 declare
   v_mode text;
+  v_parent_environment text;
 begin
   select runtime_mode into v_mode
   from public.system_runtime_state
   where id='main';
 
-  new.data_environment := coalesce(v_mode,'training');
+  -- Child rows inherit their parent booking environment whenever possible.
+  if tg_table_name = 'booking_passengers' and new.booking_id is not null then
+    select data_environment into v_parent_environment
+    from public.bookings
+    where id = new.booking_id;
+  elsif tg_table_name = 'room_assignments' and new.passenger_id is not null then
+    select b.data_environment into v_parent_environment
+    from public.booking_passengers p
+    join public.bookings b on b.id = p.booking_id
+    where p.id = new.passenger_id;
+  end if;
+
+  new.data_environment := coalesce(v_parent_environment, v_mode, 'training');
   return new;
 end;
 $$;
@@ -42,7 +55,7 @@ begin
     if to_regclass('public.'||t) is not null then
       execute format('drop trigger if exists almaher_runtime_environment_bi on public.%I',t);
       execute format(
-        'create trigger almaher_runtime_environment_bi before insert on public.%I for each row execute function public.almaher_apply_runtime_environment()',
+        'create trigger almaher_runtime_environment_bi before insert or update on public.%I for each row execute function public.almaher_apply_runtime_environment()',
         t
       );
     end if;
