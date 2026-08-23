@@ -1,0 +1,21 @@
+/* Keep operation feedback visible while any modal is open. */
+body:has(.modal-backdrop) .error-box {
+  position: fixed;
+  top: 86px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, calc(100vw - 32px));
+  z-index: 10050;
+  box-shadow: 0 16px 42px rgba(80, 20, 16, .20);
+  margin: 0;
+}
+
+.modal-backdrop { z-index: 1000; }
+.modal-backdrop .modal { position: relative; z-index: 1001; }
+
+@media (max-width: 700px) {
+  body:has(.modal-backdrop) .error-box {
+    top: 72px;
+    width: calc(100vw - 20px);
+  }
+}
