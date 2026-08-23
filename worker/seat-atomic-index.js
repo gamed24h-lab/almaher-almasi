@@ -57,6 +57,21 @@ async function bookingSeatContextAllowed(actor,env,body,tripVehicleId,action,seg
   return true;
 }
 
+async function releaseStalePassengerSeats(env,{passengerId,bookingId,segment,tripVehicleId,seatNo,assignedBy}){
+  if(!passengerId||!bookingId)return 0;
+  const b=base(env),h=headers(env);
+  const q=`passenger_id=eq.${encodeURIComponent(passengerId)}&booking_id=eq.${encodeURIComponent(bookingId)}&segment_type=eq.${encodeURIComponent(segment)}&status=eq.assigned&select=trip_vehicle_id,seat_no&limit=20`;
+  const r=await fetch(`${b}/rest/v1/seat_assignments?${q}`,{headers:h});
+  const rows=await parse(r);if(!r.ok||!Array.isArray(rows))return 0;
+  const stale=rows.filter(x=>String(x.trip_vehicle_id)!==String(tripVehicleId)||String(x.seat_no)!==String(seatNo));
+  let released=0;
+  for(const old of stale){
+    const rr=await fetch(`${b}/rest/v1/rpc/almaher_set_seat_state_atomic`,{method:'POST',headers:h,body:JSON.stringify({p_trip_vehicle_id:old.trip_vehicle_id,p_segment_type:segment,p_seat_no:String(old.seat_no),p_status:'released',p_assigned_by:assignedBy})});
+    if(rr.ok)released++;
+  }
+  return released;
+}
+
 async function atomicSeat(request,env){
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
@@ -86,7 +101,11 @@ async function atomicSeat(request,env){
   const r=await fetch(`${base(env)}/rest/v1/rpc/${rpc}`,{method:'POST',headers:headers(env),body:JSON.stringify(payload)});
   const out=await parse(r);
   if(!r.ok){const raw=String(out?.message||out?.details||out?.hint||'تعذر تنفيذ عملية المقعد.');if(/SEAT_ALREADY_ASSIGNED|SEAT_CONCURRENCY_CONFLICT|duplicate key/i.test(raw))return json({error:'المقعد تم اختياره بالفعل من مستخدم آخر. حدّث الخريطة واختر مقعدًا آخر.',code:'SEAT_CONFLICT'},409);return json({error:raw},502)}
-  return json({ok:true,result:out,scope:bookingSeatAccess?'booking':'seat_management'});
+  let staleReleased=0;
+  if(action==='assign'&&body.passenger_id&&body.booking_id){
+    staleReleased=await releaseStalePassengerSeats(env,{passengerId:body.passenger_id,bookingId:body.booking_id,segment,tripVehicleId,seatNo,assignedBy});
+  }
+  return json({ok:true,result:out,scope:bookingSeatAccess?'booking':'seat_management',stale_released:staleReleased});
 }
 
 export default {async fetch(request,env,ctx){const u=new URL(request.url);if(u.pathname==='/api/seats/atomic')return atomicSeat(request,env);return runtimeModeWorker.fetch(request,env,ctx)}};
