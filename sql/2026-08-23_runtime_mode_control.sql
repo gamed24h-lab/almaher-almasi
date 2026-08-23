@@ -21,24 +21,44 @@ as $$
 declare
   v_mode text;
   v_parent_environment text;
+  v_existing_environment text;
 begin
   select runtime_mode into v_mode
   from public.system_runtime_state
   where id='main';
 
-  -- Child rows inherit their parent booking environment whenever possible.
-  if tg_table_name = 'booking_passengers' and new.booking_id is not null then
-    select data_environment into v_parent_environment
-    from public.bookings
-    where id = new.booking_id;
-  elsif tg_table_name = 'room_assignments' and new.passenger_id is not null then
-    select b.data_environment into v_parent_environment
-    from public.booking_passengers p
-    join public.bookings b on b.id = p.booking_id
-    where p.id = new.passenger_id;
+  -- Only touch table-specific fields after confirming the table name.
+  if tg_table_name = 'booking_passengers' then
+    if new.booking_id is not null then
+      select data_environment into v_parent_environment
+      from public.bookings
+      where id = new.booking_id;
+    end if;
+  elsif tg_table_name = 'room_assignments' then
+    if new.passenger_id is not null then
+      select b.data_environment into v_parent_environment
+      from public.booking_passengers p
+      join public.bookings b on b.id = p.booking_id
+      where p.id = new.passenger_id;
+    end if;
   end if;
 
-  new.data_environment := coalesce(v_parent_environment, v_mode, 'training');
+  if tg_op = 'UPDATE' then
+    v_existing_environment := old.data_environment;
+  end if;
+
+  if v_parent_environment in ('training','production') then
+    new.data_environment := v_parent_environment;
+  elsif v_existing_environment in ('training','production') then
+    -- Never flip an already-classified row just because runtime mode changed.
+    new.data_environment := v_existing_environment;
+  elsif tg_op = 'UPDATE' and new.data_environment in ('training','production') then
+    -- Allows deliberate one-time reconciliation of legacy NULL rows.
+    new.data_environment := new.data_environment;
+  else
+    new.data_environment := coalesce(v_mode,'training');
+  end if;
+
   return new;
 end;
 $$;
