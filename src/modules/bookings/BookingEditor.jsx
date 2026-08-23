@@ -66,6 +66,7 @@ export default function BookingEditor({bookingNo,go}){
  const selectedBranchId=existing?.branch_id||data.scope?.branch_id||user?.branch_id||'';
  const selectedBranch=data.branches.find(b=>String(b.id)===String(selectedBranchId));
  const remaining=Math.max(0,n(totalPrice)-n(existing?.paid_amount||0));
+ const sharedHousingBlocked=isFemale(customerDraft.gender)||passengers.some(p=>isFemale(p.gender));
 
  function setCustomer(key,value){
    setCustomerDraft(x=>({...x,[key]:value}));
@@ -82,7 +83,7 @@ export default function BookingEditor({bookingNo,go}){
    if(!tripId)return 'اختر الرحلة.';
    if(journeyMode==='separate'&&!returnTripId)return 'اختر رحلة العودة المنفصلة.';
    if(journeyMode==='separate'&&String(returnTripId)===String(tripId))return 'رحلة العودة المنفصلة يجب أن تكون مختلفة عن رحلة الذهاب.';
-   if(accommodation==='shared'&&(isFemale(customerDraft.gender)||passengers.some(p=>isFemale(p.gender))))return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';
+   if(accommodation==='shared'&&sharedHousingBlocked)return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';
    if(accommodation==='private'&&Number(housingDays)<1)return 'عدد أيام السكن إلزامي عند اختيار غرفة خاصة.';
    if(accommodation==='private'&&Number(privateRooms)<1)return 'عدد الغرف الخاصة يجب أن يكون غرفة واحدة على الأقل.';
    if(!passengers.length)return 'أضف مسافرًا واحدًا على الأقل.';
@@ -165,7 +166,7 @@ export default function BookingEditor({bookingNo,go}){
       <Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field>
       <Field label="الجنسية"><Select value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}>{nationalityOptions(customerDraft.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field>
       <Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>{const v=e.target.value;setCustomer('gender',v);if(isFemale(v)&&accommodation==='shared')setAccommodation('private')}}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
-      <Field label="نوع السكن"><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option>{!isFemale(customerDraft.gender)&&!passengers.some(p=>isFemale(p.gender))&&<option value="shared">مشترك خماسي — رجال فقط</option>}<option value="private">غرفة خاصة</option></Select></Field>
+      <Field label="نوع السكن" hint={sharedHousingBlocked?'السكن المشترك يظهر للتوضيح لكنه غير متاح عند وجود مسافرة أنثى في الحجز.':'السكن المشترك الخماسي متاح للرجال فقط.'}><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option><option value="shared" disabled={sharedHousingBlocked}>مشترك خماسي — رجال فقط{sharedHousingBlocked?' (غير متاح لهذا الحجز)':''}</option><option value="private">غرفة خاصة</option></Select></Field>
       {accommodation==='private'&&<><Field label="نوع الغرفة الخاصة"><Select value={privateRoomType} onChange={e=>setPrivateRoomType(e.target.value)}><option value="single">مفردة</option><option value="double">مزدوجة</option><option value="triple">ثلاثية</option><option value="quad">رباعية</option><option value="quint">خماسية</option></Select></Field><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}
       <Field label="السعر المقترح"><div className="price-suggestion"><strong>{money(suggested)}</strong><Button type="button" onClick={applySuggested}><Calculator size={15}/> اعتماد السعر</Button></div></Field>
       <Field label="الإجمالي النهائي"><Input type="number" min="0" step="0.01" value={totalPrice} onChange={e=>setTotalPrice(Number(e.target.value))}/></Field>
