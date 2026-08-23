@@ -5,6 +5,7 @@ const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const headers=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
 const coreTables=['trips','bookings','booking_passengers','transactions','expenses','refunds','cash_shifts','room_assignments','seat_assignments','scan_events','approval_requests'];
 const protectedTables=['branches','staff_users','roles','permissions','system_settings','developer_settings','document_templates'];
+const snapshotTables=['branches','trips','trip_branches','bookings','booking_passengers','system_settings','feature_flags'];
 const rollbackRequiredTables=['branches','trips','bookings','booking_passengers','system_settings'];
 
 async function actorFrom(request,env){
@@ -81,9 +82,22 @@ async function trainingCleanupPreview(request,env){
 async function createProtectedSnapshot(request,env){
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
   if(!isDeveloper(actor))return json({error:'إنشاء لقطة ما قبل التشغيل متاح للمطور الحقيقي فقط.'},403);
-  const u=new URL('/api/module',request.url);
-  const r=await auditWorker.fetch(new Request(u,{method:'POST',headers:request.headers,body:JSON.stringify({action:'create_operational_snapshot'})}),env);
-  const body=await r.text();return new Response(body,{status:r.status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
+  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
+  const h=headers(env),snapshot={created_at:new Date().toISOString(),created_by:actor.name||actor.id,kind:'pre_release',tables:{}};
+  for(const table of snapshotTables){
+    const r=await fetch(`${url}/rest/v1/${table}?select=*&limit=10000`,{headers:h});
+    if(!r.ok){const b=await r.json().catch(()=>({}));return json({error:`تعذر قراءة جدول ${table}: ${b?.message||`HTTP ${r.status}`}`},502)}
+    snapshot.tables[table]=await r.json().catch(()=>[]);
+  }
+  const text=JSON.stringify(snapshot),path=`snapshots/pre-release-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+  const upload=await fetch(`${url}/storage/v1/object/almaher-backups/${path.split('/').map(encodeURIComponent).join('/')}`,{method:'POST',headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,'Content-Type':'application/json; charset=utf-8','x-upsert':'true'},body:text});
+  if(!upload.ok){const b=await upload.json().catch(()=>({}));return json({error:b?.message||`تعذر رفع Snapshot إلى التخزين (HTTP ${upload.status})`},502)}
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));const checksum=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');
+  const details={tables:snapshotTables,records:Object.fromEntries(Object.entries(snapshot.tables).map(([k,v])=>[k,Array.isArray(v)?v.length:0])),note:'Pre-release operational JSON snapshot'};
+  const rec={backup_type:'pre_release',status:'completed',storage_path:path,checksum,restore_tested:false,initiated_by:actor.name||actor.id,started_at:snapshot.created_at,completed_at:new Date().toISOString(),details};
+  const rr=await fetch(`${url}/rest/v1/backup_runs`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify([rec])});
+  const rb=await rr.json().catch(()=>[]);if(!rr.ok)return json({error:rb?.message||'تعذر تسجيل Snapshot في backup_runs.'},502);
+  return json({ok:true,row:Array.isArray(rb)?rb[0]:rb,storage_path:path,checksum,backup_type:'pre_release'});
 }
 
 async function rollbackDryRun(request,env){
@@ -91,11 +105,11 @@ async function rollbackDryRun(request,env){
   if(!isDeveloper(actor))return json({error:'اختبار Rollback متاح للمطور الحقيقي فقط.'},403);
   const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
   const h=headers(env);
-  let metaR=await fetch(`${url}/rest/v1/backup_runs?backup_type=eq.operational_snapshot&status=eq.completed&select=id,storage_path,checksum,restore_tested,started_at,completed_at,details&order=completed_at.desc&limit=1`,{headers:h});
+  let metaR=await fetch(`${url}/rest/v1/backup_runs?backup_type=eq.pre_release&status=eq.completed&select=id,storage_path,checksum,restore_tested,started_at,completed_at,details&order=completed_at.desc&limit=1`,{headers:h});
   let rows=await metaR.json().catch(()=>[]);
-  if(!metaR.ok&&/details.*column|Could not find.*details/i.test(String(rows?.message||''))){metaR=await fetch(`${url}/rest/v1/backup_runs?backup_type=eq.operational_snapshot&status=eq.completed&select=id,storage_path,checksum,restore_tested,started_at,completed_at&order=completed_at.desc&limit=1`,{headers:h});rows=await metaR.json().catch(()=>[])}
+  if(!metaR.ok&&/details.*column|Could not find.*details/i.test(String(rows?.message||''))){metaR=await fetch(`${url}/rest/v1/backup_runs?backup_type=eq.pre_release&status=eq.completed&select=id,storage_path,checksum,restore_tested,started_at,completed_at&order=completed_at.desc&limit=1`,{headers:h});rows=await metaR.json().catch(()=>[])}
   if(!metaR.ok)return json({error:rows?.message||'تعذر قراءة سجل النسخ الاحتياطية.'},502);
-  const row=Array.isArray(rows)?rows[0]:null;if(!row?.storage_path)return json({error:'لا توجد Snapshot تشغيلية مكتملة لاختبارها.'},404);
+  const row=Array.isArray(rows)?rows[0]:null;if(!row?.storage_path)return json({error:'لا توجد Snapshot قبل التشغيل مكتملة لاختبارها.'},404);
   const objectUrl=`${url}/storage/v1/object/almaher-backups/${String(row.storage_path).split('/').map(encodeURIComponent).join('/')}`;
   const fileR=await fetch(objectUrl,{headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:`Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`}});
   if(!fileR.ok)return json({error:`تعذر قراءة ملف Snapshot من التخزين (HTTP ${fileR.status}).`,snapshot:{id:row.id,completed_at:row.completed_at,storage_path:row.storage_path}},502);
