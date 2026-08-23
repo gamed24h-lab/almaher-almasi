@@ -1,0 +1,48 @@
+name: Cloudflare Build Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloudflare-build-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check all Worker entry layers
+        run: npm run check:workers
+
+      - name: Build Vite app
+        run: npm run build
+
+      - name: Validate Cloudflare bundle
+        run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run
+
+      - name: Upload diagnostic bundle on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-build-diagnostics-${{ github.sha }}
+          path: |
+            .wrangler-dry-run
+            dist
+          if-no-files-found: ignore
+          retention-days: 7
