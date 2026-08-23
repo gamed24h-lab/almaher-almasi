@@ -1,12 +1,13 @@
 import React from 'react';
+import {createPortal} from 'react-dom';
 export const Card=({children,className=''})=><section className={`card ${className}`}>{children}</section>;
 export const PageHeader=({title,subtitle,actions})=><div className="page-head"><div><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>{actions&&<div className="page-actions">{actions}</div>}</div>;
 export const Button=({children,variant='secondary',className='',...p})=><button className={`btn ${variant} ${className}`} {...p}>{children}</button>;
 export const Badge=({children,tone='blue'})=><span className={`badge ${tone}`}>{children}</span>;
 export const Empty=({title='لا توجد بيانات',text='لم يتم العثور على سجلات لعرضها.'})=><div className="empty"><div className="empty-icon">◇</div><strong>{title}</strong><span>{text}</span></div>;
 export const Loading=({text='جاري التحميل...'})=><div className="loading"><span className="spinner"/>{text}</div>;
-const friendlyError=(error)=>{const s=String(error||'').trim();if(!s)return '';if(/Return date cannot be before departure date/i.test(s))return 'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب. راجع تاريخ العودة ثم حاول الحفظ مرة أخرى.';if(/duplicate key value.*staff_users_pkey/i.test(s))return 'يوجد تعارض في رقم حساب الموظف. حدّث الصفحة ثم حاول الحفظ مرة أخرى.';if(/violates check constraint.*trips_status_check/i.test(s))return 'حالة الرحلة غير مقبولة في قاعدة البيانات. اختر حالة صحيحة ثم حاول مرة أخرى.';return s};
-export const ErrorBox=({error})=>error?<div className="error-box" role="alert">{friendlyError(error)}</div>:null;
+const friendlyError=(error)=>{const s=String(error||'').trim();if(!s)return '';if(/Return date cannot be before departure date/i.test(s))return 'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب. راجع تاريخ العودة ثم حاول الحفظ مرة أخرى.';if(/duplicate key value.*staff_users_pkey/i.test(s))return 'يوجد تعارض في رقم حساب الموظف. حدّث الصفحة ثم حاول الحفظ مرة أخرى.';if(/violates check constraint.*trips_status_check/i.test(s))return 'حالة الرحلة غير مقبولة في قاعدة البيانات. اختر حالة صحيحة ثم حاول مرة أخرى.';if(/Could not find the 'branch_id' column of 'drivers'/i.test(s))return 'جدول السائقين يحتاج تحديث بنية الفرع. شغّل تحديث قاعدة البيانات الخاص بالسائقين ثم أعد المحاولة.';return s};
+export const ErrorBox=({error})=>{if(!error)return null;const node=<div className="error-box global-error-feedback" role="alert">{friendlyError(error)}</div>;return typeof document!=='undefined'?createPortal(node,document.body):node};
 export function Modal({open,onClose,title,children,wide=false}){if(!open)return null;return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose?.()}}><div className={`modal ${wide?'wide':''}`}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" onClick={onClose}>×</button></div><div className="modal-body">{children}</div></div></div>}
 export const Field=({label,children,hint})=><label className="field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>;
 export const Input=(p)=><input {...p}/>; export const Select=(p)=><select {...p}/>; export const Textarea=(p)=><textarea {...p}/>;
