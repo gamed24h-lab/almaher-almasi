@@ -7,5 +7,6 @@ import './styles.css';
 import './themes.css';
 import './branch-branding.css';
 import './developer-footer.css';
+import './modal-feedback.css';
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App /></SystemBrandProvider></ThemeProvider></React.StrictMode>);
