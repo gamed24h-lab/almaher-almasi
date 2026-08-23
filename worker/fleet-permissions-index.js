@@ -30,12 +30,34 @@ async function directDriverWrite(request,env,actor,body){
  if(action==='delete'){if(!id)return json({error:'معرّف السائق مطلوب.'},400);const r=await fetch(`${b}/rest/v1/drivers?id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:{...h,Prefer:'return=representation'}}),out=await parse(r);if(!r.ok)return json({error:out?.message||'تعذر حذف السائق. قد يكون مرتبطًا برحلة.'},r.status>=400&&r.status<600?r.status:502);const deleted=Array.isArray(out)?out[0]:out;if(!deleted?.id)return json({error:'لم يتم تأكيد حذف السائق من قاعدة البيانات.',code:'DRIVER_DELETE_UNVERIFIED'},502);return json({ok:true,row:deleted,verified:true})}
  return json({error:'عملية السائق غير مدعومة.'},400);
 }
+async function fleetWithSeatAssignments(request,env,ctx){
+ const baseResponse=await seatWorker.fetch(request,env,ctx);if(!baseResponse.ok)return baseResponse;
+ const payload=await baseResponse.json().catch(()=>({}));const tv=Array.isArray(payload?.trip_vehicles)?payload.trip_vehicles:[];const ids=tv.map(x=>String(x.id||'')).filter(Boolean);
+ if(!ids.length)return json({...payload,seat_assignments:[]});
+ const b=base(env),h=headers(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return json(payload);
+ const filter=ids.map(id=>`"${id}"`).join(',');
+ const r=await fetch(`${b}/rest/v1/seat_assignments?trip_vehicle_id=in.(${encodeURIComponent(filter)})&select=id,trip_vehicle_id,seat_no,status,passenger_id,booking_id,segment_type`,{headers:h});
+ const rows=await parse(r);return json({...payload,seat_assignments:r.ok&&Array.isArray(rows)?rows:[]});
+}
+function activeStatus(v){return !['cancelled','released','inactive'].includes(String(v||'assigned').toLowerCase())}
 async function directTripVehicleWrite(env,body){
  const b=base(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);const h=headers(env),action=String(body?.action||''),id=String(body?.id||''),row=body?.row&&typeof body.row==='object'?{...body.row}:{};
  if(action==='insert'||action==='update'){
-   let tripId=row.trip_id||null,vehicleId=row.vehicle_id||null;
-   if(action==='update'&&(!tripId||!vehicleId)){const rr=await fetch(`${b}/rest/v1/trip_vehicles?id=eq.${encodeURIComponent(id)}&select=id,trip_id,vehicle_id&limit=1`,{headers:h}),rb=await parse(rr);if(!rr.ok)return json({error:rb?.message||'تعذر التحقق من ربط الباص.'},502);const current=Array.isArray(rb)?rb[0]:null;if(!current)return json({error:'ربط الباص غير موجود.'},404);tripId=tripId||current.trip_id;vehicleId=vehicleId||current.vehicle_id}
-   if(tripId&&vehicleId){const q=`${b}/rest/v1/trip_vehicles?trip_id=eq.${encodeURIComponent(tripId)}&vehicle_id=eq.${encodeURIComponent(vehicleId)}&select=id,status`;const rr=await fetch(q,{headers:h}),rows=await parse(rr);if(!rr.ok)return json({error:rows?.message||'تعذر فحص تكرار الباص.'},502);const duplicate=(Array.isArray(rows)?rows:[]).find(x=>String(x.id)!==id&&!['cancelled','released','inactive'].includes(String(x.status||'assigned').toLowerCase()));if(duplicate)return json({error:'هذا الباص مرتبط بالفعل بنفس الرحلة. لا يمكن تكرار نفس الباص على نفس الرحلة.',code:'DUPLICATE_TRIP_VEHICLE'},409)}
+   let current=null,tripId=row.trip_id||null,vehicleId=row.vehicle_id||null;
+   if(action==='update'){
+     if(!id)return json({error:'معرّف ربط الباص مطلوب.'},400);
+     const rr=await fetch(`${b}/rest/v1/trip_vehicles?id=eq.${encodeURIComponent(id)}&select=id,trip_id,vehicle_id,driver_id,extra_driver_id,status&limit=1`,{headers:h}),rb=await parse(rr);if(!rr.ok)return json({error:rb?.message||'تعذر التحقق من ربط الباص.'},502);current=Array.isArray(rb)?rb[0]:null;if(!current)return json({error:'ربط الباص غير موجود.'},404);tripId=tripId||current.trip_id;vehicleId=vehicleId||current.vehicle_id;
+   }
+   if(tripId&&vehicleId){const q=`${b}/rest/v1/trip_vehicles?trip_id=eq.${encodeURIComponent(tripId)}&vehicle_id=eq.${encodeURIComponent(vehicleId)}&select=id,status`;const rr=await fetch(q,{headers:h}),rows=await parse(rr);if(!rr.ok)return json({error:rows?.message||'تعذر فحص تكرار الباص.'},502);const duplicate=(Array.isArray(rows)?rows:[]).find(x=>String(x.id)!==id&&activeStatus(x.status));if(duplicate)return json({error:'هذا الباص مرتبط بالفعل بنفس الرحلة. لا يمكن تكرار نفس الباص على نفس الرحلة.',code:'DUPLICATE_TRIP_VEHICLE'},409)}
+   const driverId=Object.prototype.hasOwnProperty.call(row,'driver_id')?row.driver_id:current?.driver_id;
+   const extraDriverId=Object.prototype.hasOwnProperty.call(row,'extra_driver_id')?row.extra_driver_id:current?.extra_driver_id;
+   if(driverId&&extraDriverId&&String(driverId)===String(extraDriverId))return json({error:'لا يمكن اختيار نفس السائق كسائق أساسي وسائق إضافي في نفس الباص.',code:'DUPLICATE_DRIVER_ROLE'},409);
+   const proposed=[driverId,extraDriverId].filter(Boolean).map(String);
+   if(tripId&&proposed.length){
+     const rr=await fetch(`${b}/rest/v1/trip_vehicles?trip_id=eq.${encodeURIComponent(tripId)}&select=id,driver_id,extra_driver_id,status`,{headers:h}),rows=await parse(rr);if(!rr.ok)return json({error:rows?.message||'تعذر فحص تعارض السائقين.'},502);
+     const conflict=(Array.isArray(rows)?rows:[]).find(x=>String(x.id)!==id&&activeStatus(x.status)&&proposed.some(d=>String(x.driver_id||'')===d||String(x.extra_driver_id||'')===d));
+     if(conflict)return json({error:'أحد السائقين المختارين معيّن بالفعل على باص آخر في نفس الرحلة.',code:'DRIVER_ALREADY_ASSIGNED_ON_TRIP'},409);
+   }
  }
  if(action==='insert'){const r=await fetch(`${b}/rest/v1/trip_vehicles`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(row)}),out=await parse(r);if(!r.ok)return json({error:out?.message||'تعذر ربط الباص بالرحلة.'},r.status);return json({ok:true,row:Array.isArray(out)?out[0]:out})}
  if(action==='update'){if(!id)return json({error:'معرّف ربط الباص مطلوب.'},400);const r=await fetch(`${b}/rest/v1/trip_vehicles?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(row)}),out=await parse(r);if(!r.ok)return json({error:out?.message||'تعذر تعديل ربط الباص.'},r.status);return json({ok:true,row:Array.isArray(out)?out[0]:out})}
@@ -45,7 +67,7 @@ async function directTripVehicleWrite(env,body){
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
  if(u.pathname==='/api/module'){
-  if(request.method==='GET'){const resource=String(u.searchParams.get('resource')||'');if(resource==='drivers'){const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!(has(actor,'viewDrivers','addDrivers','editDrivers','deleteDrivers','manageDrivers')||legacyFleet(actor)))return json({error:'لا توجد صلاحية لعرض السائقين.'},403);return directDriverList(env,actor)}if(resource==='fleet'){const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!(has(actor,'viewFleet','fleet','vehicles','addVehicles','editVehicles','deleteVehicles','assignFleet','manageMaintenance')||has(actor,'viewDrivers','manageDrivers')))return json({error:'لا توجد صلاحية لعرض الأسطول.'},403)}}
+  if(request.method==='GET'){const resource=String(u.searchParams.get('resource')||'');if(resource==='drivers'){const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!(has(actor,'viewDrivers','addDrivers','editDrivers','deleteDrivers','manageDrivers')||legacyFleet(actor)))return json({error:'لا توجد صلاحية لعرض السائقين.'},403);return directDriverList(env,actor)}if(resource==='fleet'){const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!(has(actor,'viewFleet','fleet','vehicles','addVehicles','editVehicles','deleteVehicles','assignFleet','manageMaintenance')||has(actor,'viewDrivers','manageDrivers')))return json({error:'لا توجد صلاحية لعرض الأسطول.'},403);return fleetWithSeatAssignments(request,env,ctx)}}
   if(request.method==='POST'){const body=await request.clone().json().catch(()=>({})),table=String(body?.table||''),action=String(body?.action||''),need=requiredPermission(table,action);if(need){const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);const allowed=has(actor,...need)||(table==='drivers'&&legacyFleet(actor));if(!allowed)return json({error:'لا توجد صلاحية لتنفيذ هذه العملية على الأسطول أو السائقين.'},403);if(table==='drivers')return directDriverWrite(request,env,actor,body);if(table==='trip_vehicles')return directTripVehicleWrite(env,body)}}
  }
  return seatWorker.fetch(request,env,ctx);
