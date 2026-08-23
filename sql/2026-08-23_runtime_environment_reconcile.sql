@@ -1,6 +1,5 @@
 begin;
 
--- Keep runtime environment consistent on both inserts and updates.
 create or replace function public.almaher_apply_runtime_environment()
 returns trigger
 language plpgsql
@@ -10,23 +9,42 @@ as $$
 declare
   v_mode text;
   v_parent_environment text;
+  v_existing_environment text;
 begin
   select runtime_mode into v_mode
   from public.system_runtime_state
   where id='main';
 
-  if tg_table_name = 'booking_passengers' and new.booking_id is not null then
-    select data_environment into v_parent_environment
-    from public.bookings
-    where id = new.booking_id;
-  elsif tg_table_name = 'room_assignments' and new.passenger_id is not null then
-    select b.data_environment into v_parent_environment
-    from public.booking_passengers p
-    join public.bookings b on b.id = p.booking_id
-    where p.id = new.passenger_id;
+  -- Only access fields that actually exist on the current trigger table.
+  if tg_table_name = 'booking_passengers' then
+    if new.booking_id is not null then
+      select data_environment into v_parent_environment
+      from public.bookings
+      where id = new.booking_id;
+    end if;
+  elsif tg_table_name = 'room_assignments' then
+    if new.passenger_id is not null then
+      select b.data_environment into v_parent_environment
+      from public.booking_passengers p
+      join public.bookings b on b.id = p.booking_id
+      where p.id = new.passenger_id;
+    end if;
   end if;
 
-  new.data_environment := coalesce(v_parent_environment, v_mode, 'training');
+  if tg_op = 'UPDATE' then
+    v_existing_environment := old.data_environment;
+  end if;
+
+  if v_parent_environment in ('training','production') then
+    new.data_environment := v_parent_environment;
+  elsif v_existing_environment in ('training','production') then
+    new.data_environment := v_existing_environment;
+  elsif tg_op = 'UPDATE' and new.data_environment in ('training','production') then
+    new.data_environment := new.data_environment;
+  else
+    new.data_environment := coalesce(v_mode,'training');
+  end if;
+
   return new;
 end;
 $$;
@@ -50,9 +68,7 @@ begin
   end loop;
 end $$;
 
--- Reconcile existing booking/passenger rows only when the passenger environment
--- is unambiguous for that booking. Mixed-environment bookings are intentionally
--- left untouched for manual review.
+-- Reconcile legacy bookings only when all classified passengers agree.
 with passenger_env as (
   select
     booking_id,
@@ -71,7 +87,7 @@ from unambiguous u
 where b.id = u.booking_id
   and b.data_environment is null;
 
--- Passengers inherit an already-classified booking when they are still unclassified.
+-- Passengers inherit an already-classified booking when still unclassified.
 update public.booking_passengers p
 set data_environment = b.data_environment
 from public.bookings b
