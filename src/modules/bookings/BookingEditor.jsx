@@ -1,16 +1,18 @@
-import React,{useMemo,useState} from 'react';
-import {ArrowRight,Plus,Trash2,Ticket,RotateCcw,Calculator,MessageCircle,Copy} from 'lucide-react';
+import React,{useEffect,useMemo,useState} from 'react';
+import {ArrowRight,Plus,Trash2,Ticket,RotateCcw,Calculator,MessageCircle,Copy,Armchair} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import {Card,PageHeader,Button,Field,Input,Select,Textarea,ErrorBox,Badge} from '../../components/UI.jsx';
 import {money,phoneWa,journeyLabel,tripDisplay} from '../../lib/format.js';
 import {allOps} from '../../lib/permissions.js';
+import {notifyInfo,notifyWarning} from '../../lib/feedback.js';
 
 const NATIONALITIES=['السعودية','مصر','السودان','اليمن','سوريا','الأردن','فلسطين','لبنان','العراق','الكويت','البحرين','قطر','الإمارات','عُمان','المغرب','الجزائر','تونس','ليبيا','موريتانيا','تركيا','باكستان','الهند','بنغلاديش','أفغانستان','إندونيسيا','ماليزيا','نيجيريا','إثيوبيا','إريتريا','الصومال','تشاد','النيجر','السنغال','غينيا','مالي','بوركينا فاسو','الكاميرون','غانا','ساحل العاج','سيراليون','أوغندا','كينيا','تنزانيا','جنوب أفريقيا','فرنسا','إيطاليا','بريطانيا','ألمانيا','الولايات المتحدة','كندا'];
 const nationalityOptions=current=>{const v=String(current||'').trim();return v&&!NATIONALITIES.includes(v)?[v,...NATIONALITIES]:NATIONALITIES};
 const emptyP=()=>({name:'',gender:'male',nationality:'السعودية',identity:'',phone:'',preferredLanguage:'ar'});
-const n=v=>Number(v||0);
+const n=v=>Number(v||0),s=v=>String(v??''),low=v=>s(v).toLowerCase();
+const activeSeat=a=>['assigned','hold','blocked'].includes(low(a?.status));
 
 function calcPrice({mode,type,roomType='double',travelers,rooms,days,trip,returnTrip}){
  if(!trip)return 0;
@@ -20,16 +22,12 @@ function calcPrice({mode,type,roomType='double',travelers,rooms,days,trip,return
  const roomRate=roomType==='single'?n(trip.price_private_single||trip.price_private_room):roomType==='triple'?n(trip.price_private_triple||trip.price_private_room):roomType==='quad'?n(trip.price_private_quad||trip.price_private_room):roomType==='quint'?n(trip.price_private_quint||trip.price_private_room):n(trip.price_private_double||trip.price_private_room);
  const privateCost=type==='private'?roomRate*Math.max(1,Number(rooms||1))*stayDays:0;
  if(mode==='oneway'||mode==='returnonly')return one*count+privateCost;
- if(mode==='separate'){
-   const outbound=type==='shared'?shared*count:none*count+privateCost;
-   return outbound+n(returnTrip?.price_one_way)*count;
- }
+ if(mode==='separate'){const outbound=type==='shared'?shared*count:none*count+privateCost;return outbound+n(returnTrip?.price_one_way)*count}
  if(type==='none')return none*count;
  if(type==='shared')return shared*count;
  if(type==='private')return none*count+privateCost;
  return 0;
 }
-
 function isFemale(v){const x=String(v||'').toLowerCase();return x==='female'||x==='أنثى'||x==='f'}
 function onlyDigits(v){return String(v||'').replace(/\D/g,'')}
 
@@ -39,10 +37,7 @@ export default function BookingEditor({bookingNo,go}){
  const existing=data.bookings.find(b=>String(b.booking_number)===String(bookingNo));
  const existingPassengers=existing?data.passengers.filter(p=>String(p.booking_id)===String(existing.id)):[];
  const snap=existing?.snapshot&&typeof existing.snapshot==='object'?existing.snapshot:{};
- const [passengers,setPassengers]=useState(existingPassengers.length?existingPassengers.map(p=>({
-   id:p.id,name:p.full_name||'',gender:p.gender||'male',nationality:p.nationality||'',identity:p.identity_number||'',phone:p.phone||'',status:p.status,
-   accommodationStatus:p.accommodation_status,preferredLanguage:p.preferred_language||'ar',documentStatus:p.document_status||'unknown',assistanceFlags:Array.isArray(p.assistance_flags)?p.assistance_flags:[]
- })): [emptyP()]);
+ const [passengers,setPassengers]=useState(existingPassengers.length?existingPassengers.map(p=>({id:p.id,name:p.full_name||'',gender:p.gender||'male',nationality:p.nationality||'',identity:p.identity_number||'',phone:p.phone||'',status:p.status,accommodationStatus:p.accommodation_status,preferredLanguage:p.preferred_language||'ar',documentStatus:p.document_status||'unknown',assistanceFlags:Array.isArray(p.assistance_flags)?p.assistance_flags:[]})):[emptyP()]);
  const [journeyMode,setJourneyMode]=useState(existing?.journey_mode||snap.journeyMode||'oneway');
  const [tripId,setTripId]=useState(existing?.trip_id||snap.tripId||'');
  const [returnTripId,setReturnTripId]=useState(existing?.return_trip_id||snap.returnTripId||'');
@@ -52,149 +47,43 @@ export default function BookingEditor({bookingNo,go}){
  const [privateRoomType,setPrivateRoomType]=useState(String(snap.privateRoomType||(existing?.private_room_types||[])[0]||'double'));
  const [totalPrice,setTotalPrice]=useState(Number(existing?.total_price||snap.totalPrice||0));
  const [err,setErr]=useState(''),[saving,setSaving]=useState(false);
- const [customerDraft,setCustomerDraft]=useState({
-   name:existing?.customer_name||'',phone:existing?.customer_phone||'',identity:existing?.customer_identity||'',
-   nationality:existing?.customer_nationality||'السعودية',gender:existing?.customer_gender||'male'
- });
+ const [customerDraft,setCustomerDraft]=useState({name:existing?.customer_name||'',phone:existing?.customer_phone||'',identity:existing?.customer_identity||'',nationality:existing?.customer_nationality||'السعودية',gender:existing?.customer_gender||'male'});
+ const [seatPayload,setSeatPayload]=useState(null),[tripVehicleId,setTripVehicleId]=useState(''),[seatChoices,setSeatChoices]=useState({});
 
+ useEffect(()=>{api.module('seats').then(setSeatPayload).catch(()=>setSeatPayload(null))},[]);
  const today=new Date().toISOString().slice(0,10);
  const trips=useMemo(()=>data.trips.filter(t=>!['cancelled','completed'].includes(String(t.status).toLowerCase())&&(!t.departure_date||t.departure_date>=today)),[data.trips,today]);
- const trip=trips.find(t=>String(t.id)===String(tripId));
- const returnTrip=trips.find(t=>String(t.id)===String(returnTripId));
+ const trip=trips.find(t=>String(t.id)===String(tripId));const returnTrip=trips.find(t=>String(t.id)===String(returnTripId));
  const suggested=calcPrice({mode:journeyMode,type:accommodation,roomType:privateRoomType,travelers:passengers.length,rooms:privateRooms,days:housingDays,trip,returnTrip});
  const availableBranches=allOps(user)?data.branches:data.branches.filter(b=>String(b.id)===String(data.scope?.branch_id||user?.branch_id||''));
- const selectedBranchId=existing?.branch_id||data.scope?.branch_id||user?.branch_id||'';
- const selectedBranch=data.branches.find(b=>String(b.id)===String(selectedBranchId));
- const remaining=Math.max(0,n(totalPrice)-n(existing?.paid_amount||0));
- const sharedHousingBlocked=isFemale(customerDraft.gender)||passengers.some(p=>isFemale(p.gender));
+ const selectedBranchId=existing?.branch_id||data.scope?.branch_id||user?.branch_id||'';const selectedBranch=data.branches.find(b=>String(b.id)===String(selectedBranchId));
+ const remaining=Math.max(0,n(totalPrice)-n(existing?.paid_amount||0));const sharedHousingBlocked=isFemale(customerDraft.gender)||passengers.some(p=>isFemale(p.gender));
 
- function setCustomer(key,value){
-   setCustomerDraft(x=>({...x,[key]:value}));
-   if(!existing&&['name','phone','identity','nationality','gender'].includes(key)){
-     setPassengers(arr=>arr.map((p,i)=>i===0?{...p,[key==='identity'?'identity':key]:value}:p));
-   }
- }
- function copyCustomerToFirst(){
-   setPassengers(arr=>arr.map((p,i)=>i? p:{...p,name:customerDraft.name,phone:customerDraft.phone,identity:customerDraft.identity,nationality:customerDraft.nationality,gender:customerDraft.gender}));
- }
+ const tripVehicles=useMemo(()=>(seatPayload?.trip_vehicles||[]).filter(x=>s(x.trip_id)===s(tripId)&&!['cancelled','released','inactive'].includes(low(x.status||'assigned'))),[seatPayload,tripId]);
+ useEffect(()=>{if(tripVehicles.length&&!tripVehicles.some(x=>s(x.id)===s(tripVehicleId)))setTripVehicleId(s(tripVehicles[0].id));if(!tripVehicles.length)setTripVehicleId('')},[tripId,seatPayload]);
+ useEffect(()=>{setSeatChoices({})},[tripId,tripVehicleId]);
+ const tripVehicle=tripVehicles.find(x=>s(x.id)===s(tripVehicleId));
+ const vehicle=(seatPayload?.vehicles||[]).find(v=>s(v.id)===s(tripVehicle?.vehicle_id));
+ const seatRows=useMemo(()=>{if(!tripVehicle)return[];const rows=(seatPayload?.vehicle_seats||[]).filter(x=>s(x.vehicle_id)===s(tripVehicle.vehicle_id)&&x.active!==false);if(rows.length)return [...rows].sort((a,b)=>Number(a.seat_index||a.seat_no||0)-Number(b.seat_index||b.seat_no||0));const cap=Number(tripVehicle.booking_capacity||tripVehicle.capacity||vehicle?.booking_capacity||vehicle?.physical_capacity||49);return Array.from({length:cap},(_,i)=>({seat_no:String(i+1),seat_index:i+1}))},[seatPayload,tripVehicle,vehicle]);
+ const currentSeatAssignments=useMemo(()=>(seatPayload?.seat_assignments||[]).filter(a=>s(a.trip_vehicle_id)===s(tripVehicleId)&&s(a.segment_type||'outbound')==='outbound'&&activeSeat(a)),[seatPayload,tripVehicleId]);
+ const assignedByPassenger=useMemo(()=>new Map(currentSeatAssignments.filter(a=>a.passenger_id).map(a=>[s(a.passenger_id),a])),[currentSeatAssignments]);
+ useEffect(()=>{if(!existing||!tripVehicleId||!existingPassengers.length)return;const init={};existingPassengers.forEach((p,i)=>{const a=assignedByPassenger.get(s(p.id));if(a) init[i]=s(a.seat_no)});setSeatChoices(init)},[existing?.id,tripVehicleId,seatPayload]);
+ const reservedSeatNos=useMemo(()=>new Set(currentSeatAssignments.map(a=>s(a.seat_no))),[currentSeatAssignments]);
+ const chosenSeatNos=useMemo(()=>new Set(Object.values(seatChoices).filter(Boolean).map(s)),[seatChoices]);
+ const totalSeats=seatRows.length,activeSeatCount=currentSeatAssignments.length,availableSeatCount=Math.max(0,totalSeats-activeSeatCount);
+ function seatsForPassenger(i){const currentPassengerId=passengers[i]?.id;const currentAssignment=currentPassengerId?assignedByPassenger.get(s(currentPassengerId)):null;return seatRows.filter(row=>{const no=s(row.seat_no);const occupied=currentSeatAssignments.find(a=>s(a.seat_no)===no);if(occupied&&s(occupied.passenger_id)!==s(currentPassengerId))return false;if(chosenSeatNos.has(no)&&s(seatChoices[i])!==no)return false;return true})}
+
+ function setCustomer(key,value){setCustomerDraft(x=>({...x,[key]:value}));if(!existing&&['name','phone','identity','nationality','gender'].includes(key))setPassengers(arr=>arr.map((p,i)=>i===0?{...p,[key==='identity'?'identity':key]:value}:p))}
+ function copyCustomerToFirst(){setPassengers(arr=>arr.map((p,i)=>i?p:{...p,name:customerDraft.name,phone:customerDraft.phone,identity:customerDraft.identity,nationality:customerDraft.nationality,gender:customerDraft.gender}))}
  function updatePassenger(i,key,value){setPassengers(a=>a.map((x,j)=>j===i?{...x,[key]:value}:x));if(key==='gender'&&isFemale(value)&&accommodation==='shared')setAccommodation('private')}
+ function removePassenger(i){setPassengers(a=>a.filter((_,j)=>j!==i));setSeatChoices(old=>{const next={};Object.entries(old).forEach(([k,v])=>{const x=Number(k);if(x<i)next[x]=v;else if(x>i)next[x-1]=v});return next})}
  function applySuggested(){setTotalPrice(suggested)}
- function validate(paid){
-   if(!tripId)return 'اختر الرحلة.';
-   if(journeyMode==='separate'&&!returnTripId)return 'اختر رحلة العودة المنفصلة.';
-   if(journeyMode==='separate'&&String(returnTripId)===String(tripId))return 'رحلة العودة المنفصلة يجب أن تكون مختلفة عن رحلة الذهاب.';
-   if(accommodation==='shared'&&sharedHousingBlocked)return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';
-   if(accommodation==='private'&&Number(housingDays)<1)return 'عدد أيام السكن إلزامي عند اختيار غرفة خاصة.';
-   if(accommodation==='private'&&Number(privateRooms)<1)return 'عدد الغرف الخاصة يجب أن يكون غرفة واحدة على الأقل.';
-   if(!passengers.length)return 'أضف مسافرًا واحدًا على الأقل.';
-   if(passengers.some(p=>!String(p.name||'').trim()||!String(p.identity||'').trim()))return 'اسم وهوية كل مسافر مطلوبان.';
-   const ids=passengers.map(p=>String(p.identity||'').trim()).filter(Boolean);if(new Set(ids).size!==ids.length)return 'يوجد رقم هوية مكرر داخل نفس الحجز.';
-   if(n(totalPrice)<0||paid<0)return 'المبالغ لا يمكن أن تكون سالبة.';
-   if(paid>n(totalPrice)+0.001)return 'المدفوع لا يمكن أن يكون أكبر من إجمالي الحجز.';
-   if(!customerDraft.name.trim()||!customerDraft.phone.trim()||!customerDraft.identity.trim())return 'اسم العميل والجوال والهوية مطلوبة.';
-   if(onlyDigits(customerDraft.phone).length<8)return 'رقم جوال العميل غير مكتمل.';
-   return '';
- }
- async function save(e){
-   e.preventDefault();setErr('');
-   const submitAction=e.nativeEvent?.submitter?.dataset?.action||'save';
-   const form=new FormData(e.currentTarget);const f=Object.fromEntries(form);const paid=n(f.paid_amount);
-   const validation=validate(paid);if(validation){setErr(validation);return}
-   const waWindow=submitAction==='save_wa'?window.open('about:blank','_blank'):null;
-   setSaving(true);
-   const bookingNumber=existing?.booking_number||`MAH-${Date.now().toString().slice(-8)}`;
-   const accommodationLabel=accommodation==='none'?'بدون سكن':accommodation==='shared'?'سكن مشترك خماسي':'غرفة خاصة';
-   const branchId=f.branch_id||selectedBranchId;
-   const branchRel=(data.tripBranches||[]).find(x=>String(x.trip_id)===String(tripId)&&String(x.branch_id)===String(branchId));
-   const snapshot={
-     ...snap,journeyMode,tripId,returnTripId:returnTripId||null,accommodationType:accommodation,
-     housingDays:accommodation==='private'?Number(housingDays):0,privateRooms:accommodation==='private'?Number(privateRooms):0,privateRoomType:accommodation==='private'?privateRoomType:null,
-     totalPrice:n(totalPrice),paidAmount:paid,passengerDetails:passengers,boardingPoint:branchRel?.boarding_point||null,boardingTime:branchRel?.boarding_time||null
-   };
-   const base={
-     booking_number:bookingNumber,branch_id:branchId,trip_id:tripId||null,return_trip_id:returnTripId||null,journey_mode:journeyMode,
-     customer_name:customerDraft.name.trim(),customer_phone:customerDraft.phone.trim(),customer_identity:customerDraft.identity.trim(),
-     customer_gender:customerDraft.gender,customer_nationality:customerDraft.nationality.trim(),accommodation_type:accommodation,accommodation_label:accommodationLabel,
-     private_rooms:accommodation==='private'?Number(privateRooms):0,private_room_types:accommodation==='private'?Array.from({length:Number(privateRooms)},()=> privateRoomType):[],
-     total_price:n(totalPrice),original_price:n(suggested||totalPrice),paid_amount:paid,payment_method:f.payment_method||null,
-     payment_reference:String(f.payment_reference||'').trim()||null,notes:f.notes||'',terms_accepted:true,source:'branch',
-     version_no:Number(existing?.version_no||1),status:existing?.status||'confirmed',snapshot
-   };
-   const pRows=passengers.map((p,i)=>({
-     id:p.id||null,passenger_order:i+1,full_name:String(p.name||'').trim(),gender:p.gender,nationality:String(p.nationality||'').trim(),
-     identity_number:String(p.identity||'').trim(),phone:String(p.phone||'').trim(),status:p.status||'confirmed',
-     accommodation_status:p.accommodationStatus||'active',preferred_language:p.preferredLanguage||'ar',assistance_flags:Array.isArray(p.assistanceFlags)?p.assistanceFlags:[],document_status:p.documentStatus||'unknown'
-   }));
-   try{
-     if(existing){
-       await api.admin({action:'update_booking',booking:{
-         ...base,number:bookingNumber,versionNo:Number(existing.version_no||1),name:base.customer_name,phone:base.customer_phone,identity:base.customer_identity,
-         gender:base.customer_gender,nationality:base.customer_nationality,journeyMode,tripId,returnTripId:returnTripId||null,totalPrice:n(totalPrice),paidAmount:paid,
-         paymentMethod:base.payment_method,paymentReference:base.payment_reference,notes:base.notes,accommodationType:accommodation,accommodationLabel,
-         privateRooms:Number(privateRooms),snapshot,passengerDetails:passengers
-       }});
-     }else await api.customerBook(base,pRows);
-     await refresh();
-     if(submitAction==='save_wa'){
-       const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';
-       const msg=[`شركة الماهر الماسي`,`رقم الحجز: ${bookingNumber}`,customerDraft.name?`العميل: ${customerDraft.name}`:'',route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${trip.departure_date} ${trip.departure_time||''}`:'',`الإجمالي: ${money(totalPrice)}`,`المدفوع: ${money(paid)}`].filter(Boolean).join('\n');
-       const href=`https://wa.me/${phoneWa(customerDraft.phone)}?text=${encodeURIComponent(msg)}`;
-       if(waWindow)waWindow.location.href=href;else window.open(href,'_blank');
-     }
-     go('/bookings/'+bookingNumber,{replace:true});
-   }catch(error){if(waWindow&&!waWindow.closed)waWindow.close();setErr(error.message)}finally{setSaving(false)}
- }
+ function validate(paid){if(!tripId)return 'اختر الرحلة.';if(journeyMode==='separate'&&!returnTripId)return 'اختر رحلة العودة المنفصلة.';if(journeyMode==='separate'&&String(returnTripId)===String(tripId))return 'رحلة العودة المنفصلة يجب أن تكون مختلفة عن رحلة الذهاب.';if(accommodation==='shared'&&sharedHousingBlocked)return 'السكن المشترك غير متاح للنساء. اختر غرفة خاصة أو بدون سكن.';if(accommodation==='private'&&Number(housingDays)<1)return 'عدد أيام السكن إلزامي عند اختيار غرفة خاصة.';if(accommodation==='private'&&Number(privateRooms)<1)return 'عدد الغرف الخاصة يجب أن يكون غرفة واحدة على الأقل.';if(!passengers.length)return 'أضف مسافرًا واحدًا على الأقل.';if(passengers.some(p=>!String(p.name||'').trim()||!String(p.identity||'').trim()))return 'اسم وهوية كل مسافر مطلوبان.';const ids=passengers.map(p=>String(p.identity||'').trim()).filter(Boolean);if(new Set(ids).size!==ids.length)return 'يوجد رقم هوية مكرر داخل نفس الحجز.';if(n(totalPrice)<0||paid<0)return 'المبالغ لا يمكن أن تكون سالبة.';if(paid>n(totalPrice)+0.001)return 'المدفوع لا يمكن أن يكون أكبر من إجمالي الحجز.';if(!customerDraft.name.trim()||!customerDraft.phone.trim()||!customerDraft.identity.trim())return 'اسم العميل والجوال والهوية مطلوبة.';if(onlyDigits(customerDraft.phone).length<8)return 'رقم جوال العميل غير مكتمل.';return ''}
+ async function applySeatsAfterSave(fresh,bookingNumber){const savedBooking=(fresh?.bookings||[]).find(b=>s(b.booking_number)===s(bookingNumber));if(!savedBooking)return;const savedPassengers=(fresh?.passengers||[]).filter(p=>s(p.booking_id)===s(savedBooking.id)).sort((a,b)=>Number(a.passenger_order||0)-Number(b.passenger_order||0));if(!tripVehicleId){notifyWarning(`تم حفظ الحجز، لكن لم يتم تحديد مقاعد لأن الرحلة لا يوجد لها باص معيّن.`);return}
+   let failures=0;for(let i=0;i<savedPassengers.length;i++){const p=savedPassengers[i],wanted=s(seatChoices[i]);const old=assignedByPassenger.get(s(p.id));try{if(wanted){await api.seatAtomicSilent({action:'assign',trip_vehicle_id:tripVehicleId,segment_type:'outbound',seat_no:wanted,passenger_id:p.id,booking_id:savedBooking.id})}else if(old){await api.seatAtomicSilent({action:'released',trip_vehicle_id:tripVehicleId,segment_type:'outbound',seat_no:s(old.seat_no)})}}catch{failures++}}
+   const latest=await api.module('seats').catch(()=>null);if(latest)setSeatPayload(latest);const latestAssignments=(latest?.seat_assignments||[]).filter(a=>s(a.trip_vehicle_id)===s(tripVehicleId)&&s(a.segment_type||'outbound')==='outbound'&&activeSeat(a));const latestVehicle=(latest?.trip_vehicles||[]).find(x=>s(x.id)===s(tripVehicleId));const latestV=(latest?.vehicles||[]).find(v=>s(v.id)===s(latestVehicle?.vehicle_id));const explicit=(latest?.vehicle_seats||[]).filter(x=>s(x.vehicle_id)===s(latestVehicle?.vehicle_id)&&x.active!==false).length;const capacity=explicit||Number(latestVehicle?.booking_capacity||latestVehicle?.capacity||latestV?.booking_capacity||latestV?.physical_capacity||totalSeats||0);const assigned=latestAssignments.filter(a=>low(a.status)==='assigned').length;const free=Math.max(0,capacity-latestAssignments.length);const unseated=savedPassengers.filter(p=>!latestAssignments.some(a=>low(a.status)==='assigned'&&s(a.passenger_id)===s(p.id))).length;if(failures)notifyWarning(`تم حفظ الحجز، لكن تعذر تثبيت ${failures} مقعد. راجع شاشة المقاعد.`);if(unseated)notifyWarning(`لم يتم تحديد مقعد لـ ${unseated} ${unseated===1?'مسافر':'مسافرين'} في هذا الحجز.`);notifyInfo(`المقاعد بعد الحجز: محجوز ${assigned} · متاح ${free} · إجمالي ${capacity}`)}
+ async function save(e){e.preventDefault();setErr('');const submitAction=e.nativeEvent?.submitter?.dataset?.action||'save';const form=new FormData(e.currentTarget),f=Object.fromEntries(form),paid=n(f.paid_amount);const validation=validate(paid);if(validation){setErr(validation);return}const waWindow=submitAction==='save_wa'?window.open('about:blank','_blank'):null;setSaving(true);const bookingNumber=existing?.booking_number||`MAH-${Date.now().toString().slice(-8)}`;const accommodationLabel=accommodation==='none'?'بدون سكن':accommodation==='shared'?'سكن مشترك خماسي':'غرفة خاصة';const branchId=f.branch_id||selectedBranchId;const branchRel=(data.tripBranches||[]).find(x=>s(x.trip_id)===s(tripId)&&s(x.branch_id)===s(branchId));const snapshot={...snap,journeyMode,tripId,returnTripId:returnTripId||null,accommodationType:accommodation,housingDays:accommodation==='private'?Number(housingDays):0,privateRooms:accommodation==='private'?Number(privateRooms):0,privateRoomType:accommodation==='private'?privateRoomType:null,totalPrice:n(totalPrice),paidAmount:paid,passengerDetails:passengers,boardingPoint:branchRel?.boarding_point||null,boardingTime:branchRel?.boarding_time||null};const base={booking_number:bookingNumber,branch_id:branchId,trip_id:tripId||null,return_trip_id:returnTripId||null,journey_mode:journeyMode,customer_name:customerDraft.name.trim(),customer_phone:customerDraft.phone.trim(),customer_identity:customerDraft.identity.trim(),customer_gender:customerDraft.gender,customer_nationality:customerDraft.nationality.trim(),accommodation_type:accommodation,accommodation_label:accommodationLabel,private_rooms:accommodation==='private'?Number(privateRooms):0,private_room_types:accommodation==='private'?Array.from({length:Number(privateRooms)},()=>privateRoomType):[],total_price:n(totalPrice),original_price:n(suggested||totalPrice),paid_amount:paid,payment_method:f.payment_method||null,payment_reference:String(f.payment_reference||'').trim()||null,notes:f.notes||'',terms_accepted:true,source:'branch',version_no:Number(existing?.version_no||1),status:existing?.status||'confirmed',snapshot};const pRows=passengers.map((p,i)=>({id:p.id||null,passenger_order:i+1,full_name:String(p.name||'').trim(),gender:p.gender,nationality:String(p.nationality||'').trim(),identity_number:String(p.identity||'').trim(),phone:String(p.phone||'').trim(),status:p.status||'confirmed',accommodation_status:p.accommodationStatus||'active',preferred_language:p.preferredLanguage||'ar',assistance_flags:Array.isArray(p.assistanceFlags)?p.assistanceFlags:[],document_status:p.documentStatus||'unknown'}));try{if(existing){await api.admin({action:'update_booking',booking:{...base,number:bookingNumber,versionNo:Number(existing.version_no||1),name:base.customer_name,phone:base.customer_phone,identity:base.customer_identity,gender:base.customer_gender,nationality:base.customer_nationality,journeyMode,tripId,returnTripId:returnTripId||null,totalPrice:n(totalPrice),paidAmount:paid,paymentMethod:base.payment_method,paymentReference:base.payment_reference,notes:base.notes,accommodationType:accommodation,accommodationLabel,privateRooms:Number(privateRooms),snapshot,passengerDetails:passengers}})}else await api.customerBook(base,pRows);const fresh=await refresh();await applySeatsAfterSave(fresh,bookingNumber);if(submitAction==='save_wa'){const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';const msg=[`شركة الماهر الماسي`,`رقم الحجز: ${bookingNumber}`,customerDraft.name?`العميل: ${customerDraft.name}`:'',route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${trip.departure_date} ${trip.departure_time||''}`:'',`الإجمالي: ${money(totalPrice)}`,`المدفوع: ${money(paid)}`].filter(Boolean).join('\n');const href=`https://wa.me/${phoneWa(customerDraft.phone)}?text=${encodeURIComponent(msg)}`;if(waWindow)waWindow.location.href=href;else window.open(href,'_blank')}go('/bookings/'+bookingNumber,{replace:true})}catch(error){if(waWindow&&!waWindow.closed)waWindow.close();setErr(error.message)}finally{setSaving(false)}}
 
  const tripLabel=journeyMode==='returnonly'?'رحلة العودة':'رحلة الذهاب / الأساسية';
- return <>
-  <PageHeader title={existing?`تعديل الحجز ${existing.booking_number}`:'حجز جديد'} subtitle="الحجز والمسافرون والسكن والتحصيل في شاشة واحدة" actions={<>
-   <Button onClick={()=>go('/bookings')}><ArrowRight size={16}/> رجوع</Button>
-   {existing&&<><Button onClick={()=>go('/ticket/'+existing.booking_number)}><Ticket size={16}/> التذكرة</Button><Button onClick={()=>go('/refunds?booking='+existing.booking_number)}><RotateCcw size={16}/> استرداد</Button></>}
-  </>}/>
-  <ErrorBox error={err}/>
-  <form onSubmit={save}>
-   <div className="editor-grid">
-    <Card>
-     <div className="card-title"><h3>بيانات الحجز</h3>{existing&&<Badge tone={existing.status==='cancelled'?'red':'green'}>{existing.status||'confirmed'}</Badge>}</div>
-     <div className="form-grid">
-      <Field label="الفرع"><Select name="branch_id" defaultValue={selectedBranchId} required>{availableBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
-      <Field label="نوع الرحلة"><Select value={journeyMode} onChange={e=>{setJourneyMode(e.target.value);if(!['separate','roundtrip'].includes(e.target.value))setReturnTripId('')}}><option value="oneway">ذهاب فقط</option><option value="roundtrip">ذهاب وعودة</option><option value="separate">ذهاب + عودة من رحلة أخرى</option><option value="returnonly">عودة فقط</option></Select></Field>
-      <Field label={tripLabel}><Select value={tripId} onChange={e=>setTripId(e.target.value)} required><option value="">اختر الرحلة</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field>
-      <Field label={journeyMode==='separate'?'رحلة العودة المنفصلة':'رحلة العودة (اختيارية)'} hint={journeyMode==='roundtrip'?'اتركها بدون إذا كانت العودة مدمجة في نفس الرحلة.':undefined}><Select value={returnTripId} onChange={e=>setReturnTripId(e.target.value)} disabled={!['separate','roundtrip'].includes(journeyMode)} required={journeyMode==='separate'}><option value="">بدون</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field>
-      <Field label="اسم العميل"><Input value={customerDraft.name} onChange={e=>setCustomer('name',e.target.value)} required/></Field>
-      <Field label="الجوال"><Input value={customerDraft.phone} onChange={e=>setCustomer('phone',e.target.value)} inputMode="tel" required/></Field>
-      <Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field>
-      <Field label="الجنسية"><Select value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}>{nationalityOptions(customerDraft.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field>
-      <Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>{const v=e.target.value;setCustomer('gender',v);if(isFemale(v)&&accommodation==='shared')setAccommodation('private')}}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
-      <Field label="نوع السكن" hint={sharedHousingBlocked?'السكن المشترك يظهر للتوضيح لكنه غير متاح عند وجود مسافرة أنثى في الحجز.':'السكن المشترك الخماسي متاح للرجال فقط.'}><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option><option value="shared" disabled={sharedHousingBlocked}>مشترك خماسي — رجال فقط{sharedHousingBlocked?' (غير متاح لهذا الحجز)':''}</option><option value="private">غرفة خاصة</option></Select></Field>
-      {accommodation==='private'&&<><Field label="نوع الغرفة الخاصة"><Select value={privateRoomType} onChange={e=>setPrivateRoomType(e.target.value)}><option value="single">مفردة</option><option value="double">مزدوجة</option><option value="triple">ثلاثية</option><option value="quad">رباعية</option><option value="quint">خماسية</option></Select></Field><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}
-      <Field label="السعر المقترح"><div className="price-suggestion"><strong>{money(suggested)}</strong><Button type="button" onClick={applySuggested}><Calculator size={15}/> اعتماد السعر</Button></div></Field>
-      <Field label="الإجمالي النهائي"><Input type="number" min="0" step="0.01" value={totalPrice} onChange={e=>setTotalPrice(Number(e.target.value))}/></Field>
-      <Field label="المدفوع"><Input type="number" min="0" max={Math.max(0,n(totalPrice))} step="0.01" name="paid_amount" defaultValue={existing?.paid_amount||0}/></Field>
-      <Field label="طريقة الدفع"><Select name="payment_method" defaultValue={existing?.payment_method||'cash'}><option value="cash">نقدي</option><option value="bank_transfer">تحويل بنكي</option><option value="mada">مدى</option><option value="online">دفع إلكتروني</option></Select></Field>
-      <Field label="مرجع الدفع / رقم العملية"><Input name="payment_reference" defaultValue={existing?.payment_reference||snap.paymentReference||''}/></Field>
-      <Field label="ملاحظات"><Textarea name="notes" defaultValue={existing?.notes||''}/></Field>
-     </div>
-     <div className="booking-summary-strip"><span>{journeyLabel(journeyMode)}</span><span>{selectedBranch?.name||'الفرع'}</span><strong>المتبقي الحالي: {money(remaining)}</strong></div>
-    </Card>
-    <Card>
-     <div className="card-title"><h3>المسافرون</h3><div className="row-actions">{existing&&<Button type="button" onClick={copyCustomerToFirst}><Copy size={15}/> نسخ العميل للأول</Button>}<Button type="button" onClick={()=>setPassengers(p=>[...p,emptyP()])}><Plus size={16}/> إضافة</Button></div></div>
-     {!existing&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>بيانات المسافر الأول تتزامن تلقائيًا مع بيانات العميل أثناء إنشاء الحجز.</div>}
-     <div className="passengers-editor">{passengers.map((p,i)=><div className="passenger-box" key={p.id||i}>
-      <div className="passenger-number">{i+1}</div>
-      <div className="form-grid compact">
-       <Field label="الاسم"><Input value={p.name} onChange={e=>updatePassenger(i,'name',e.target.value)} required readOnly={!existing&&i===0}/></Field>
-       <Field label="الهوية"><Input value={p.identity} onChange={e=>updatePassenger(i,'identity',e.target.value)} required readOnly={!existing&&i===0}/></Field>
-       <Field label="الجنسية"><Select value={p.nationality||'السعودية'} onChange={e=>updatePassenger(i,'nationality',e.target.value)} disabled={!existing&&i===0}>{nationalityOptions(p.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field>
-       <Field label="الجوال"><Input value={p.phone||''} onChange={e=>updatePassenger(i,'phone',e.target.value)} inputMode="tel" readOnly={!existing&&i===0}/></Field>
-       <Field label="الجنس"><Select value={p.gender||'male'} onChange={e=>updatePassenger(i,'gender',e.target.value)} disabled={!existing&&i===0}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field>
-       <Field label="لغة التواصل"><Select value={p.preferredLanguage||'ar'} onChange={e=>updatePassenger(i,'preferredLanguage',e.target.value)}><option value="ar">العربية</option><option value="en">English</option><option value="tr">Türkçe</option><option value="hi">हिन्दी</option><option value="it">Italiano</option><option value="fr">Français</option><option value="ur">اردو</option></Select></Field>
-      </div>
-      {passengers.length>1&&<button className="remove-passenger" type="button" onClick={()=>setPassengers(a=>a.filter((_,j)=>j!==i))}><Trash2 size={16}/></button>}
-     </div>)}</div>
-    </Card>
-   </div>
-   <div className="sticky-save"><Button variant="primary" type="submit" data-action="save" disabled={saving}>{saving?'جاري الحفظ...':'حفظ الحجز'}</Button><Button type="submit" data-action="save_wa" disabled={saving}><MessageCircle size={16}/> حفظ وإرسال واتساب</Button></div>
-  </form>
- </>;
+ return <><PageHeader title={existing?`تعديل الحجز ${existing.booking_number}`:'حجز جديد'} subtitle="الحجز والمسافرون والسكن والتحصيل والمقاعد الاختيارية في شاشة واحدة" actions={<><Button onClick={()=>go('/bookings')}><ArrowRight size={16}/> رجوع</Button>{existing&&<><Button onClick={()=>go('/ticket/'+existing.booking_number)}><Ticket size={16}/> التذكرة</Button><Button onClick={()=>go('/refunds?booking='+existing.booking_number)}><RotateCcw size={16}/> استرداد</Button></>}</>}/><ErrorBox error={err}/><form onSubmit={save}><div className="editor-grid"><Card><div className="card-title"><h3>بيانات الحجز</h3>{existing&&<Badge tone={existing.status==='cancelled'?'red':'green'}>{existing.status||'confirmed'}</Badge>}</div><div className="form-grid"><Field label="الفرع"><Select name="branch_id" defaultValue={selectedBranchId} required>{availableBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field><Field label="نوع الرحلة"><Select value={journeyMode} onChange={e=>{setJourneyMode(e.target.value);if(!['separate','roundtrip'].includes(e.target.value))setReturnTripId('')}}><option value="oneway">ذهاب فقط</option><option value="roundtrip">ذهاب وعودة</option><option value="separate">ذهاب + عودة من رحلة أخرى</option><option value="returnonly">عودة فقط</option></Select></Field><Field label={tripLabel}><Select value={tripId} onChange={e=>setTripId(e.target.value)} required><option value="">اختر الرحلة</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field><Field label={journeyMode==='separate'?'رحلة العودة المنفصلة':'رحلة العودة (اختيارية)'} hint={journeyMode==='roundtrip'?'اتركها بدون إذا كانت العودة مدمجة في نفس الرحلة.':undefined}><Select value={returnTripId} onChange={e=>setReturnTripId(e.target.value)} disabled={!['separate','roundtrip'].includes(journeyMode)} required={journeyMode==='separate'}><option value="">بدون</option>{trips.map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select></Field><Field label="اسم العميل"><Input value={customerDraft.name} onChange={e=>setCustomer('name',e.target.value)} required/></Field><Field label="الجوال"><Input value={customerDraft.phone} onChange={e=>setCustomer('phone',e.target.value)} inputMode="tel" required/></Field><Field label="الهوية / الإقامة"><Input value={customerDraft.identity} onChange={e=>setCustomer('identity',e.target.value)} required/></Field><Field label="الجنسية"><Select value={customerDraft.nationality} onChange={e=>setCustomer('nationality',e.target.value)}>{nationalityOptions(customerDraft.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field><Field label="الجنس"><Select value={customerDraft.gender} onChange={e=>{const v=e.target.value;setCustomer('gender',v);if(isFemale(v)&&accommodation==='shared')setAccommodation('private')}}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field><Field label="نوع السكن" hint={sharedHousingBlocked?'السكن المشترك يظهر للتوضيح لكنه غير متاح عند وجود مسافرة أنثى في الحجز.':'السكن المشترك الخماسي متاح للرجال فقط.'}><Select value={accommodation} onChange={e=>setAccommodation(e.target.value)}><option value="none">بدون سكن</option><option value="shared" disabled={sharedHousingBlocked}>مشترك خماسي — رجال فقط{sharedHousingBlocked?' (غير متاح لهذا الحجز)':''}</option><option value="private">غرفة خاصة</option></Select></Field>{accommodation==='private'&&<><Field label="نوع الغرفة الخاصة"><Select value={privateRoomType} onChange={e=>setPrivateRoomType(e.target.value)}><option value="single">مفردة</option><option value="double">مزدوجة</option><option value="triple">ثلاثية</option><option value="quad">رباعية</option><option value="quint">خماسية</option></Select></Field><Field label="عدد الغرف الخاصة"><Input type="number" min="1" value={privateRooms} onChange={e=>setPrivateRooms(Number(e.target.value))}/></Field><Field label="عدد أيام السكن"><Input type="number" min="1" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field></>}<Field label="السعر المقترح"><div className="price-suggestion"><strong>{money(suggested)}</strong><Button type="button" onClick={applySuggested}><Calculator size={15}/> اعتماد السعر</Button></div></Field><Field label="الإجمالي النهائي"><Input type="number" min="0" step="0.01" value={totalPrice} onChange={e=>setTotalPrice(Number(e.target.value))}/></Field><Field label="المدفوع"><Input type="number" min="0" max={Math.max(0,n(totalPrice))} step="0.01" name="paid_amount" defaultValue={existing?.paid_amount||0}/></Field><Field label="طريقة الدفع"><Select name="payment_method" defaultValue={existing?.payment_method||'cash'}><option value="cash">نقدي</option><option value="bank_transfer">تحويل بنكي</option><option value="mada">مدى</option><option value="online">دفع إلكتروني</option></Select></Field><Field label="مرجع الدفع / رقم العملية"><Input name="payment_reference" defaultValue={existing?.payment_reference||snap.paymentReference||''}/></Field><Field label="ملاحظات"><Textarea name="notes" defaultValue={existing?.notes||''}/></Field></div><div className="booking-summary-strip"><span>{journeyLabel(journeyMode)}</span><span>{selectedBranch?.name||'الفرع'}</span><strong>المتبقي الحالي: {money(remaining)}</strong></div></Card><Card><div className="card-title"><h3>المسافرون</h3><div className="row-actions">{existing&&<Button type="button" onClick={copyCustomerToFirst}><Copy size={15}/> نسخ العميل للأول</Button>}<Button type="button" onClick={()=>setPassengers(p=>[...p,emptyP()])}><Plus size={16}/> إضافة</Button></div></div>{!existing&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>بيانات المسافر الأول تتزامن تلقائيًا مع بيانات العميل أثناء إنشاء الحجز.</div>}<div className="passengers-editor">{passengers.map((p,i)=><div className="passenger-box" key={p.id||i}><div className="passenger-number">{i+1}</div><div className="form-grid compact"><Field label="الاسم"><Input value={p.name} onChange={e=>updatePassenger(i,'name',e.target.value)} required readOnly={!existing&&i===0}/></Field><Field label="الهوية"><Input value={p.identity} onChange={e=>updatePassenger(i,'identity',e.target.value)} required readOnly={!existing&&i===0}/></Field><Field label="الجنسية"><Select value={p.nationality||'السعودية'} onChange={e=>updatePassenger(i,'nationality',e.target.value)} disabled={!existing&&i===0}>{nationalityOptions(p.nationality).map(x=><option key={x} value={x}>{x}</option>)}</Select></Field><Field label="الجوال"><Input value={p.phone||''} onChange={e=>updatePassenger(i,'phone',e.target.value)} inputMode="tel" readOnly={!existing&&i===0}/></Field><Field label="الجنس"><Select value={p.gender||'male'} onChange={e=>updatePassenger(i,'gender',e.target.value)} disabled={!existing&&i===0}><option value="male">ذكر</option><option value="female">أنثى</option></Select></Field><Field label="لغة التواصل"><Select value={p.preferredLanguage||'ar'} onChange={e=>updatePassenger(i,'preferredLanguage',e.target.value)}><option value="ar">العربية</option><option value="en">English</option><option value="tr">Türkçe</option><option value="hi">हिन्दी</option><option value="it">Italiano</option><option value="fr">Français</option><option value="ur">اردو</option></Select></Field></div>{passengers.length>1&&<button className="remove-passenger" type="button" onClick={()=>removePassenger(i)}><Trash2 size={16}/></button>}</div>)}</div><div style={{marginTop:18,borderTop:'1px solid #e5e7eb',paddingTop:16}}><div className="card-title"><div><h3><Armchair size={18}/> اختيار المقاعد — اختياري</h3><small>للموظف فقط. يمكن حفظ الحجز بدون مقاعد، وسيظهر تنبيه بعد الحفظ.</small></div></div>{tripVehicles.length?<><div className="form-grid compact"><Field label="باص الرحلة"><Select value={tripVehicleId} onChange={e=>setTripVehicleId(e.target.value)}><option value="">اختر الباص</option>{tripVehicles.map(x=><option key={x.id} value={x.id}>{x.bus_label||'باص'} — سعة {x.booking_capacity||x.capacity||49}</option>)}</Select></Field><Field label="حالة المقاعد"><div className="price-suggestion"><Badge tone="orange">محجوز/غير متاح {activeSeatCount}</Badge><Badge tone="green">متاح {availableSeatCount}</Badge><Badge>إجمالي {totalSeats}</Badge></div></Field></div>{tripVehicleId&&<div className="form-grid compact">{passengers.map((p,i)=><Field key={p.id||i} label={`مقعد ${p.name||`المسافر ${i+1}`}`}><Select value={seatChoices[i]||''} onChange={e=>setSeatChoices(x=>({...x,[i]:e.target.value}))}><option value="">بدون تحديد الآن</option>{seatsForPassenger(i).map(x=><option key={x.seat_no} value={x.seat_no}>مقعد {x.seat_no}</option>)}</Select></Field>)}</div>}</>:<div className="training-banner" style={{background:'#fff7ed',color:'#9a3412',borderColor:'#fed7aa'}}>لا يوجد باص معيّن لهذه الرحلة حتى الآن؛ يمكن حفظ الحجز، وسيظل المسافرون بدون مقاعد لحين التعيين من شاشة المقاعد.</div>}</div></Card></div><div className="sticky-save"><Button variant="primary" type="submit" data-action="save" disabled={saving}>{saving?'جاري الحفظ...':'حفظ الحجز'}</Button><Button type="submit" data-action="save_wa" disabled={saving}><MessageCircle size={16}/> حفظ وإرسال واتساب</Button></div></form></>;
 }
