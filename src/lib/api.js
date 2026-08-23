@@ -1,3 +1,5 @@
+import {mutationSuccessMessage,notifyError,notifySuccess} from './feedback.js';
+
 export function arabicError(value,status){
   const m=String(value||'').trim();
   if(!m)return 'تعذر تنفيذ العملية. حاول مرة أخرى.';
@@ -23,10 +25,18 @@ export function arabicError(value,status){
   if(Number(status)>=500)return 'حدث خطأ بالخادم أثناء تنفيذ العملية. حاول مرة أخرى.';
   return m;
 }
-async function request(path,{method='GET',body,headers={}}={}){
-  const response=await fetch(path,{method,credentials:'include',headers:{Accept:'application/json',...(body!==undefined?{'Content-Type':'application/json'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
+async function request(path,{method='GET',body,headers={},feedback=true}={}){
+  let response;
+  try{
+    response=await fetch(path,{method,credentials:'include',headers:{Accept:'application/json',...(body!==undefined?{'Content-Type':'application/json'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
+  }catch(networkError){
+    const message=arabicError(networkError?.message||networkError,0);
+    if(method!=='GET'&&feedback)notifyError(message);
+    const e=new Error(message);e.rawMessage=networkError?.message||String(networkError);throw e;
+  }
   const text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
-  if(!response.ok){const raw=data?.error||data?.message||`HTTP ${response.status}`;const e=new Error(arabicError(raw,response.status));e.status=response.status;e.data=data;e.rawMessage=raw;throw e}
+  if(!response.ok){const raw=data?.error||data?.message||`HTTP ${response.status}`;const message=arabicError(raw,response.status);if(method!=='GET'&&feedback)notifyError(message);const e=new Error(message);e.status=response.status;e.data=data;e.rawMessage=raw;throw e}
+  if(method!=='GET'&&feedback){const message=mutationSuccessMessage(path,body);if(message)notifySuccess(message)}
   return data;
 }
 function normalizeAdminBody(body){
@@ -51,22 +61,23 @@ async function adminRequest(body){
   for(let i=0;i<normalized.rows.length;i+=chunkSize){
     const chunk=normalized.rows.slice(i,i+chunkSize);
     try{
-      results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:chunk}}));
+      results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:chunk},feedback:false}));
     }catch(err){
       if(!isWorkerSubrequestLimitError(err)||chunk.length===1)throw err;
       for(const row of chunk){
-        results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:[row]}}));
+        results.push(await request('/api/admin',{method:'POST',body:{...normalized,rows:[row]},feedback:false}));
       }
     }
   }
+  notifySuccess('تم حفظ الرحلات بنجاح.');
   return {ok:true,batches:results.length,results};
 }
 export const api={
   health:()=>request('/api/health'),
   me:()=>request('/api/auth/me'),
-  login:(identity,password,method='username')=>request('/api/auth/login',{method:'POST',body:{identity,password,method}}),
-  developerLogin:(email,password)=>request('/api/auth/developer',{method:'POST',body:{email,password}}),
-  logout:()=>request('/api/auth/logout',{method:'POST'}),
+  login:(identity,password,method='username')=>request('/api/auth/login',{method:'POST',body:{identity,password,method},feedback:false}),
+  developerLogin:(email,password)=>request('/api/auth/developer',{method:'POST',body:{email,password},feedback:false}),
+  logout:()=>request('/api/auth/logout',{method:'POST',feedback:false}),
   bootstrap:()=>request('/api/bootstrap'),
   admin:(body)=>adminRequest(body),
   platform:(body)=>request('/api/platform',{method:'POST',body}),
