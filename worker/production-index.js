@@ -3,6 +3,8 @@ import auditWorker from './audit-index.js';
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const headers=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
+const coreTables=['trips','bookings','booking_passengers','transactions','expenses','refunds','cash_shifts','room_assignments','seat_assignments','scan_events','approval_requests'];
+const protectedTables=['branches','staff_users','roles','permissions','system_settings','developer_settings','document_templates'];
 
 async function actorFrom(request,env){
   try{
@@ -42,7 +44,6 @@ async function productionReadiness(request,env){
   if(!isDeveloper(actor))return json({error:'بوابة التشغيل الفعلي متاحة للمطور الحقيقي فقط.'},403);
   if(!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
 
-  const coreTables=['trips','bookings','booking_passengers','transactions','expenses','refunds','cash_shifts','room_assignments','seat_assignments','scan_events','approval_requests'];
   const tableStatus=[];
   for(const t of coreTables)tableStatus.push(await envTableStatus(env,t));
 
@@ -77,6 +78,36 @@ async function productionReadiness(request,env){
   });
 }
 
+async function trainingCleanupPreview(request,env){
+  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
+  if(!isDeveloper(actor))return json({error:'معاينة تنظيف بيانات التدريب متاحة للمطور الحقيقي فقط.'},403);
+  if(!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
+
+  const tables=[];
+  for(const table of coreTables){
+    const status=await envTableStatus(env,table);
+    tables.push({table,ok:status.ok,training:status.training,production:status.production,total:status.total,error:status.error||null,would_delete:status.ok?status.training:0});
+  }
+  const blocked=tables.filter(x=>!x.ok);
+  const wouldDelete=tables.reduce((sum,x)=>sum+(Number(x.would_delete)||0),0);
+  return json({
+    ok:blocked.length===0,
+    preview_only:true,
+    generated_at:new Date().toISOString(),
+    filter:"data_environment=training",
+    would_delete_rows:wouldDelete,
+    tables,
+    protected_tables:protectedTables,
+    warnings:[
+      'هذه معاينة قراءة فقط ولا تنفذ أي حذف.',
+      'الحذف المستقبلي - إن تم اعتماده - سيقتصر على الصفوف التي تحمل data_environment=training فقط.',
+      'الفروع والموظفون والصلاحيات والإعدادات والقوالب مستثناة من التنظيف التلقائي.'
+    ],
+    blockers:blocked.map(x=>x.table),
+    execution_available:false
+  });
+}
+
 async function createProtectedSnapshot(request,env){
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
   if(!isDeveloper(actor))return json({error:'إنشاء لقطة ما قبل التشغيل متاح للمطور الحقيقي فقط.'},403);
@@ -89,8 +120,9 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
     if(url.pathname==='/api/production/readiness'&&request.method==='GET')return productionReadiness(request,env);
+    if(url.pathname==='/api/production/cleanup-preview'&&request.method==='GET')return trainingCleanupPreview(request,env);
     if(url.pathname==='/api/production/snapshot'&&request.method==='POST')return createProtectedSnapshot(request,env);
-    if(url.pathname==='/api/production/activate')return json({error:'التفعيل الفعلي مقفول حتى ينجح فحص الجاهزية، تُنشأ Snapshot معتمدة، وتُجهز معاينة حذف بيانات التدريب وآلية Rollback.'},423);
+    if(url.pathname==='/api/production/activate')return json({error:'التفعيل الفعلي مقفول حتى ينجح فحص الجاهزية، تُنشأ Snapshot معتمدة، وتُراجع معاينة حذف بيانات التدريب، وتُجهز آلية Rollback.'},423);
     return auditWorker.fetch(request,env,ctx);
   }
 };
