@@ -25,6 +25,19 @@ function requiredPermission(table,action){
   return null;
 }
 
+async function directDriverList(env,actor){
+  const b=base(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
+  if(!allBranches(actor)&&!actor.branch_id)return json({error:'حساب الموظف غير مرتبط بفرع، لذلك لا يمكن تحديد نطاق السائقين.'},409);
+  const params=new URLSearchParams();
+  params.set('select','id,name,phone,national_id,license_no,license_expiry,status,notes,branch_id,created_at');
+  params.set('order','name.asc');
+  if(!allBranches(actor))params.set('branch_id',`eq.${actor.branch_id}`);
+  const r=await fetch(`${b}/rest/v1/drivers?${params.toString()}`,{headers:headers(env)});
+  const out=await parse(r);
+  if(!r.ok)return json({error:out?.message||'تعذر قراءة قائمة السائقين.',code:'DRIVERS_READ_FAILED'},r.status>=400&&r.status<600?r.status:502);
+  return json({ok:true,drivers:Array.isArray(out)?out:[],count:Array.isArray(out)?out.length:0,scope:allBranches(actor)?'all':'branch'});
+}
+
 async function directDriverWrite(request,env,actor,body){
   const b=base(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
   const action=String(body?.action||''),id=String(body?.id||''),h=headers(env);
@@ -46,19 +59,25 @@ async function directDriverWrite(request,env,actor,body){
   if(action==='insert'){
     const r=await fetch(`${b}/rest/v1/drivers`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(row)});const out=await parse(r);
     if(!r.ok)return json({error:out?.message||'تعذر إضافة السائق.'},r.status>=400&&r.status<600?r.status:502);
-    return json({ok:true,row:Array.isArray(out)?out[0]:out});
+    const created=Array.isArray(out)?out[0]:out;
+    if(!created?.id)return json({error:'تم إرسال طلب إضافة السائق لكن الخادم لم يرجع سجلًا يمكن التحقق منه.',code:'DRIVER_WRITE_UNVERIFIED'},502);
+    return json({ok:true,row:created,verified:true});
   }
   if(action==='update'){
     if(!id)return json({error:'معرّف السائق مطلوب.'},400);
     const r=await fetch(`${b}/rest/v1/drivers?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(row)});const out=await parse(r);
     if(!r.ok)return json({error:out?.message||'تعذر تعديل السائق.'},r.status>=400&&r.status<600?r.status:502);
-    return json({ok:true,row:Array.isArray(out)?out[0]:out});
+    const updated=Array.isArray(out)?out[0]:out;
+    if(!updated?.id)return json({error:'تم إرسال تعديل السائق لكن الخادم لم يرجع السجل بعد التعديل.',code:'DRIVER_UPDATE_UNVERIFIED'},502);
+    return json({ok:true,row:updated,verified:true});
   }
   if(action==='delete'){
     if(!id)return json({error:'معرّف السائق مطلوب.'},400);
     const r=await fetch(`${b}/rest/v1/drivers?id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:{...h,Prefer:'return=representation'}});const out=await parse(r);
     if(!r.ok)return json({error:out?.message||'تعذر حذف السائق. قد يكون مرتبطًا برحلة.'},r.status>=400&&r.status<600?r.status:502);
-    return json({ok:true,row:Array.isArray(out)?out[0]:out});
+    const deleted=Array.isArray(out)?out[0]:out;
+    if(!deleted?.id)return json({error:'لم يتم تأكيد حذف السائق من قاعدة البيانات.',code:'DRIVER_DELETE_UNVERIFIED'},502);
+    return json({ok:true,row:deleted,verified:true});
   }
   return json({error:'عملية السائق غير مدعومة.'},400);
 }
@@ -72,6 +91,7 @@ export default {
       if(resource==='drivers'){
         const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
         if(!(has(actor,'viewDrivers','addDrivers','editDrivers','deleteDrivers','manageDrivers')||legacyFleet(actor)))return json({error:'لا توجد صلاحية لعرض السائقين.'},403);
+        return directDriverList(env,actor);
       }
       if(resource==='fleet'){
         const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
