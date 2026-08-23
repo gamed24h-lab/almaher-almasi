@@ -74,6 +74,7 @@ export const api={
   module:(resource)=>request(`/api/module?resource=${encodeURIComponent(resource)}`),
   moduleWrite:(body)=>request('/api/module',{method:'POST',body}),
   seatAtomic:(body)=>request('/api/seats/atomic',{method:'POST',body}),
+  bookingTimeline:(bookingNo)=>request(`/api/bookings/timeline?bookingNo=${encodeURIComponent(bookingNo)}`),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
   destinations:()=>request('/api/destinations'),
   destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
