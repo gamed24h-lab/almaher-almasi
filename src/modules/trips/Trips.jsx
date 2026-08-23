@@ -7,7 +7,6 @@ import {money,statusLabel} from '../../lib/format.js';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {has} from '../../lib/permissions.js';
 
-const DEFAULT_CITIES=['مكة المكرمة','المدينة المنورة','تبوك','تيماء','عرعر','سكاكا','دومة الجندل','طبرجل','القريات','طريف','جدة','الرياض'];
 const DAY_NAMES=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const addDays=(d,n)=>{if(!d)return'';const x=new Date(d+'T12:00:00');x.setDate(x.getDate()+Number(n||0));return x.toISOString().slice(0,10)};
 const dayDiff=(a,b)=>{if(!a||!b)return null;const x=new Date(a+'T12:00:00'),y=new Date(b+'T12:00:00');return Math.round((y-x)/86400000)};
@@ -23,18 +22,23 @@ export default function Trips({go}){
  const [open,setOpen]=useState(false),[err,setErr]=useState(''),[showPast,setShowPast]=useState(false),[editing,setEditing]=useState(null);
  const [mainBranch,setMainBranch]=useState(''),[shared,setShared]=useState([]),[stops,setStops]=useState({}),[saving,setSaving]=useState(false);
  const [scheduleMode,setScheduleMode]=useState('single'),[rangeEnd,setRangeEnd]=useState(''),[weekdays,setWeekdays]=useState([]),[notice,setNotice]=useState(null);
+ const [destinationCatalog,setDestinationCatalog]=useState({destinations:[],routes:[]}),[destinationError,setDestinationError]=useState('');
  const today=new Date().toISOString().slice(0,10);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(t)},[notice]);
+ useEffect(()=>{api.destinations().then(x=>{setDestinationCatalog(x||{destinations:[],routes:[]});setDestinationError('')}).catch(e=>setDestinationError(e.message))},[]);
  const rows=useMemo(()=>data.trips.filter(t=>showPast||!t.departure_date||t.departure_date>=today),[data.trips,showPast,today]);
- const cities=useMemo(()=>[...new Set([...DEFAULT_CITIES,...data.branches.flatMap(b=>[b.city,b.name]).filter(Boolean)])],[data.branches]);
+ const cities=useMemo(()=>{const out=(destinationCatalog.destinations||[]).filter(x=>x.active!==false).map(x=>String(x.city||x.name||'').trim()).filter(Boolean);for(const v of [editing?.from_city,editing?.origin,editing?.to_city,editing?.destination])if(v&&!out.includes(v))out.push(v);return [...new Set(out)]},[destinationCatalog,editing]);
+ const activeRoutes=useMemo(()=>(destinationCatalog.routes||[]).filter(x=>x.active!==false),[destinationCatalog]);
+ const destinationById=useMemo(()=>new Map((destinationCatalog.destinations||[]).map(x=>[String(x.id),x])),[destinationCatalog]);
  const relByTrip=useMemo(()=>{const m=new Map();for(const r of data.tripBranches||[]){const a=m.get(String(r.trip_id))||[];a.push(r);m.set(String(r.trip_id),a)}return m},[data.tripBranches]);
  function toast(type,message){setNotice({type,message,id:Date.now()})}
  function makeTripCode(date,branchId){const branch=data.branches.find(b=>String(b.id)===String(branchId));const prefix=`MAH-${branchCode(branch?.name||branch?.city||'')}-${dateCode(date)}-`;const used=data.trips.map(t=>String(t.trip_code||'')).filter(c=>c.startsWith(prefix)).map(c=>Number(c.slice(-3))).filter(Number.isFinite);return `${prefix}${String((used.length?Math.max(...used):0)+1).padStart(3,'0')}`}
  function reset(){setEditing(null);setMainBranch(data.scope?.branch_id||'');setShared([]);setStops({});setErr('');setScheduleMode('single');setRangeEnd('');setWeekdays([])}
- function openNew(){reset();const bid=data.scope?.branch_id||'';if(bid){const b=data.branches.find(x=>String(x.id)===String(bid));setStops({[bid]:blankStop(b||{id:bid,name:''})})}setOpen(true)}
- function openEdit(t){setEditing(t);setMainBranch(t.branch_id||data.scope?.branch_id||'');const rels=relByTrip.get(String(t.id))||[];const ids=rels.filter(r=>String(r.branch_id)!==String(t.branch_id)).map(r=>String(r.branch_id));setShared(ids);const map={};rels.forEach((r,i)=>{const b=data.branches.find(x=>String(x.id)===String(r.branch_id));map[String(r.branch_id)]={branchId:r.branch_id,branchName:b?.name||'',city:r.boarding_point||b?.name||'',outboundTime:r.boarding_time||'',returnTime:r.return_drop_time||'',order:Number(r.stop_order||i+1)}});setStops(map);setOpen(true)}
+ function openNew(){reset();const bid=data.scope?.branch_id||'';if(bid){const b=data.branches.find(x=>String(x.id)===String(bid));setStops({[bid]:blankStop(b||{id:bid,name:''})})}api.destinations().then(x=>setDestinationCatalog(x||{destinations:[],routes:[]})).catch(()=>{});setOpen(true)}
+ function openEdit(t){setEditing(t);setMainBranch(t.branch_id||data.scope?.branch_id||'');const rels=relByTrip.get(String(t.id))||[];const ids=rels.filter(r=>String(r.branch_id)!==String(t.branch_id)).map(r=>String(r.branch_id));setShared(ids);const map={};rels.forEach((r,i)=>{const b=data.branches.find(x=>String(x.id)===String(r.branch_id));map[String(r.branch_id)]={branchId:r.branch_id,branchName:b?.name||'',city:r.boarding_point||b?.name||'',outboundTime:r.boarding_time||'',returnTime:r.return_drop_time||'',order:Number(r.stop_order||i+1)}});setStops(map);api.destinations().then(x=>setDestinationCatalog(x||{destinations:[],routes:[]})).catch(()=>{});setOpen(true)}
  function toggleBranch(id,checked){setShared(a=>checked?[...new Set([...a,String(id)])]:a.filter(x=>String(x)!==String(id)));if(checked)setStops(x=>{const b=data.branches.find(y=>String(y.id)===String(id));return {...x,[id]:x[id]||blankStop(b||{id,name:''})}})}
  function updateStop(id,key,value){setStops(x=>({...x,[id]:{...(x[id]||{}),branchId:id,[key]:value}}))}
+ function applySavedRoute(routeId,form){const r=activeRoutes.find(x=>String(x.id)===String(routeId));if(!r)return;const from=destinationById.get(String(r.from_destination_id)),to=destinationById.get(String(r.to_destination_id));if(from)form.elements.from_city.value=from.city||from.name||'';if(to)form.elements.to_city.value=to.city||to.name||'';form.elements.bus_capacity.value=r.default_bus_capacity||49;form.elements.price_one_way.value=r.price_one_way||0;form.elements.price_no_accommodation.value=r.price_no_accommodation||0;form.elements.price_shared.value=r.price_shared||0;form.elements.price_private_room.value=r.price_private_room||0;const bids=Array.isArray(r.branch_ids)?r.branch_ids.map(String):[];if(bids.length){setMainBranch(bids[0]);setShared(bids.slice(1));const map={};for(const [i,st] of (r.route_stops||[]).entries()){const bid=String(st.branch_id||bids[i]||'');if(!bid)continue;const b=data.branches.find(x=>String(x.id)===bid);map[bid]={branchId:bid,branchName:b?.name||'',city:st.name||st.city||b?.name||'',outboundTime:st.outbound_time||'',returnTime:st.return_time||'',order:i+1}}setStops(map)}}
  async function save(e){
   e.preventDefault();setErr('');setNotice(null);setSaving(true);const f=Object.fromEntries(new FormData(e.currentTarget));
   const returnOffset=dayDiff(f.departure_date,f.return_date);
@@ -67,6 +71,8 @@ export default function Trips({go}){
   <Modal open={open} onClose={()=>!saving&&setOpen(false)} title={editing?`تعديل الرحلة ${editing.trip_code}`:'إنشاء رحلة جديدة'} wide>
    <form className="form-grid" onSubmit={save} key={editing?.id||'new'}>
     <div className="field"><span>كود الرحلة</span><div className="price-suggestion"><strong>{editing?.trip_code||'يُنشأ تلقائيًا عند الحفظ'}</strong></div></div>
+    {!editing&&activeRoutes.length>0&&<Field label="مسار محفوظ"><Select defaultValue="" onChange={e=>applySavedRoute(e.target.value,e.currentTarget.form)}><option value="">اختياري — اختر مسارًا جاهزًا</option>{activeRoutes.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>}
+    {destinationError&&<div className="error-box" style={{gridColumn:'1/-1'}}>تعذر قراءة إدارة الوجهات: {destinationError}</div>}
     <Field label="الفرع الرئيسي"><Select value={mainBranch} onChange={e=>{const bid=e.target.value;setMainBranch(bid);setShared(a=>a.filter(x=>String(x)!==String(bid)));if(bid)setStops(x=>{const b=data.branches.find(y=>String(y.id)===String(bid));return {...x,[bid]:x[bid]||blankStop(b||{id:bid,name:''})}})}} required><option value="">اختر</option>{data.branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
     <Field label="من"><Select name="from_city" required defaultValue={editing?.from_city||editing?.origin||''}><option value="">اختر وجهة الانطلاق</option>{cities.map(c=><option key={`from-${c}`} value={c}>{c}</option>)}</Select></Field>
     <Field label="إلى"><Select name="to_city" required defaultValue={editing?.to_city||editing?.destination||''}><option value="">اختر وجهة الوصول</option>{cities.map(c=><option key={`to-${c}`} value={c}>{c}</option>)}</Select></Field>
