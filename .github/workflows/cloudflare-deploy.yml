@@ -1,0 +1,81 @@
+name: Cloudflare Deploy and Verify
+
+on:
+  workflow_run:
+    workflows: ["Cloudflare Build Guard"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - name: Checkout verified commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.12.0'
+          cache: npm
+
+      - name: Verify Cloudflare credentials are configured
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "CLOUDFLARE_API_TOKEN is missing"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "CLOUDFLARE_ACCOUNT_ID is missing"; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild verified commit
+        run: npm run build
+
+      - name: Deploy to Cloudflare
+        run: npx wrangler deploy
+
+      - name: Verify production domain
+        shell: bash
+        run: |
+          echo "Verifying https://system.almaheralmasi.sa/api/health after deploy of ${DEPLOY_SHA}"
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --max-time 20 \
+              -H 'Cache-Control: no-cache' \
+              "https://system.almaheralmasi.sa/api/health?deploy_check=${DEPLOY_SHA}" >/tmp/almaher-health.json; then
+              echo "Production health check passed on attempt ${attempt}."
+              cat /tmp/almaher-health.json
+              exit 0
+            fi
+            echo "Health check attempt ${attempt} failed; retrying in 10 seconds..."
+            sleep 10
+          done
+          echo "Production domain did not pass the health check after deployment."
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "### Cloudflare deployment verified ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`${DEPLOY_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Worker: \`almaher-almasi\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Domain: https://system.almaheralmasi.sa" >> "$GITHUB_STEP_SUMMARY"
