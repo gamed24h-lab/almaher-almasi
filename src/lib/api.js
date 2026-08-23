@@ -73,6 +73,8 @@ export const api={
   module:(resource)=>request(`/api/module?resource=${encodeURIComponent(resource)}`),
   moduleWrite:(body)=>request('/api/module',{method:'POST',body}),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
+  destinations:()=>request('/api/destinations'),
+  destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
   customerLookup:(bookingNo,verification)=>request(`/api/customer/booking?bookingNo=${encodeURIComponent(bookingNo)}&verification=${encodeURIComponent(verification)}`),
   customerBook:(booking,passengers)=>request('/api/customer/book',{method:'POST',body:{booking,passengers}}),
   push:(body)=>request('/api/push',{method:'POST',body})
