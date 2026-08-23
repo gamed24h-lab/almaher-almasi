@@ -5,6 +5,7 @@ const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const headers=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
 
 const operationalTables=['trips','trip_branches','bookings','booking_passengers','transactions','expenses','refunds','cash_shifts','room_assignments','seat_assignments','scan_events','approval_requests'];
+const deleteOrder=['seat_assignments','room_assignments','scan_events','refunds','transactions','expenses','cash_shifts','approval_requests','booking_passengers','bookings','trip_branches','trips'];
 const protectedTables=['branches','staff_users','roles','permissions','system_settings','developer_settings','document_templates','feature_flags','backup_runs','restore_drill_runs','restore_drill_rows'];
 
 async function actorFrom(request,env){
@@ -39,5 +40,26 @@ async function prelaunchInventory(request,env){
   const totals=tables.reduce((a,x)=>({total:a.total+x.total,training:a.training+x.training,production:a.production+x.production,unlabeled:a.unlabeled+x.unlabeled}),{total:0,training:0,production:0,unlabeled:0});
   return json({ok:blockers.length===0,preview_only:true,execution_available:false,generated_at:new Date().toISOString(),scope:'all_current_operational_rows_without_ui_filter',totals,tables,protected_tables:protectedTables,blockers:blockers.map(x=>x.table),warnings:['هذه قراءة فقط ولا يوجد أي DELETE في هذا المسار.','الإجمالي لا يعتمد على فلتر واجهة التدريب أو التشغيل.','غير موسوم يشمل الصفوف القديمة أو الصفوف التي لا تحمل data_environment=training/production.','الجداول المحمية لن تدخل في تصفير ما قبل الإطلاق.']});
 }
+async function tableIds(env,table){
+  const r=await fetch(`${base(env)}/rest/v1/${table}?select=id&order=id.asc&limit=10000`,{headers:headers(env)});const b=await parse(r);
+  if(!r.ok)return {table,ok:false,ids:[],error:b?.message||`HTTP ${r.status}`};
+  return {table,ok:true,ids:(Array.isArray(b)?b:[]).map(x=>String(x?.id??'')).filter(Boolean),error:null};
+}
+async function latestRestoreTestedSnapshot(env){
+  const r=await fetch(`${base(env)}/rest/v1/backup_runs?backup_type=eq.pre_release&status=eq.completed&select=id,storage_path,checksum,restore_tested,restore_tested_at,completed_at&order=completed_at.desc&limit=1`,{headers:headers(env)});const b=await parse(r);
+  if(!r.ok)return {ok:false,error:b?.message||`HTTP ${r.status}`,row:null};
+  const row=Array.isArray(b)?b[0]:null;return {ok:!!row,row};
+}
+async function prelaunchResetPlan(request,env){
+  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
+  if(!isDeveloper(actor))return json({error:'معاينة التصفير النهائي متاحة للمطور الحقيقي فقط.'},403);
+  if(!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
+  const rows=[];for(const table of deleteOrder)rows.push(await tableIds(env,table));
+  const blockers=rows.filter(x=>!x.ok);if(blockers.length)return json({error:'تعذر تثبيت خطة التصفير بسبب جداول غير قابلة للقراءة.',blockers:blockers.map(x=>({table:x.table,error:x.error}))},422);
+  const canonical=rows.map(x=>({table:x.table,ids:x.ids}));const text=JSON.stringify(canonical);
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));const planHash=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');
+  const tables=canonical.map(x=>({table:x.table,count:x.ids.length})),total=tables.reduce((n,x)=>n+x.count,0),snapshot=await latestRestoreTestedSnapshot(env);
+  return json({ok:true,preview_only:true,execution_available:false,generated_at:new Date().toISOString(),plan_hash:planHash,total_rows:total,tables,delete_order:deleteOrder,protected_tables:protectedTables,latest_snapshot:snapshot.row?{id:snapshot.row.id,completed_at:snapshot.row.completed_at,restore_tested:snapshot.row.restore_tested===true,restore_tested_at:snapshot.row.restore_tested_at||null}:null,requirements:{fresh_snapshot_after_plan:true,restore_drill_after_snapshot:true,double_confirmation:true,exact_plan_hash_match:true},warnings:['هذه خطة حذف مقفلة للمعاينة فقط ولا يوجد تنفيذ DELETE في هذا المسار.','تم تثبيت الخطة ببصمة SHA-256 مبنية على أرقام السجلات الحالية لكل جدول.','أي إضافة أو حذف أو تغيير في مجموعة السجلات قبل التنفيذ سيغير البصمة ويمنع اعتماد الخطة القديمة.','يجب إنشاء Snapshot جديدة بعد هذه الخطة ثم تشغيل Restore Drill عليها قبل فتح التنفيذ.']});
+}
 
-export default {async fetch(request,env,ctx){const u=new URL(request.url);if(u.pathname==='/api/production/prelaunch-inventory'&&request.method==='GET')return prelaunchInventory(request,env);return restoreWorker.fetch(request,env,ctx)}};
+export default {async fetch(request,env,ctx){const u=new URL(request.url);if(u.pathname==='/api/production/prelaunch-inventory'&&request.method==='GET')return prelaunchInventory(request,env);if(u.pathname==='/api/production/prelaunch-reset-plan'&&request.method==='GET')return prelaunchResetPlan(request,env);return restoreWorker.fetch(request,env,ctx)}};
