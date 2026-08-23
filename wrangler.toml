@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/booking-verify-index.js"
+main = "worker/trip-destination-guard-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
