@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: cloudflare-production-deploy
@@ -26,8 +27,18 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
+      - name: Mark Cloudflare deployment pending
+        shell: bash
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${DEPLOY_SHA}" \
+            -f state='pending' \
+            -f context='cloudflare/deploy' \
+            -f description='Deploying verified commit to Cloudflare'
+
       - name: Checkout verified commit
         uses: actions/checkout@v5
         with:
@@ -71,6 +82,26 @@ jobs:
           done
           echo "Production domain did not pass the health check after deployment."
           exit 1
+
+      - name: Mark Cloudflare deployment successful
+        if: success()
+        shell: bash
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${DEPLOY_SHA}" \
+            -f state='success' \
+            -f context='cloudflare/deploy' \
+            -f description='Cloudflare deploy and live health check passed'
+
+      - name: Mark Cloudflare deployment failed
+        if: failure()
+        shell: bash
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${DEPLOY_SHA}" \
+            -f state='failure' \
+            -f context='cloudflare/deploy' \
+            -f description='Cloudflare deploy or live health check failed'
 
       - name: Deployment summary
         if: success()
