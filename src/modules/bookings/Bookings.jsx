@@ -11,6 +11,12 @@ const num=v=>Number(v||0);
 const lower=v=>String(v??'').trim().toLowerCase();
 function financialState(b){const total=num(b.total_price),paid=num(b.paid_amount),remaining=Math.max(0,total-paid);if(total<=0)return {label:'بدون قيمة',tone:'orange'};if(remaining<=0.001)return {label:'مسدد',tone:'green'};if(paid>0)return {label:'مدفوع جزئيًا',tone:'orange'};return {label:'غير مسدد',tone:'red'}}
 function eventTime(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA')}catch{return String(v)}}
+function timelineValue(v){
+ if(v===null||v===undefined||v==='')return '—';
+ if(v===true)return 'نعم';if(v===false)return 'لا';
+ if(typeof v==='string'&&v.length>120)return `${v.slice(0,117)}...`;
+ return String(v);
+}
 
 export default function Bookings({go,query=''}){
  const {user}=useAuth();const {data,refresh}=useAppData();
@@ -69,7 +75,7 @@ export default function Bookings({go,query=''}){
    ]}/>
   </Card>
   <Modal open={!!timeline} onClose={()=>{setTimeline(null);setTimelineError('')}} title={`الخط الزمني للحجز ${timeline?.booking?.booking_number||''}`} wide>
-   {timelineBusy?<div className="empty">جاري تحميل سجل النشاط...</div>:timelineError?<div className="error-box">{timelineError}</div>:(timeline?.events||[]).length?<div className="booking-timeline">{timeline.events.map((ev,i)=><div className="booking-timeline-item" key={ev.id||i}><div className="booking-timeline-dot"/><div className="booking-timeline-body"><div className="card-title"><h3>{ev.title||ev.action||'نشاط على الحجز'}</h3><Badge>{eventTime(ev.created_at)}</Badge></div><div className="muted-small">{ev.actor_name?`بواسطة ${ev.actor_name}${ev.actor_role?` — ${ev.actor_role}`:''}`:'عملية مسجلة بالنظام'}{ev.entity_type?` · ${ev.entity_type}`:''}</div>{ev.action&&ev.action!==ev.title&&<div className="muted-small" style={{marginTop:4}}>العملية: {ev.action}</div>}</div></div>)}</div>:<div className="empty">لا توجد أحداث مسجلة لهذا الحجز حتى الآن.</div>}
+   {timelineBusy?<div className="empty">جاري تحميل سجل النشاط...</div>:timelineError?<div className="error-box">{timelineError}</div>:(timeline?.events||[]).length?<div className="booking-timeline">{timeline.events.map((ev,i)=>{const changes=Array.isArray(ev.changes)?ev.changes:Array.isArray(ev?.metadata?.changes)?ev.metadata.changes:[];return <div className="booking-timeline-item" key={ev.id||i}><div className="booking-timeline-dot"/><div className="booking-timeline-body"><div className="card-title"><h3>{ev.title||ev.action||'نشاط على الحجز'}</h3><Badge>{eventTime(ev.created_at)}</Badge></div><div className="muted-small">{ev.actor_name?`بواسطة ${ev.actor_name}${ev.actor_role?` — ${ev.actor_role}`:''}`:'عملية مسجلة بالنظام'}{ev.entity_type?` · ${ev.entity_type}`:''}</div>{changes.length>0&&<div className="timeline-changes" style={{marginTop:10,display:'grid',gap:7}}>{changes.map((c,j)=><div key={`${c.field||c.label||j}-${j}`} style={{padding:'8px 10px',border:'1px solid #e5e7eb',borderRadius:10,background:'#fafafa'}}><strong>{c.label||c.field||'بيان'}</strong><div className="muted-small" style={{marginTop:4}}><span>من: <b>{timelineValue(c.before)}</b></span><span style={{marginInline:'8px'}}>←</span><span>إلى: <b>{timelineValue(c.after)}</b></span></div></div>)}</div>}{!changes.length&&ev.action&&ev.action!==ev.title&&<div className="muted-small" style={{marginTop:4}}>العملية: {ev.action}</div>}</div></div>})}</div>:<div className="empty">لا توجد أحداث مسجلة لهذا الحجز حتى الآن.</div>}
   </Modal>
  </>;
 }
