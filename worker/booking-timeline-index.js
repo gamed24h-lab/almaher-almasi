@@ -11,36 +11,60 @@ const canView=a=>elevated(a)||!!a?.permissions?.viewBookingActivity||!!a?.permis
 const text=v=>String(v??'');
 const ts=v=>v?new Date(v).toISOString():null;
 const AUDIT_TABLES=new Set(['bookings','booking_passengers','booking_accommodations','room_assignments','seat_assignments','transactions','refunds']);
-const HIDDEN_FIELDS=new Set(['password','password_hash','token','session_token','security_meta','snapshot']);
+const HIDDEN_FIELDS=new Set(['password','password_hash','token','session_token','security_meta','snapshot','id','uuid','version_no','versionNo','updated_at','created_at','last_modified_at','data_environment','entity_id','booking_id','passenger_id']);
 const FIELD_LABELS={
- customer_name:'اسم العميل',customer_phone:'جوال العميل',customer_identity:'الهوية / الإقامة',customer_nationality:'الجنسية',customer_gender:'الجنس',trip_id:'رحلة الذهاب',return_trip_id:'رحلة العودة',journey_mode:'نوع الرحلة',status:'حالة الحجز',accommodation_type:'نوع السكن',accommodation_label:'السكن',private_rooms:'عدد الغرف',accommodation_days:'عدد أيام السكن',total_price:'الإجمالي',paid_amount:'المدفوع',payment_method:'طريقة الدفع',notes:'ملاحظات الحجز',branch_id:'الفرع',travelers:'عدد المسافرين',full_name:'اسم المسافر',identity_number:'هوية المسافر',nationality:'جنسية المسافر',gender:'جنس المسافر',phone:'جوال المسافر',seat_no:'رقم المقعد',segment_type:'اتجاه المقعد',hotel_room_id:'الغرفة',trip_room_id:'غرفة الرحلة',amount:'المبلغ',transaction_type:'نوع الحركة',refund_amount:'قيمة الاسترداد',reason:'السبب'
+ customer_name:'اسم العميل',customerName:'اسم العميل',customer_phone:'جوال العميل',customerPhone:'جوال العميل',customer_identity:'الهوية / الإقامة',customerIdentity:'الهوية / الإقامة',customer_nationality:'جنسية العميل',customerNationality:'جنسية العميل',customer_gender:'جنس العميل',customerGender:'جنس العميل',trip_id:'رحلة الذهاب',tripId:'رحلة الذهاب',return_trip_id:'رحلة العودة',returnTripId:'رحلة العودة',journey_mode:'نوع الرحلة',journeyMode:'نوع الرحلة',status:'الحالة',accommodation_type:'نوع السكن',accommodationType:'نوع السكن',accommodation_label:'تفاصيل السكن',accommodationLabel:'تفاصيل السكن',private_rooms:'عدد الغرف الخاصة',privateRooms:'عدد الغرف الخاصة',privateRoomType:'نوع الغرفة الخاصة',private_room_types:'أنواع الغرف الخاصة',housingDays:'عدد أيام السكن',accommodation_days:'عدد أيام السكن',total_price:'إجمالي الحجز',totalPrice:'إجمالي الحجز',original_price:'السعر الأصلي',originalPrice:'السعر الأصلي',paid_amount:'المبلغ المدفوع',paidAmount:'المبلغ المدفوع',payment_method:'طريقة الدفع',paymentMethod:'طريقة الدفع',payment_reference:'مرجع الدفع',paymentReference:'مرجع الدفع',notes:'الملاحظات',branch_id:'الفرع',branchId:'الفرع',travelers:'عدد المسافرين',passengerDetails:'بيانات المسافرين',full_name:'اسم المسافر',name:'الاسم',identity_number:'هوية المسافر',identity:'هوية المسافر',nationality:'الجنسية',gender:'الجنس',phone:'الجوال',preferred_language:'لغة التواصل',preferredLanguage:'لغة التواصل',document_status:'حالة المستند',documentStatus:'حالة المستند',seat_no:'رقم المقعد',seatNo:'رقم المقعد',segment_type:'اتجاه الرحلة',segmentType:'اتجاه الرحلة',hotel_room_id:'غرفة الفندق',hotelRoomId:'غرفة الفندق',trip_room_id:'غرفة الرحلة',tripRoomId:'غرفة الرحلة',room_id:'الغرفة',roomId:'الغرفة',amount:'المبلغ',transaction_type:'نوع الحركة المالية',refund_amount:'قيمة الاسترداد',reason:'السبب',driver_id:'السائق',vehicle_id:'المركبة',license_no:'رقم الرخصة',license_expiry:'انتهاء الرخصة',plate_no:'رقم اللوحة',physical_capacity:'السعة الفعلية',booking_capacity:'سعة الحجز',departure_date:'تاريخ الرحلة',departure_time:'وقت الرحلة',from_city:'مدينة المغادرة',to_city:'الوجهة'
 };
-function cleanVal(v){if(v===undefined)return undefined;if(v===null||v==='')return null;if(typeof v==='object')return JSON.stringify(v);return v}
-function same(a,b){return JSON.stringify(cleanVal(a))===JSON.stringify(cleanVal(b))}
+const PAYMENT={cash:'نقدي',card:'بطاقة',bank:'تحويل بنكي',transfer:'تحويل بنكي',mada:'مدى',apple_pay:'Apple Pay'};
+const ACCOMMODATION={none:'بدون سكن',shared:'سكن مشترك خماسي',private:'غرفة خاصة'};
+const GENDER={male:'ذكر',female:'أنثى',m:'ذكر',f:'أنثى'};
+const JOURNEY={oneway:'ذهاب فقط',roundtrip:'ذهاب وعودة',separate:'ذهاب + عودة منفصلة',returnonly:'عودة فقط'};
+const SEGMENT={outbound:'ذهاب',return:'عودة'};
+const STATUS={confirmed:'مؤكد',cancelled:'ملغي',pending:'قيد المراجعة',active:'نشط',inactive:'موقوف',available:'متاح',assigned:'مُعيّن',released:'محرر',blocked:'محجوب',hold:'محجوز مؤقتًا',completed:'مكتمل'};
+const MONEY_FIELDS=new Set(['total_price','totalPrice','original_price','originalPrice','paid_amount','paidAmount','amount','refund_amount','cost']);
+function personSummary(v){if(!Array.isArray(v))return null;const names=v.map(x=>x?.full_name||x?.name).filter(Boolean);return names.length?`${v.length} مسافر — ${names.slice(0,4).join('، ')}${names.length>4?'…':''}`:`${v.length} عنصر`;}
+function cleanVal(field,v){
+ if(v===undefined)return undefined;if(v===null||v==='')return null;if(v===true)return 'نعم';if(v===false)return 'لا';
+ const f=String(field||''),raw=String(v);
+ if(f==='journey_mode'||f==='journeyMode')return JOURNEY[raw.toLowerCase()]||raw;
+ if(f==='gender'||f==='customer_gender'||f==='customerGender')return GENDER[raw.toLowerCase()]||raw;
+ if(f==='accommodation_type'||f==='accommodationType')return ACCOMMODATION[raw.toLowerCase()]||raw;
+ if(f==='payment_method'||f==='paymentMethod'||f==='method')return PAYMENT[raw.toLowerCase()]||raw;
+ if(f==='segment_type'||f==='segmentType')return SEGMENT[raw.toLowerCase()]||raw;
+ if(f==='status')return STATUS[raw.toLowerCase()]||raw;
+ if(MONEY_FIELDS.has(f)){const n=Number(v);return Number.isFinite(n)?`${new Intl.NumberFormat('ar-SA',{maximumFractionDigits:2}).format(n)} ر.س`:raw;}
+ if(f==='trip_id'||f==='tripId'||f==='return_trip_id'||f==='returnTripId')return /^[-0-9a-f]{36}$/i.test(raw)?'رحلة محفوظة بالنظام':raw;
+ if(f==='branch_id'||f==='branchId'||f.endsWith('_id')||f.endsWith('Id'))return /^[-0-9a-f]{36}$/i.test(raw)?'سجل محفوظ بالنظام':raw;
+ if(Array.isArray(v))return personSummary(v)||`${v.length} عنصر`;
+ if(typeof v==='object'){const name=v.name||v.full_name||v.label||v.code;return name?String(name):'بيانات محدثة';}
+ if(/^[-0-9a-f]{36}$/i.test(raw))return 'سجل محفوظ بالنظام';
+ return raw.length>160?`${raw.slice(0,157)}…`:raw;
+}
+function same(a,b){try{return JSON.stringify(a??null)===JSON.stringify(b??null)}catch{return String(a)===String(b)}}
 function buildChanges(before={},after={}){
  const changes=[];
  for(const [field,afterValue] of Object.entries(after||{})){
-  if(HIDDEN_FIELDS.has(field)||field.startsWith('_')||field==='updated_at'||field==='created_at')continue;
+  if(HIDDEN_FIELDS.has(field)||field.startsWith('_'))continue;
   if(afterValue===undefined)continue;
   const beforeValue=before?.[field];
   if(same(beforeValue,afterValue))continue;
-  changes.push({field,label:FIELD_LABELS[field]||field,before:cleanVal(beforeValue),after:cleanVal(afterValue)});
+  changes.push({field,label:FIELD_LABELS[field]||String(field).replace(/_/g,' '),before:cleanVal(field,beforeValue),after:cleanVal(field,afterValue)});
  }
  return changes.slice(0,80);
 }
 
 function eventLabel(action,entityType=''){
  const a=text(action).toLowerCase(),e=text(entityType).toLowerCase();
- if(/customer_book|create_booking|booking_created|insert_booking/.test(a))return 'إنشاء الحجز';
- if(/update_booking|booking_update|edit_booking/.test(a))return 'تعديل الحجز';
- if(/refund/.test(a+e))return 'استرداد / تعديل استرداد';
- if(/payment|transaction|receipt|collect/.test(a+e))return 'تحصيل / حركة مالية';
- if(/seat/.test(a+e))return 'تغيير مقعد';
- if(/room|housing|accommodation/.test(a+e))return 'تغيير التسكين';
- if(/passenger/.test(a+e))return 'تعديل بيانات مسافر';
- if(/scan|qr/.test(a+e))return 'مسح QR / حركة ركوب';
- if(/cancel/.test(a))return 'إلغاء';
- if(/approve/.test(a+e))return 'اعتماد';
+ if(/customer_book|create_booking|booking_created|insert_booking/.test(a))return 'تم إنشاء الحجز';
+ if(/update_booking|booking_update|edit_booking/.test(a))return 'تم تعديل الحجز';
+ if(/refund/.test(a+e))return 'تم تنفيذ / تعديل استرداد';
+ if(/payment|transaction|receipt|collect/.test(a+e))return 'تم تسجيل حركة مالية';
+ if(/seat/.test(a+e))return 'تم تغيير المقعد';
+ if(/room|housing|accommodation/.test(a+e))return 'تم تغيير التسكين';
+ if(/passenger/.test(a+e))return 'تم تعديل بيانات مسافر';
+ if(/scan|qr/.test(a+e))return 'تم تسجيل حركة QR / ركوب';
+ if(/cancel/.test(a))return 'تم الإلغاء';
+ if(/approve/.test(a+e))return 'تم الاعتماد';
  return action||'نشاط على الحجز';
 }
 
@@ -102,8 +126,8 @@ async function bookingTimeline(request,env){
  let audit=ar.ok&&Array.isArray(ab)?ab:[];
  const bookingId=text(booking.id);
  audit=audit.filter(x=>{const m=x?.metadata&&typeof x.metadata==='object'?x.metadata:{};return [x.entity_id,m.booking_id,m.bookingId,m.booking_number,m.bookingNumber,m.entity_id].some(v=>text(v)===bookingId||text(v)===bookingNo)});
- const events=audit.map(x=>({id:`audit-${x.id}`,kind:'audit',title:eventLabel(x.action,x.entity_type),action:x.action||'',entity_type:x.entity_type||'',actor_name:x.actor_name||'',actor_role:x.actor_role||'',created_at:ts(x.created_at),metadata:x.metadata||{},changes:Array.isArray(x?.metadata?.changes)?x.metadata.changes:[]}));
- if(booking.created_at&&!events.some(x=>x.action==='booking_created'))events.push({id:`booking-created-${booking.id}`,kind:'booking',title:'إنشاء الحجز',action:'booking_created',entity_type:'bookings',actor_name:booking.created_by||'',actor_role:'',created_at:ts(booking.created_at),metadata:{status:booking.status,total_price:booking.total_price,paid_amount:booking.paid_amount},changes:[]});
+ const events=audit.map(x=>({id:`audit-${x.id}`,kind:'audit',title:eventLabel(x.action,x.entity_type),action:eventLabel(x.action,x.entity_type),entity_type:x.entity_type||'',actor_name:x.actor_name||'',actor_role:x.actor_role||'',created_at:ts(x.created_at),metadata:x.metadata||{},changes:Array.isArray(x?.metadata?.changes)?x.metadata.changes.filter(c=>!HIDDEN_FIELDS.has(String(c?.field||''))).map(c=>({field:c.field,label:FIELD_LABELS[c.field]||c.label||String(c.field||'بيان').replace(/_/g,' '),before:cleanVal(c.field,c.before),after:cleanVal(c.field,c.after)})):[]}));
+ if(booking.created_at&&!events.some(x=>x.action==='تم إنشاء الحجز'||x.title==='تم إنشاء الحجز'))events.push({id:`booking-created-${booking.id}`,kind:'booking',title:'تم إنشاء الحجز',action:'تم إنشاء الحجز',entity_type:'bookings',actor_name:booking.created_by||'',actor_role:'',created_at:ts(booking.created_at),metadata:{status:booking.status,total_price:booking.total_price,paid_amount:booking.paid_amount},changes:[]});
  events.sort((a,b2)=>String(a.created_at||'').localeCompare(String(b2.created_at||'')));
  return json({ok:true,booking:{id:booking.id,booking_number:booking.booking_number,customer_name:booking.customer_name,branch_id:booking.branch_id,status:booking.status,created_at:booking.created_at},events,count:events.length,audit_available:ar.ok});
 }
