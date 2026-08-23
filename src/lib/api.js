@@ -3,6 +3,7 @@ export function arabicError(value,status){
   if(!m)return 'تعذر تنفيذ العملية. حاول مرة أخرى.';
   const rules=[
     [/Return date cannot be before departure date/i,'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب.'],
+    [/SEAT_ALREADY_ASSIGNED|SEAT_CONCURRENCY_CONFLICT/i,'المقعد تم اختياره بالفعل من مستخدم آخر. حدّث الخريطة واختر مقعدًا آخر.'],
     [/duplicate key value.*staff_users_pkey/i,'يوجد حساب موظف بنفس المعرّف. أعد فتح شاشة إضافة الموظف وحاول مرة أخرى.'],
     [/duplicate key value/i,'يوجد سجل بنفس البيانات بالفعل. راجع البيانات ثم حاول مرة أخرى.'],
     [/violates check constraint.*trips_status_check/i,'حالة الرحلة غير مقبولة في إعدادات النظام الحالية.'],
@@ -72,6 +73,7 @@ export const api={
   platformGet:(resource='platform')=>request(`/api/platform?resource=${encodeURIComponent(resource)}`),
   module:(resource)=>request(`/api/module?resource=${encodeURIComponent(resource)}`),
   moduleWrite:(body)=>request('/api/module',{method:'POST',body}),
+  seatAtomic:(body)=>request('/api/seats/atomic',{method:'POST',body}),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
   destinations:()=>request('/api/destinations'),
   destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
