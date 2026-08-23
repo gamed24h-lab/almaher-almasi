@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "check:worker": "node --check worker/index.js",
-    "check": "npm run check:worker && npm run build",
+    "check:workers": "node --check worker/index.js && node --check worker/secure-index.js && node --check worker/audit-index.js && node --check worker/production-index.js",
+    "check:cloudflare": "npm run check:workers && npm run build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
+    "check": "npm run check:cloudflare",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
