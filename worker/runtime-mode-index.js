@@ -34,19 +34,48 @@ async function runtimeMode(request,env){
 
 function cleanDestination(row={}){return {name:String(row.name||'').trim(),city:String(row.city||'').trim(),destination_type:String(row.destination_type||'city'),address:String(row.address||'').trim()||null,map_url:String(row.map_url||'').trim()||null,notes:String(row.notes||'').trim()||null,active:row.active!==false,updated_at:new Date().toISOString()}}
 function cleanRoute(row={}){return {name:String(row.name||'').trim(),from_destination_id:String(row.from_destination_id||''),to_destination_id:String(row.to_destination_id||''),route_stops:Array.isArray(row.route_stops)?row.route_stops:[],branch_ids:Array.isArray(row.branch_ids)?row.branch_ids:[],return_reverse_stops:row.return_reverse_stops!==false,default_bus_capacity:Math.max(1,Number(row.default_bus_capacity||49)),price_one_way:Number(row.price_one_way||0),price_no_accommodation:Number(row.price_no_accommodation||0),price_shared:Number(row.price_shared||0),price_private_room:Number(row.price_private_room||0),active:row.active!==false,notes:String(row.notes||'').trim()||null,updated_at:new Date().toISOString()}}
+const norm=v=>String(v||'').trim().replace(/\s+/g,' ').toLowerCase();
+
+async function syncExistingDestinationData(env){
+  const h=headers(env),b=base(env);
+  const [dr,rr,tr,tbr]=await Promise.all([
+    fetch(`${b}/rest/v1/travel_destinations?select=*`,{headers:h}),
+    fetch(`${b}/rest/v1/destination_routes?select=*`,{headers:h}),
+    fetch(`${b}/rest/v1/trips?select=id,from_city,to_city,price_one_way,price_no_accommodation,price_shared,price_private_room,bus_capacity,booking_capacity,default_bus_capacity,created_at&order=created_at.desc`,{headers:h}),
+    fetch(`${b}/rest/v1/trip_branches?select=trip_id,branch_id,boarding_point,boarding_time,return_drop_time,stop_order`,{headers:h})
+  ]);
+  const [destBody,routeBody,tripBody,branchBody]=await Promise.all([parse(dr),parse(rr),parse(tr),parse(tbr)]);
+  if(!dr.ok||!rr.ok)return {ok:false,schemaMissing:true,error:String((!dr.ok?destBody:routeBody)?.message||'تعذر قراءة جداول الوجهات.')};
+  if(!tr.ok)return {ok:false,error:String(tripBody?.message||'تعذر قراءة الرحلات الحالية.')};
+  const destinations=Array.isArray(destBody)?destBody:[],routes=Array.isArray(routeBody)?routeBody:[],trips=Array.isArray(tripBody)?tripBody:[],tripBranches=Array.isArray(branchBody)?branchBody:[];
+  const existingDest=new Map(destinations.map(x=>[`${norm(x.name)}|${norm(x.city)}`,x]));
+  const cityNames=new Set();
+  for(const t of trips){if(String(t.from_city||'').trim())cityNames.add(String(t.from_city).trim());if(String(t.to_city||'').trim())cityNames.add(String(t.to_city).trim())}
+  const missing=[...cityNames].filter(city=>!existingDest.has(`${norm(city)}|${norm(city)}`)).map(city=>({name:city,city,destination_type:'city',active:true,notes:'مستورد تلقائيًا من الرحلات الموجودة بالنظام'}));
+  let importedDestinations=0;
+  if(missing.length){const r=await fetch(`${b}/rest/v1/travel_destinations`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(missing)});const out=await parse(r);if(!r.ok)return {ok:false,error:String(out?.message||'تعذر استيراد الوجهات الحالية.')};importedDestinations=Array.isArray(out)?out.length:missing.length}
+  const freshR=await fetch(`${b}/rest/v1/travel_destinations?select=*`,{headers:h}),fresh=await parse(freshR);if(!freshR.ok)return {ok:false,error:String(fresh?.message||'تعذر إعادة قراءة الوجهات.')};
+  const allDest=Array.isArray(fresh)?fresh:[];const byCity=new Map();for(const d of allDest){const k=norm(d.city||d.name);if(k&&!byCity.has(k))byCity.set(k,d)}
+  const branchesByTrip=new Map();for(const x of tripBranches){const k=String(x.trip_id||'');const a=branchesByTrip.get(k)||[];a.push(x);branchesByTrip.set(k,a)}
+  const existingPairs=new Set(routes.map(r=>`${r.from_destination_id}|${r.to_destination_id}`));const routeCandidates=[];const seenPairs=new Set();
+  for(const t of trips){const from=byCity.get(norm(t.from_city)),to=byCity.get(norm(t.to_city));if(!from||!to||from.id===to.id)continue;const pair=`${from.id}|${to.id}`;if(existingPairs.has(pair)||seenPairs.has(pair))continue;seenPairs.add(pair);const rel=(branchesByTrip.get(String(t.id))||[]).slice().sort((a,b)=>Number(a.stop_order||0)-Number(b.stop_order||0));routeCandidates.push({name:`${t.from_city} ← ${t.to_city}`,from_destination_id:from.id,to_destination_id:to.id,route_stops:rel.map(x=>({name:x.boarding_point||'',city:x.boarding_point||'',branch_id:x.branch_id||'',outbound_time:x.boarding_time||'',return_time:x.return_drop_time||''})),branch_ids:[...new Set(rel.map(x=>x.branch_id).filter(Boolean))],return_reverse_stops:true,default_bus_capacity:Number(t.booking_capacity||t.default_bus_capacity||t.bus_capacity||49),price_one_way:Number(t.price_one_way||0),price_no_accommodation:Number(t.price_no_accommodation||0),price_shared:Number(t.price_shared||0),price_private_room:Number(t.price_private_room||0),active:true,notes:'مسار مستورد تلقائيًا من الرحلات الموجودة بالنظام'});}
+  let importedRoutes=0;if(routeCandidates.length){const r=await fetch(`${b}/rest/v1/destination_routes`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(routeCandidates)});const out=await parse(r);if(!r.ok)return {ok:false,error:String(out?.message||'تعذر استيراد المسارات الحالية.')};importedRoutes=Array.isArray(out)?out.length:routeCandidates.length}
+  return {ok:true,importedDestinations,importedRoutes,sourceTrips:trips.length};
+}
+
 async function destinationRequest(request,env){
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canDestinations(actor))return json({error:'لا توجد صلاحية لإدارة الوجهات.'},403);
   const h=headers(env),b=base(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
   if(request.method==='GET'){
-    const [dr,rr]=await Promise.all([
-      fetch(`${b}/rest/v1/travel_destinations?select=*&order=city.asc,name.asc`,{headers:h}),
-      fetch(`${b}/rest/v1/destination_routes?select=*&order=name.asc`,{headers:h})
-    ]);const [dests,routes]=await Promise.all([parse(dr),parse(rr)]);
-    if(!dr.ok||!rr.ok){const msg=String((!dr.ok?dests:routes)?.message||'');if(/travel_destinations|destination_routes|schema cache|does not exist/i.test(msg))return json({error:'جداول إدارة الوجهات غير مثبتة بعد. شغّل Migration الخاصة بإدارة الوجهات في Supabase.',code:'DESTINATIONS_SCHEMA_MISSING'},409);return json({error:msg||'تعذر تحميل إدارة الوجهات.'},502)}
-    return json({ok:true,destinations:Array.isArray(dests)?dests:[],routes:Array.isArray(routes)?routes:[]});
+    const sync=await syncExistingDestinationData(env);if(!sync.ok){if(sync.schemaMissing)return json({error:'جداول إدارة الوجهات غير مثبتة بعد. شغّل Migration الخاصة بإدارة الوجهات في Supabase.',code:'DESTINATIONS_SCHEMA_MISSING'},409);return json({error:sync.error||'تعذر مزامنة الوجهات مع الرحلات الحالية.'},502)}
+    const [dr,rr]=await Promise.all([fetch(`${b}/rest/v1/travel_destinations?select=*&order=city.asc,name.asc`,{headers:h}),fetch(`${b}/rest/v1/destination_routes?select=*&order=name.asc`,{headers:h})]);const [dests,routes]=await Promise.all([parse(dr),parse(rr)]);if(!dr.ok||!rr.ok)return json({error:String((!dr.ok?dests:routes)?.message||'تعذر تحميل إدارة الوجهات.')},502);
+    return json({ok:true,destinations:Array.isArray(dests)?dests:[],routes:Array.isArray(routes)?routes:[],sync:{source_trips:sync.sourceTrips,imported_destinations:sync.importedDestinations,imported_routes:sync.importedRoutes}});
   }
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   const body=await request.json().catch(()=>({})),action=String(body.action||'');
+  if(action==='sync_existing'){
+    const sync=await syncExistingDestinationData(env);if(!sync.ok)return json({error:sync.error||'تعذر قراءة الوجهات الحالية من النظام.'},502);return json({ok:true,...sync});
+  }
   if(action==='save_destination'){
     const row=cleanDestination(body.row||{});if(!row.name||!row.city)return json({error:'اسم الوجهة والمدينة مطلوبان.'},400);
     const id=String(body.row?.id||'');const url=id?`${b}/rest/v1/travel_destinations?id=eq.${encodeURIComponent(id)}`:`${b}/rest/v1/travel_destinations`;const method=id?'PATCH':'POST';const r=await fetch(url,{method,headers:{...h,Prefer:'return=representation'},body:JSON.stringify(row)});const out=await parse(r);if(!r.ok)return json({error:out?.message||'تعذر حفظ الوجهة.'},502);return json({ok:true,row:Array.isArray(out)?out[0]:out});
