@@ -11,24 +11,30 @@ function bookingInput(path,body){if(path==='/api/customer/book')return body?.boo
 function modeOf(b={}){const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};return s(b.journey_mode||b.journeyMode||snap.journeyMode||'oneway').toLowerCase()}
 function primaryTripId(b={}){const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};return s(b.trip_id||b.tripId||snap.tripId||'')}
 function returnTripId(b={}){const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};return s(b.return_trip_id||b.returnTripId||snap.returnTripId||'')}
+function unavailableTrip(t){return !t||['cancelled','completed'].includes(s(t.status).toLowerCase())}
+function legMoment(date,time){const d=s(date).slice(0,10);if(!d)return'';const raw=s(time||'00:00:00').trim();const t=raw?raw.padEnd(8,':00').slice(0,8):'00:00:00';return `${d}T${t}`}
 async function guardBooking(env,path,body){
  const b=bookingInput(path,body);if(!b)return null;
  const mode=modeOf(b),tripId=primaryTripId(b),returnId=returnTripId(b);
  if(!['oneway','roundtrip','separate','returnonly'].includes(mode))return json({error:'نوع الرحلة غير مدعوم.',code:'INVALID_JOURNEY_MODE'},400);
  if(!tripId)return json({error:'اختر الرحلة الأساسية.',code:'TRIP_REQUIRED'},400);
+ const trip=(await rows(env,'trips',`id=eq.${enc(tripId)}&select=id,departure_date,departure_time,return_date,return_time,status&limit=1`))[0];
+ if(unavailableTrip(trip))return json({error:'الرحلة الأساسية غير متاحة للحجز حاليًا.',code:'PRIMARY_TRIP_UNAVAILABLE'},409);
  if(mode==='roundtrip'){
    if(returnId&&returnId!==tripId)return json({error:'في «ذهاب وعودة» يجب أن تكون العودة على نفس رحلة الذهاب. استخدم «ذهاب + عودة من رحلة أخرى» لاختيار رحلة منفصلة.',code:'ROUNDTRIP_RETURN_LOCKED'},409);
-   const trip=(await rows(env,'trips',`id=eq.${enc(tripId)}&select=id,return_date,return_time,status&limit=1`))[0];
    if(!trip?.return_date)return json({error:'الرحلة المختارة لا تحتوي على تاريخ عودة.',code:'ROUNDTRIP_RETURN_MISSING'},409);
+   const outMoment=legMoment(trip.departure_date,trip.departure_time),backMoment=legMoment(trip.return_date,trip.return_time);
+   if(outMoment&&backMoment&&backMoment<outMoment)return json({error:'تاريخ/وقت العودة لا يمكن أن يكون قبل تاريخ/وقت الذهاب.',code:'ROUNDTRIP_RETURN_BEFORE_OUTBOUND'},409);
  }
  if(mode==='separate'){
    if(!returnId)return json({error:'اختر رحلة العودة المنفصلة.',code:'SEPARATE_RETURN_REQUIRED'},400);
    if(returnId===tripId)return json({error:'رحلة العودة المنفصلة يجب أن تكون مختلفة عن رحلة الذهاب.',code:'SEPARATE_RETURN_MUST_DIFFER'},409);
-   const rt=(await rows(env,'trips',`id=eq.${enc(returnId)}&select=id,return_date,return_time,status&limit=1`))[0];
-   if(!rt||!rt.return_date||['cancelled','completed'].includes(s(rt.status).toLowerCase()))return json({error:'رحلة العودة المنفصلة غير متاحة أو لا تحتوي على تاريخ عودة.',code:'SEPARATE_RETURN_UNAVAILABLE'},409);
+   const rt=(await rows(env,'trips',`id=eq.${enc(returnId)}&select=id,departure_date,departure_time,return_date,return_time,status&limit=1`))[0];
+   if(unavailableTrip(rt)||!rt?.return_date)return json({error:'رحلة العودة المنفصلة غير متاحة أو لا تحتوي على تاريخ عودة.',code:'SEPARATE_RETURN_UNAVAILABLE'},409);
+   const outMoment=legMoment(trip.departure_date,trip.departure_time),backMoment=legMoment(rt.return_date,rt.return_time);
+   if(outMoment&&backMoment&&backMoment<outMoment)return json({error:'رحلة العودة المنفصلة يجب أن تكون بعد رحلة الذهاب زمنيًا.',code:'SEPARATE_RETURN_BEFORE_OUTBOUND'},409);
  }
  if(mode==='returnonly'){
-   const trip=(await rows(env,'trips',`id=eq.${enc(tripId)}&select=id,return_date,return_time,status&limit=1`))[0];
    if(!trip?.return_date)return json({error:'رحلة «عودة فقط» يجب أن تحتوي على تاريخ عودة.',code:'RETURN_ONLY_DATE_REQUIRED'},409);
  }
  return null;
