@@ -1,4 +1,4 @@
-const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[m]));
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 
 function frame(){
  const iframe=document.createElement('iframe');
@@ -11,7 +11,26 @@ function runFrame(iframe){
  const run=()=>{if(done)return;try{iframe.contentWindow?.focus();iframe.contentWindow?.print()}finally{cleanup()}};
  iframe.onload=()=>setTimeout(run,100);setTimeout(run,500);
 }
+function isIOSLike(){
+ if(typeof navigator==='undefined')return false;
+ const ua=navigator.userAgent||'';
+ return /iPad|iPhone|iPod/i.test(ua)||(navigator.platform==='MacIntel'&&Number(navigator.maxTouchPoints||0)>1);
+}
+function printStandaloneWindow(html,title){
+ const w=window.open('','_blank');
+ if(!w)return false;
+ try{
+  w.document.open();w.document.write(html);w.document.close();
+  let printed=false;
+  const run=()=>{if(printed)return;printed=true;try{w.document.title=title||'Al Maher';w.focus();setTimeout(()=>w.print(),120)}catch{}}
+  if(w.document.readyState==='complete')setTimeout(run,80);else w.addEventListener('load',run,{once:true});
+  setTimeout(run,700);
+  w.addEventListener('afterprint',()=>setTimeout(()=>{try{w.close()}catch{}},250),{once:true});
+  return true;
+ }catch(e){try{w.close()}catch{};return false}
+}
 export function printHtmlDocument(html,{title='Al Maher'}={}){
+ if(isIOSLike()&&printStandaloneWindow(html,title))return;
  const iframe=frame(),doc=iframe.contentDocument||iframe.contentWindow?.document;
  if(!doc){iframe.remove();throw new Error('تعذر تجهيز مستند الطباعة.');}
  doc.open();doc.write(html);doc.close();runFrame(iframe);
