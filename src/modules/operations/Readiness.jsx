@@ -25,7 +25,8 @@ export default function Readiness({initialTrip='',go}){
  const state=useMemo(()=>{
   if(!cloud||!trip)return null;
   const bookings=(cloud.ops?.bookings||[]).filter(b=>goodStatus(b.status));
-  const passengers=(cloud.ops?.passengers||[]).filter(p=>goodStatus(p.status));
+  const liveBookingIds=new Set(bookings.map(b=>s(b.id)));
+  const passengers=(cloud.ops?.passengers||[]).filter(p=>goodStatus(p.status)&&liveBookingIds.has(s(p.booking_id)));
   const pids=new Set(passengers.map(p=>s(p.id)));
   const bookingsById=new Map(bookings.map(b=>[s(b.id),b]));
   const seats=(cloud.tickets?.seat_assignments||[]).filter(x=>s(x.trip_id)===s(tripId)&&pids.has(s(x.passenger_id))&&!['released','cancelled'].includes(low(x.status)));
