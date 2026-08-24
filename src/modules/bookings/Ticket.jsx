@@ -20,6 +20,7 @@ const shortDate=v=>{const x=str(v);return x.includes('T')?x.slice(0,10):x};
 const minusDays=(d,n)=>{if(!d||!Number(n))return'';const x=new Date(`${d}T12:00:00`);x.setDate(x.getDate()-Number(n));return x.toISOString().slice(0,10)};
 const statusAr=v=>({confirmed:'مؤكد',paid:'مسدد',pending:'قيد المراجعة',cancelled:'ملغي',refunded:'مسترد'})[lower(v)]||str(v||'مؤكد');
 const genderAr=v=>{const x=lower(v);if(['male','m','ذكر'].includes(x))return 'ذكر';if(['female','f','أنثى','انثى'].includes(x))return 'أنثى';return str(v||'—')};
+const accommodationLabel=v=>({none:'بدون سكن',shared:'سكن مشترك',private:'غرفة خاصة'})[lower(v)]||'بدون سكن';
 const CODE39={
  '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn','6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn',
  A:'wnnnnwnnw',B:'nnwnnwnnw',C:'wnwnnwnnn',D:'nnnnwwnnw',E:'wnnnwwnnn',F:'nnwnwwnnn',G:'nnnnnwwnw',H:'wnnnnwwnn',I:'nnwnnwwnn',J:'nnnnwwwnn',
@@ -83,11 +84,13 @@ export default function TicketPage({bookingNo,go}){
  },[ops,b?.id,passengers]);
 
  const roomByPassenger=useMemo(()=>{
+  const currentPassengerIds=new Set(passengers.map(p=>str(p.id)));
   const roomMap=new Map((ops?.hotel_rooms||[]).map(x=>[str(x.id),x]));
   const tripHotelMap=new Map((ops?.trip_hotels||[]).map(x=>[str(x.id),x]));
   const hotelMap=new Map((ops?.hotels||[]).map(x=>[str(x.id),x]));
   const out=new Map();
   for(const a of ops?.room_assignments||[]){
+   if(!currentPassengerIds.has(str(a.passenger_id)))continue;
    if(lower(a.status||'assigned')==='released')continue;
    const room=roomMap.get(str(a.hotel_room_id));if(!room)continue;
    const th=tripHotelMap.get(str(room.trip_hotel_id));
@@ -95,7 +98,7 @@ export default function TicketPage({bookingNo,go}){
    out.set(str(a.passenger_id),{assignment:a,room,tripHotel:th,hotel});
   }
   return out;
- },[ops]);
+ },[ops,passengers]);
 
  if(!b)return <Card>الحجز غير موجود في البيانات الحالية.</Card>;
 
@@ -119,14 +122,20 @@ export default function TicketPage({bookingNo,go}){
  const returnDate=mode==='separate'?first(returnTrip?.return_date,returnTrip?.departure_date):first(trip?.return_date,trip?.departure_date);
  const returnTime=mode==='separate'?first(returnTrip?.return_time,returnTrip?.departure_time):first(trip?.return_time,trip?.departure_time);
  const defaultTerms=[L('defaultTerm1'),L('defaultTerm2'),L('defaultTerm3')];
- const housingEntries=[...roomByPassenger.values()];
+ const housingType=lower(first(b?.accommodation_type,snap?.accommodationType,'none'))||'none';
+ const housingTypeLabel=accommodationLabel(housingType);
+ const hasHousing=housingType!=='none';
+ const housingEntries=hasHousing?[...roomByPassenger.values()].filter(x=>housingType==='shared'?lower(x?.room?.room_type)==='shared5':housingType==='private'?lower(x?.room?.room_type)==='private':false):[];
  const housing=housingEntries[0];
- const hasHousing=b?.accommodation_type!=='none';
- const returnOnlyHousingDays=mode==='returnonly'&&hasHousing?Number(snap?.housingDays||0):0;
+ const roomNumbers=[...new Set(housingEntries.map(x=>str(x?.room?.room_no)).filter(Boolean))];
+ const hotelNames=[...new Set(housingEntries.map(x=>str(x?.hotel?.name)).filter(Boolean))];
+ const housingDays=Number(snap?.housingDays||0);
+ const returnOnlyHousingDays=mode==='returnonly'&&hasHousing?housingDays:0;
  const calculatedReturnOnlyCheckIn=returnOnlyHousingDays>0?minusDays(returnDate,returnOnlyHousingDays):'';
- const hotelName=first(housing?.hotel?.name,b?.hotel_name,snap?.hotelName,b?.accommodation_label,b?.accommodation_type==='none'?L('noHousing'):'');
- const roomLabel=first(housing?.room?.room_no,privateTypeLabel?`غرفة ${privateTypeLabel}`:'',b?.accommodation_label);
- const checkIn=hasHousing?shortDate(mode==='returnonly'?first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.housingCheckInDate,snap?.checkIn,calculatedReturnOnlyCheckIn):first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.checkIn,trip?.departure_date)):'';
+ const hotelName=hasHousing?hotelNames.join('، '):'';
+ const roomNumberLabel=hasHousing?(roomNumbers.length?`${roomNumbers.length>1?'الغرف':'الغرفة'} ${roomNumbers.join('، ')}`:'غير مسكن بعد'):'';
+ const housingDetailLabel=housingType==='private'?[housingTypeLabel,privateTypeLabel?`(${privateTypeLabel})`:'',housingDays>0?`${housingDays} يوم`:''].filter(Boolean).join(' — '):housingTypeLabel;
+ const checkIn=hasHousing?shortDate(mode==='returnonly'?first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.housingCheckInDate,snap?.checkIn,calculatedReturnOnlyCheckIn):first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.checkIn)):'';
  const checkOut=hasHousing?shortDate(mode==='returnonly'?first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.housingCheckOutDate,snap?.checkOut,returnDate):first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.checkOut,returnDate)):'';
  const issuedDate=shortDate(first(b?.booking_date,b?.created_at,b?.createdAt,trip?.departure_date));
  const license=first(branch?.license_number,branch?.license_no,branch?.travel_license_number,branch?.travel_license_no,branchContact?.license_number,branchContact?.license_no);
@@ -137,7 +146,7 @@ export default function TicketPage({bookingNo,go}){
  const returnEnd=first(returnInfo?.from_city,returnInfo?.origin);
  const returnRouteLabel=returnInfo?`${returnStart||'—'} ← ${returnEnd||'—'}`:'';
  const routeLabel=mode==='returnonly'?(returnRouteLabel||'—'):mode==='roundtrip'||mode==='separate'?`ذهاب: ${outboundRouteLabel||'—'} · عودة: ${returnRouteLabel||'—'}`:(outboundRouteLabel||'—');
- const wa=()=>{const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,`نوع الرحلة: ${journeyLabel(b.journey_mode)||'—'}`,showOutbound&&outboundRouteLabel?`الذهاب: ${outboundRouteLabel}`:'',showOutbound&&trip?.departure_date?`تاريخ الذهاب: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',showReturn&&returnRouteLabel?`العودة: ${returnRouteLabel}`:'',showReturn&&returnDate?`تاريخ العودة: ${weekdayAr(returnDate)} ${returnDate} ${returnTime||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
+ const wa=()=>{const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,`نوع الرحلة: ${journeyLabel(b.journey_mode)||'—'}`,showOutbound&&outboundRouteLabel?`الذهاب: ${outboundRouteLabel}`:'',showOutbound&&trip?.departure_date?`تاريخ الذهاب: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',showReturn&&returnRouteLabel?`العودة: ${returnRouteLabel}`:'',showReturn&&returnDate?`تاريخ العودة: ${weekdayAr(returnDate)} ${returnDate} ${returnTime||''}`:'',`السكن: ${housingDetailLabel}`,housingType==='private'&&housingDays>0?`مدة السكن: ${housingDays} يوم`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
 
  return <>
   <PageHeader title="تذكرة سفر" subtitle={`${L('bookingNo')} ${b.booking_number}`} actions={<>
@@ -211,7 +220,8 @@ export default function TicketPage({bookingNo,go}){
       <tbody>
        {passengers.map((p,i)=>{
         const seats=seatByPassenger.get(str(p.id))||[];
-        const room=roomByPassenger.get(str(p.id));
+        const rawRoom=roomByPassenger.get(str(p.id));
+        const room=housingType==='shared'&&lower(rawRoom?.room?.room_type)==='shared5'?rawRoom:housingType==='private'&&lower(rawRoom?.room?.room_type)==='private'?rawRoom:null;
         const seatsText=seats.length?seats.map(s=>s.seat_no||s.seat_number||'—').join('، '):'—';
         return <tr key={p.id||i}>
          <td>{i+1}</td>
@@ -229,12 +239,12 @@ export default function TicketPage({bookingNo,go}){
    </section>
 
    <section className="ticket-section ticket-housing-section">
-    <div className="ticket-section-heading"><h3>بيانات السكن</h3><span>{b.accommodation_type==='none'?'بدون سكن':''}</span></div>
+    <div className="ticket-section-heading"><h3>بيانات السكن</h3><span>{housingTypeLabel}</span></div>
     <div className="ticket-housing-grid">
-     <div><span>الفندق</span><strong>{hotelName||L('noHousing')}</strong></div>
-     <div><span>نوع الغرفة</span><strong dir="ltr">{roomLabel||'—'}</strong></div>
-     <div><span>الوصول</span><strong dir="ltr">{checkIn||'—'}</strong></div>
-     <div><span>المغادرة</span><strong dir="ltr">{checkOut||'—'}</strong></div>
+     <div><span>الفندق</span><strong>{hasHousing?(hotelName||'غير مسكن بعد'):'—'}</strong></div>
+     <div><span>نوع السكن</span><strong>{housingDetailLabel}{hasHousing&&roomNumberLabel?` · ${roomNumberLabel}`:''}</strong></div>
+     <div><span>الوصول</span><strong dir="ltr">{hasHousing?(checkIn||'—'):'—'}</strong></div>
+     <div><span>المغادرة</span><strong dir="ltr">{hasHousing?(checkOut||'—'):'—'}</strong></div>
     </div>
    </section>
 
