@@ -1,0 +1,66 @@
+name: Temporary Fix Booking Passenger Sync
+
+on:
+  push:
+    branches: [fix-booking-passenger-sync]
+    paths: ['.tmp-passenger-sync-trigger']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix-booking-passenger-sync
+          fetch-depth: 0
+      - name: Patch booking passenger persistence and housing labels
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('src/core/AppDataContext.jsx')
+          s=p.read_text()
+          old=" const passengers=Array.isArray(x.passengers)?x.passengers:[];"
+          new=" const passengers=(Array.isArray(x.passengers)?x.passengers:[]).filter(p=>!['cancelled','canceled','refunded','deleted','ملغي'].includes(text(p?.status).toLowerCase()));"
+          if old not in s: raise SystemExit('AppData passengers anchor not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          p=Path('src/modules/bookings/BookingEditor.jsx')
+          s=p.read_text()
+          anchor=" function applySuggested(){setTotalPrice(suggested)}\n"
+          helper=""" async function reconcileRemovedPassengers(){if(!existing)return 0;const keptIds=new Set(passengers.filter(p=>p.id).map(p=>s(p.id)));const keptIdentities=new Set(passengers.map(p=>s(p.identity).trim()).filter(Boolean));const removed=existingPassengers.filter(p=>!keptIds.has(s(p.id))&&!keptIdentities.has(s(p.identity_number).trim()));if(!removed.length)return 0;const removedIds=new Set(removed.map(p=>s(p.id)));const seats=await api.module('seats').catch(()=>null);for(const a of seats?.seat_assignments||[]){if(!removedIds.has(s(a.passenger_id))||!activeSeat(a))continue;try{await api.seatAtomicSilent({action:'released',trip_vehicle_id:a.trip_vehicle_id,segment_type:a.segment_type||'outbound',seat_no:s(a.seat_no||a.seat_number)})}catch{}}const housing=await api.module('housing').catch(()=>null);for(const a of housing?.room_assignments||[]){if(!removedIds.has(s(a.passenger_id))||low(a.status||'assigned')==='released')continue;try{await api.moduleWrite({action:'update',table:'room_assignments',id:a.id,row:{status:'released'}})}catch{}}for(const p of removed){await api.moduleWrite({action:'update',table:'booking_passengers',id:p.id,row:{status:'cancelled',accommodation_status:'released'}})}return removed.length}\n"""
+          if 'async function reconcileRemovedPassengers()' not in s:
+              if anchor not in s: raise SystemExit('BookingEditor helper anchor not found')
+              s=s.replace(anchor,helper+anchor,1)
+          old="if(existing){await api.admin({action:'update_booking',booking:{...base,number:bookingNumber,versionNo:Number(existing.version_no||1),name:base.customer_name,phone:base.customer_phone,identity:base.customer_identity,gender:base.customer_gender,nationality:base.customer_nationality,journeyMode,tripId,returnTripId:returnTripId||null,totalPrice:n(totalPrice),paidAmount:paid,paymentMethod:base.payment_method,paymentReference:base.payment_reference,notes:base.notes,accommodationType:accommodation,accommodationLabel,privateRooms:Number(privateRooms),snapshot,passengerDetails:passengers}})}else"
+          new="if(existing){await api.admin({action:'update_booking',booking:{...base,number:bookingNumber,versionNo:Number(existing.version_no||1),name:base.customer_name,phone:base.customer_phone,identity:base.customer_identity,gender:base.customer_gender,nationality:base.customer_nationality,journeyMode,tripId,returnTripId:returnTripId||null,totalPrice:n(totalPrice),paidAmount:paid,paymentMethod:base.payment_method,paymentReference:base.payment_reference,notes:base.notes,accommodationType:accommodation,accommodationLabel,privateRooms:Number(privateRooms),snapshot,passengerDetails:passengers}});await reconcileRemovedPassengers()}else"
+          if old not in s: raise SystemExit('BookingEditor save anchor not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          p=Path('src/modules/housing/Housing.jsx')
+          s=p.read_text()
+          old=" const rooms=useMemo(()=>(payload?.hotel_rooms||[]).filter(x=>s(x.trip_hotel_id)===s(tripHotelId)),[payload,tripHotelId]);\n const assignments=useMemo(()=>(payload?.room_assignments||[]).filter(a=>rooms.some(r=>s(r.id)===s(a.hotel_room_id))&&lower(a.status||'assigned')!=='released'),[payload,rooms]);"
+          new=" const rooms=useMemo(()=>(payload?.hotel_rooms||[]).filter(x=>s(x.trip_hotel_id)===s(tripHotelId)),[payload,tripHotelId]);\n const activePassengerIds=useMemo(()=>new Set((data.passengers||[]).map(p=>s(p.id))),[data.passengers]);\n const assignments=useMemo(()=>(payload?.room_assignments||[]).filter(a=>rooms.some(r=>s(r.id)===s(a.hotel_room_id))&&activePassengerIds.has(s(a.passenger_id))&&lower(a.status||'assigned')!=='released'),[payload,rooms,activePassengerIds]);"
+          if old not in s: raise SystemExit('Housing assignments anchor not found')
+          s=s.replace(old,new,1)
+          old="<td>{x.privateType||'—'}</td>"
+          new="<td>{x.type==='private'?capacityLabel(privateCapacity(x.privateType)):x.type==='shared'?'خماسية':'—'}</td>"
+          if old not in s: raise SystemExit('Housing room type label anchor not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Verify build
+        run: npm ci && npm run build
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/AppDataContext.jsx src/modules/bookings/BookingEditor.jsx src/modules/housing/Housing.jsx
+          git commit -m "fix booking passenger sync and housing labels"
+          git push origin HEAD:fix-booking-passenger-sync
