@@ -39,6 +39,13 @@ async function request(path,{method='GET',body,headers={},feedback=true}={}){
   if(method!=='GET'&&feedback){const message=mutationSuccessMessage(path,body);if(message)notifySuccess(message)}
   return data;
 }
+function emitBookingSaved(payload){
+  if(typeof window==='undefined')return;
+  const booking=payload?.booking||payload||{};
+  const ids=[booking.trip_id,booking.tripId,booking.return_trip_id,booking.returnTripId].filter(Boolean).map(String);
+  if(!ids.length)return;
+  try{window.dispatchEvent(new CustomEvent('almaher-booking-saved',{detail:{tripIds:[...new Set(ids)]}}))}catch{}
+}
 function normalizeAdminBody(body){
   if(body?.action!=='sync_trips'||!Array.isArray(body?.rows))return body;
   return {...body,rows:body.rows.map(row=>{
@@ -54,7 +61,9 @@ function isWorkerSubrequestLimitError(err){
 async function adminRequest(body){
   const normalized=normalizeAdminBody(body);
   if(normalized?.action!=='sync_trips'||!Array.isArray(normalized?.rows)||normalized.rows.length<=1){
-    return request('/api/admin',{method:'POST',body:normalized});
+    const result=await request('/api/admin',{method:'POST',body:normalized});
+    if(normalized?.action==='update_booking')emitBookingSaved(normalized);
+    return result;
   }
   const chunkSize=3;
   const results=[];
@@ -91,6 +100,6 @@ export const api={
   destinations:()=>request('/api/destinations'),
   destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
   customerLookup:(bookingNo,verification)=>request(`/api/customer/booking?bookingNo=${encodeURIComponent(bookingNo)}&verification=${encodeURIComponent(verification)}`),
-  customerBook:(booking,passengers)=>request('/api/customer/book',{method:'POST',body:{booking,passengers}}),
+  customerBook:async(booking,passengers)=>{const result=await request('/api/customer/book',{method:'POST',body:{booking,passengers}});emitBookingSaved({booking});return result},
   push:(body)=>request('/api/push',{method:'POST',body})
 };
