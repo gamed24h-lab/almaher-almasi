@@ -15,6 +15,9 @@ const txKind=x=>String(x?.type??x?.transaction_type??x?.kind??x?.category??x?.ac
 const txRef=x=>String(x?.reference??x?.reference_no??'').trim();
 const isPayment=x=>txKind(x)==='payment'||txRef(x).startsWith('PAY-');
 const isRefund=x=>['refund','refunded','refund_payment'].includes(txKind(x))||/^(REF|RFD|REFUND)-/i.test(txRef(x))||Number(x?.amount||0)<0;
+const shiftStatus=x=>String(x?.status??x?.shift_status??'').trim().toLowerCase();
+const shiftActual=x=>x?.actual_closing??x?.closing_balance??x?.actual_balance;
+const shiftVariance=x=>Number(x?.variance??x?.difference??0);
 
 async function reconcile(request,env){
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canReconcile(actor))return json({error:'لا توجد صلاحية مراجعة المطابقة المالية.'},403);
@@ -24,11 +27,11 @@ async function reconcile(request,env){
   try{
     const [transactions,expenses,registers]=await Promise.all([
       rows(env,'transactions',`${scope}select=*&order=created_at.desc&limit=2000`),
-      rows(env,'expenses',`${scope}select=id,branch_id,amount,expense_date,created_at,category,notes&order=created_at.desc&limit=2000`),
-      rows(env,'cash_registers',`${scope}select=id,branch_id,name,active&limit=500`)
+      rows(env,'expenses',`${scope}select=*&limit=2000`),
+      rows(env,'cash_registers',`${scope}select=*&limit=500`)
     ]);
-    const regIds=registers.map(x=>String(x.id));
-    const shifts=regIds.length?await rows(env,'cash_shifts',`register_id=in.(${regIds.join(',')})&select=id,register_id,staff_user_id,opening_balance,expected_closing,actual_closing,variance,status,opened_at,closed_at&order=opened_at.desc&limit=1000`):[];
+    const regIds=registers.map(x=>String(x.id)).filter(Boolean);
+    const shifts=regIds.length?await rows(env,'cash_shifts',`register_id=in.(${regIds.join(',')})&select=*&limit=1000`):[];
     const posted=transactions.filter(x=>String(x.status||'posted').toLowerCase()==='posted');
     const pending=transactions.filter(x=>String(x.status||'').toLowerCase()==='pending');
     const payments=posted.filter(isPayment);
@@ -36,9 +39,9 @@ async function reconcile(request,env){
     const otherIn=posted.filter(x=>!isPayment(x)&&!isRefund(x)&&Number(x.amount||0)>0);
     const now=Date.now();
     const stalePending=pending.filter(x=>{const t=Date.parse(x.created_at||'');return Number.isFinite(t)&&now-t>10*60*1000});
-    const openShifts=shifts.filter(x=>String(x.status||'').toLowerCase()==='open');
-    const closedMissingActual=shifts.filter(x=>String(x.status||'').toLowerCase()==='closed'&&(x.actual_closing===null||x.actual_closing===undefined));
-    const varianceShifts=shifts.filter(x=>Math.abs(Number(x.variance||0))>0.01);
+    const openShifts=shifts.filter(x=>shiftStatus(x)==='open');
+    const closedMissingActual=shifts.filter(x=>shiftStatus(x)==='closed'&&(shiftActual(x)===null||shiftActual(x)===undefined));
+    const varianceShifts=shifts.filter(x=>Math.abs(shiftVariance(x))>0.01);
     const paymentsWithoutReceipt=payments.filter(x=>!txRef(x).startsWith('PAY-'));
     const duplicateRefs=[];const refCount=new Map();for(const x of transactions){const r=txRef(x);if(!r)continue;refCount.set(r,(refCount.get(r)||0)+1)}for(const [reference,count] of refCount)if(count>1)duplicateRefs.push({reference,count});
     const collected=sum(payments),refundTotal=Number(refunds.reduce((n,x)=>n+Math.abs(Number(x.amount||0)),0).toFixed(2)),expenseTotal=sum(expenses),net=Number((collected+sum(otherIn)-refundTotal-expenseTotal).toFixed(2));
