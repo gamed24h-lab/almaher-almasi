@@ -26,12 +26,14 @@ function normalizeBootstrap(raw){
  });
  const passengerByBooking=new Map();for(const p of normalizedPassengers){const k=text(p.booking_id),a=passengerByBooking.get(k)||[];a.push(p);passengerByBooking.set(k,a)}
  const normalizedBookings=bookings.map(b=>{
-  const snapshot=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:null;if(!snapshot)return b;
-  const current=passengerByBooking.get(text(b.id))||[];if(!current.length)return b;
-  const details=Array.isArray(snapshot.passengerDetails)?snapshot.passengerDetails:[];if(!details.length)return b;
+  const displayNumber=text(b.booking_number)||text(b.booking_no)||text(b.code)||text(b.reference)||text(b.id);
+  const base={...b,booking_number:displayNumber,booking_no:displayNumber,code:displayNumber,reference:displayNumber};
+  const snapshot=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:null;if(!snapshot)return base;
+  const current=passengerByBooking.get(text(b.id))||[];if(!current.length)return base;
+  const details=Array.isArray(snapshot.passengerDetails)?snapshot.passengerDetails:[];if(!details.length)return base;
   const byId=new Map(current.filter(p=>p.id).map(p=>[text(p.id),p]));
   const nextDetails=details.map((d,i)=>{const p=byId.get(text(d?.id))||current[i];if(!p)return d;return {...d,name:p.full_name,full_name:p.full_name,phone:p.phone,identity:p.identity_number,identity_number:p.identity_number,nationality:p.nationality,gender:p.gender}});
-  return {...b,snapshot:{...snapshot,passengerDetails:nextDetails}};
+  return {...base,snapshot:{...snapshot,passengerDetails:nextDetails}};
  });
  return {...emptyData,...x,bookings:normalizedBookings,passengers:normalizedPassengers};
 }
