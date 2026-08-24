@@ -7,12 +7,13 @@ const enc=v=>encodeURIComponent(String(v??''));
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
 async function actorFrom(request,env){try{const r=await appWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env);if(!r.ok)return null;const b=await r.json().catch(()=>({}));return b?.user||null}catch{return null}}
 const elevated=a=>!!a&&(String(a.role||'').toLowerCase()==='developer'||a.role==='مدير عام'||a.permissions?.all||a.permissions?.allBranchesFinance);
-const canFinance=a=>!!a&&(elevated(a)||a.permissions?.finance||a.permissions?.payments||a.permissions?.expenses||a.permissions?.shifts||a.permissions?.reports);
+const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o||{},k);
+const canReconcile=a=>{if(!a)return false;if(elevated(a))return true;const p=a.permissions||{};if(hasOwn(p,'reconcileFinance'))return p.reconcileFinance===true;return !!(p.finance||p.reports)};
 async function rows(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${table}?${query}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر قراءة ${table}`);return Array.isArray(out)?out:[]}
 const sum=(arr,key='amount')=>Number(arr.reduce((n,x)=>n+Number(x?.[key]||0),0).toFixed(2));
 
 async function reconcile(request,env){
-  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canFinance(actor))return json({error:'لا توجد صلاحية مراجعة المطابقة المالية.'},403);
+  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canReconcile(actor))return json({error:'لا توجد صلاحية مراجعة المطابقة المالية.'},403);
   const all=elevated(actor),branchId=all?String(new URL(request.url).searchParams.get('branch_id')||'').trim():String(actor.branch_id||'').trim();
   if(!all&&!branchId)return json({error:'حساب الموظف غير مرتبط بفرع.'},409);
   const scope=branchId?`branch_id=eq.${enc(branchId)}&`:'';
