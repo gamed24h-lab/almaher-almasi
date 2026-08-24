@@ -61,28 +61,39 @@ async function prelaunchResetPlan(request,env){
   const tables=canonical.map(x=>({table:x.table,count:x.ids.length})),total=tables.reduce((n,x)=>n+x.count,0),snapshot=await latestRestoreTestedSnapshot(env);
   return json({ok:true,preview_only:true,execution_available:false,generated_at:new Date().toISOString(),plan_hash:planHash,total_rows:total,tables,delete_order:deleteOrder,protected_tables:protectedTables,latest_snapshot:snapshot.row?{id:snapshot.row.id,completed_at:snapshot.row.completed_at,restore_tested:snapshot.row.restore_tested===true,restore_tested_at:snapshot.row.restore_tested_at||null}:null,requirements:{fresh_snapshot_after_plan:true,restore_drill_after_snapshot:true,double_confirmation:true,exact_plan_hash_match:true},warnings:['هذه خطة حذف مقفلة للمعاينة فقط ولا يوجد تنفيذ DELETE في هذا المسار.','تم تثبيت الخطة ببصمة SHA-256 مبنية على أرقام السجلات الحالية لكل جدول.','أي إضافة أو حذف أو تغيير في مجموعة السجلات قبل التنفيذ سيغير البصمة ويمنع اعتماد الخطة القديمة.','يجب إنشاء Snapshot جديدة بعد هذه الخطة ثم تشغيل Restore Drill عليها قبل فتح التنفيذ.']});
 }
+async function safeGateCheck(label,fn){
+  try{
+    const response=await fn();
+    const body=await parse(response);
+    return {label,response_ok:response.ok,status:response.status,body,error:null};
+  }catch(e){
+    return {label,response_ok:false,status:0,body:{},error:String(e?.message||e||'Unknown error')};
+  }
+}
+function gateError(x,fallback){return x?.error||x?.body?.error||x?.body?.message||fallback}
 async function finalGate(request,env){
   const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);
   if(!isDeveloper(actor))return json({error:'بوابة المراجعة النهائية متاحة للمطور الحقيقي فقط.'},403);
   if(!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
   const clone=(path,method='GET')=>new Request(new URL(path,request.url),{method,headers:request.headers});
-  const [inventoryR,planR,readinessR,rollbackR]=await Promise.all([
-    prelaunchInventory(request,env),
-    prelaunchResetPlan(request,env),
-    restoreWorker.fetch(clone('/api/production/readiness'),env),
-    restoreWorker.fetch(clone('/api/production/rollback-test','POST'),env)
+  const [inventoryX,planX,readinessX,rollbackX]=await Promise.all([
+    safeGateCheck('inventory',()=>prelaunchInventory(request,env)),
+    safeGateCheck('reset_plan',()=>prelaunchResetPlan(request,env)),
+    safeGateCheck('readiness',()=>restoreWorker.fetch(clone('/api/production/readiness'),env)),
+    safeGateCheck('rollback',()=>restoreWorker.fetch(clone('/api/production/rollback-test','POST'),env))
   ]);
-  const [inventory,plan,readiness,rollback]=await Promise.all([parse(inventoryR),parse(planR),parse(readinessR),parse(rollbackR)]);
+  const inventory=inventoryX.body||{},plan=planX.body||{},readiness=readinessX.body||{},rollback=rollbackX.body||{};
   const checks=[
-    {key:'readiness',label:'الجاهزية الأساسية',ok:readinessR.ok&&readiness?.ready===true,details:(readiness?.blockers||[]).length?`موانع: ${(readiness.blockers||[]).join(', ')}`:'الفحوصات الأساسية سليمة'},
-    {key:'inventory',label:'الجرد الشامل',ok:inventoryR.ok&&inventory?.ok===true,details:`${inventory?.totals?.total??0} سجل تشغيلي`},
-    {key:'reset_plan',label:'خطة التصفير الحالية',ok:planR.ok&&plan?.ok===true&&!!plan?.plan_hash,details:plan?.plan_hash?`SHA-256 ${String(plan.plan_hash).slice(0,12)}…`:'لا توجد بصمة صالحة'},
-    {key:'snapshot',label:'Snapshot قبل التشغيل',ok:!!plan?.latest_snapshot,details:plan?.latest_snapshot?.completed_at||'غير موجودة'},
-    {key:'restore_drill',label:'Restore Drill على آخر Snapshot',ok:plan?.latest_snapshot?.restore_tested===true,details:plan?.latest_snapshot?.restore_tested_at||'لم ينجح بعد'},
-    {key:'rollback',label:'سلامة ملف Rollback',ok:rollbackR.ok&&rollback?.verified===true,details:rollback?.verified?'checksum والتغطية الأساسية سليمان':'فحص Rollback غير مكتمل'}
+    {key:'readiness',label:'الجاهزية الأساسية',ok:readinessX.response_ok&&readiness?.ready===true,details:readinessX.response_ok?((readiness?.blockers||[]).length?`موانع: ${(readiness.blockers||[]).join(', ')}`:'الفحوصات الأساسية سليمة'):gateError(readinessX,'تعذر تشغيل فحص الجاهزية')},
+    {key:'inventory',label:'الجرد الشامل',ok:inventoryX.response_ok&&inventory?.ok===true,details:inventoryX.response_ok?`${inventory?.totals?.total??0} سجل تشغيلي`:gateError(inventoryX,'تعذر تشغيل الجرد الشامل')},
+    {key:'reset_plan',label:'خطة التصفير الحالية',ok:planX.response_ok&&plan?.ok===true&&!!plan?.plan_hash,details:planX.response_ok?(plan?.plan_hash?`SHA-256 ${String(plan.plan_hash).slice(0,12)}…`:'لا توجد بصمة صالحة'):gateError(planX,'تعذر تثبيت خطة التصفير')},
+    {key:'snapshot',label:'Snapshot قبل التشغيل',ok:planX.response_ok&&!!plan?.latest_snapshot,details:planX.response_ok?(plan?.latest_snapshot?.completed_at||'غير موجودة'):gateError(planX,'تعذر قراءة حالة Snapshot')},
+    {key:'restore_drill',label:'Restore Drill على آخر Snapshot',ok:planX.response_ok&&plan?.latest_snapshot?.restore_tested===true,details:planX.response_ok?(plan?.latest_snapshot?.restore_tested_at||'لم ينجح بعد'):gateError(planX,'تعذر قراءة حالة Restore Drill')},
+    {key:'rollback',label:'سلامة ملف Rollback',ok:rollbackX.response_ok&&rollback?.verified===true,details:rollbackX.response_ok?(rollback?.verified?'checksum والتغطية الأساسية سليمان':'فحص Rollback غير مكتمل'):gateError(rollbackX,'تعذر تشغيل فحص Rollback')}
   ];
   const blockers=checks.filter(x=>!x.ok);
-  return json({ok:true,read_only:true,generated_at:new Date().toISOString(),ready_for_final_review:blockers.length===0,activation_available:false,activation_locked:true,checks,blockers:blockers.map(x=>x.key),plan_hash:plan?.plan_hash||null,total_rows:plan?.total_rows??null,latest_snapshot:plan?.latest_snapshot||null,policy:{delete_execution:false,activation_execution:false,double_confirmation_required:true,exact_plan_hash_match_required:true,fresh_snapshot_sequence_must_be_revalidated_immediately_before_activation:true},warnings:['هذا الفحص لا يحذف ولا يعدل أي سجل ولا يفتح Production.','حتى عند نجاح كل الفحوصات سيظل التفعيل مقفولًا إلى أن يتم تنفيذ خطوة منفصلة بتأكيد مزدوج ومطابقة بصمة الخطة لحظيًا.']});
+  const diagnostics=[inventoryX,planX,readinessX,rollbackX].filter(x=>!x.response_ok).map(x=>({key:x.label,status:x.status,error:gateError(x,'تعذر الفحص')}));
+  return json({ok:true,read_only:true,generated_at:new Date().toISOString(),ready_for_final_review:blockers.length===0,activation_available:false,activation_locked:true,checks,blockers:blockers.map(x=>x.key),diagnostics,plan_hash:plan?.plan_hash||null,total_rows:plan?.total_rows??null,latest_snapshot:plan?.latest_snapshot||null,policy:{delete_execution:false,activation_execution:false,double_confirmation_required:true,exact_plan_hash_match_required:true,fresh_snapshot_sequence_must_be_revalidated_immediately_before_activation:true},warnings:['هذا الفحص لا يحذف ولا يعدل أي سجل ولا يفتح Production.','أي فحص فرعي يفشل يتم عزله وعرضه كمانع بدل إسقاط بوابة المراجعة بخطأ HTTP 500.','حتى عند نجاح كل الفحوصات سيظل التفعيل مقفولًا إلى أن يتم تنفيذ خطوة منفصلة بتأكيد مزدوج ومطابقة بصمة الخطة لحظيًا.']});
 }
 
 export default {async fetch(request,env,ctx){const u=new URL(request.url);if(u.pathname==='/api/production/prelaunch-inventory'&&request.method==='GET')return prelaunchInventory(request,env);if(u.pathname==='/api/production/prelaunch-reset-plan'&&request.method==='GET')return prelaunchResetPlan(request,env);if(u.pathname==='/api/production/final-gate'&&request.method==='GET')return finalGate(request,env);return restoreWorker.fetch(request,env,ctx)}};
