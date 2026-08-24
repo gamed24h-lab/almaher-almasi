@@ -107,6 +107,10 @@ export default function TicketPage({bookingNo,go}){
  const returnInfo=returnTrip||trip;
  const returnDate=returnTrip?.departure_date||trip?.return_date||trip?.departure_date;
  const returnTime=returnTrip?.departure_time||trip?.return_time||'';
+ const tripFrom=t=>first(t?.from_city,t?.origin);
+ const tripTo=t=>first(t?.to_city,t?.destination);
+ const returnSameDirection=!!(returnTrip&&trip&&lower(tripFrom(returnTrip))===lower(tripFrom(trip))&&lower(tripTo(returnTrip))===lower(tripTo(trip)));
+ const reverseReturn=returnTrip?returnSameDirection:['roundtrip','returnonly'].includes(lower(b.journey_mode));
  const defaultTerms=[L('defaultTerm1'),L('defaultTerm2'),L('defaultTerm3')];
  const housingEntries=[...roomByPassenger.values()];
  const housing=housingEntries[0];
@@ -178,7 +182,7 @@ export default function TicketPage({bookingNo,go}){
 
    <section className="ticket-journeys">
     {showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={tripBranch?.boarding_point||snap?.boardingPoint} boardingTime={tripBranch?.boarding_time||snap?.boardingTime} unavailable={L('tripUnavailable')}/>} 
-    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} reverse={!returnTrip&&['roundtrip','returnonly'].includes(lower(b.journey_mode))} unavailable={L('tripUnavailable')}/>} 
+    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} reverse={reverseReturn} unavailable={L('tripUnavailable')}/>} 
    </section>
 
    <section className="ticket-section ticket-passenger-section">
