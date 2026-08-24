@@ -7,9 +7,10 @@ const enc=v=>encodeURIComponent(String(v??''));
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
 async function actorFrom(request,env){try{const r=await appWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env);if(!r.ok)return null;const b=await r.json().catch(()=>({}));return b?.user||null}catch{return null}}
 const elevated=a=>!!a&&(String(a.role||'').toLowerCase()==='developer'||a.role==='مدير عام'||a.permissions?.all||a.permissions?.allBranchesFinance);
+const allReturnBranches=a=>!!a&&(String(a.role||'').toLowerCase()==='developer'||a.role==='مدير عام'||a.permissions?.all||a.permissions?.allBranches);
 const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o||{},k);
 const canReconcile=a=>{if(!a)return false;if(elevated(a))return true;const p=a.permissions||{};if(hasOwn(p,'reconcileFinance'))return p.reconcileFinance===true;return !!(p.finance||p.reports)};
-const canChooseReturn=a=>{if(!a)return false;if(elevated(a)||a.permissions?.allBranches)return true;const p=a.permissions||{};return !!(p.branchBooking||p.editBookings||p.changeTrip||p.bookings)};
+const canChooseReturn=a=>{if(!a)return false;if(allReturnBranches(a))return true;const p=a.permissions||{};return !!(p.branchBooking||p.editBookings||p.changeTrip||p.bookings)};
 async function rows(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${table}?${query}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر قراءة ${table}`);return Array.isArray(out)?out:[]}
 const sum=(arr,key='amount')=>Number(arr.reduce((n,x)=>n+Number(x?.[key]||0),0).toFixed(2));
 const txKind=x=>String(x?.type??x?.transaction_type??x?.kind??x?.category??x?.action??'').trim().toLowerCase();
@@ -39,7 +40,7 @@ async function crossBranchBookingUpdate(request,env,ctx,payload){
   try{
     const current=(await rows(env,'bookings',`booking_number=eq.${enc(bookingNo)}&select=id,booking_number,branch_id,trip_id,return_trip_id,journey_mode,snapshot&limit=1`))[0];
     if(!current)return json({error:'الحجز غير موجود.'},404);
-    const all=elevated(actor)||actor.permissions?.allBranches;
+    const all=allReturnBranches(actor);
     if(!all&&String(current.branch_id||'')!==String(actor.branch_id||''))return json({error:'لا يمكن تعديل حجز تابع لفرع آخر.'},403);
     const target=(await rows(env,'trips',`id=eq.${enc(targetId)}&select=id,return_date,return_time,status&limit=1`))[0];
     if(!target)return json({error:'رحلة العودة المختارة غير موجودة.'},400);
