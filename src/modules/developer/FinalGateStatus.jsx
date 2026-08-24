@@ -2,15 +2,38 @@ import React,{useEffect,useState} from 'react';
 import {CheckCircle2,RefreshCw,ShieldAlert,XCircle} from 'lucide-react';
 import {Badge,Button,Card,ErrorBox} from '../../components/UI.jsx';
 
-async function req(path){
-  const r=await fetch(path,{credentials:'include',headers:{Accept:'application/json'},cache:'no-store'});
+async function req(path,{method='GET'}={}){
+  const r=await fetch(path,{method,credentials:'include',headers:{Accept:'application/json'},cache:'no-store'});
   const text=await r.text();let body={};try{body=text?JSON.parse(text):{}}catch{body={message:text}}
-  if(!r.ok)throw new Error(body?.error||body?.message||`HTTP ${r.status}`);return body;
+  if(!r.ok){const e=new Error(body?.error||body?.message||`HTTP ${r.status}`);e.status=r.status;throw e}return body;
 }
+async function safeReq(path,options){try{return {ok:true,data:await req(path,options)}}catch(error){return {ok:false,error:error?.message||'تعذر تنفيذ الفحص'}}}
 
 export default function FinalGateStatus(){
   const [gate,setGate]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
-  async function load(){setBusy(true);setError('');try{setGate(await req('/api/production/final-gate'))}catch(e){setError(e.message)}finally{setBusy(false)}}
+  async function load(){
+    setBusy(true);setError('');
+    try{
+      const [readinessR,inventoryR,planR,rollbackR]=await Promise.all([
+        safeReq('/api/production/readiness'),
+        safeReq('/api/production/prelaunch-inventory'),
+        safeReq('/api/production/prelaunch-reset-plan'),
+        safeReq('/api/production/rollback-test',{method:'POST'})
+      ]);
+      const readiness=readinessR.data||{},inventory=inventoryR.data||{},plan=planR.data||{},rollback=rollbackR.data||{};
+      const checks=[
+        {key:'readiness',label:'الجاهزية الأساسية',ok:readinessR.ok&&readiness.ready===true,details:readinessR.ok?((readiness.blockers||[]).length?`موانع: ${(readiness.blockers||[]).join('، ')}`:'الفحوصات الأساسية سليمة'):readinessR.error},
+        {key:'inventory',label:'الجرد الشامل',ok:inventoryR.ok&&inventory.ok===true,details:inventoryR.ok?`${inventory.totals?.total??0} سجل تشغيلي`:inventoryR.error},
+        {key:'reset_plan',label:'خطة التصفير الحالية',ok:planR.ok&&plan.ok===true&&!!plan.plan_hash,details:planR.ok?(plan.plan_hash?`SHA-256 ${String(plan.plan_hash).slice(0,12)}…`:'لا توجد بصمة صالحة'):planR.error},
+        {key:'snapshot',label:'Snapshot قبل التشغيل',ok:planR.ok&&!!plan.latest_snapshot,details:planR.ok?(plan.latest_snapshot?.completed_at||'غير موجودة'):planR.error},
+        {key:'restore_drill',label:'Restore Drill على آخر Snapshot',ok:planR.ok&&plan.latest_snapshot?.restore_tested===true,details:planR.ok?(plan.latest_snapshot?.restore_tested_at||'لم ينجح بعد'):planR.error},
+        {key:'rollback',label:'سلامة ملف Rollback',ok:rollbackR.ok&&rollback.verified===true,details:rollbackR.ok?(rollback.verified?'checksum والتغطية الأساسية سليمان':'فحص Rollback غير مكتمل'):rollbackR.error}
+      ];
+      const ready=checks.every(x=>x.ok);
+      setGate({checks,ready_for_final_review:ready,plan_hash:plan.plan_hash||null,warnings:['هذه البوابة تجمع نتائج فحوصات مستقلة للقراءة فقط.','التفعيل والحذف يظلان مقفولين حتى بعد نجاح جميع الشروط.']});
+      const failedRequests=[readinessR,inventoryR,planR,rollbackR].filter(x=>!x.ok);if(failedRequests.length)setError(`تعذر إكمال ${failedRequests.length} من فحوصات البوابة. راجع النتائج أدناه.`);
+    }catch(e){setError(e.message)}finally{setBusy(false)}
+  }
   useEffect(()=>{load()},[]);
   const checks=gate?.checks||[];
   const ready=gate?.ready_for_final_review===true;
