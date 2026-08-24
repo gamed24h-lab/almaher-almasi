@@ -105,12 +105,12 @@ export default function TicketPage({bookingNo,go}){
  const showOutbound=lower(b.journey_mode)!=='returnonly';
  const showReturn=['roundtrip','separate','returnonly'].includes(lower(b.journey_mode));
  const returnInfo=returnTrip||trip;
- const returnDate=returnTrip?.departure_date||trip?.return_date||trip?.departure_date;
- const returnTime=returnTrip?.departure_time||trip?.return_time||'';
  const tripFrom=t=>first(t?.from_city,t?.origin);
  const tripTo=t=>first(t?.to_city,t?.destination);
  const returnSameDirection=!!(returnTrip&&trip&&lower(tripFrom(returnTrip))===lower(tripFrom(trip))&&lower(tripTo(returnTrip))===lower(tripTo(trip)));
  const reverseReturn=returnTrip?returnSameDirection:['roundtrip','returnonly'].includes(lower(b.journey_mode));
+ const returnDate=returnTrip?(returnSameDirection?first(returnTrip?.return_date,returnTrip?.departure_date):first(returnTrip?.departure_date,returnTrip?.return_date)):first(trip?.return_date,trip?.departure_date);
+ const returnTime=returnTrip?(returnSameDirection?first(returnTrip?.return_time,returnTrip?.departure_time):first(returnTrip?.departure_time,returnTrip?.return_time)):first(trip?.return_time,trip?.departure_time);
  const defaultTerms=[L('defaultTerm1'),L('defaultTerm2'),L('defaultTerm3')];
  const housingEntries=[...roomByPassenger.values()];
  const housing=housingEntries[0];
@@ -257,7 +257,6 @@ export default function TicketPage({bookingNo,go}){
      <span>خطوة إلى الطاعات، ومغفرةٌ تمحو ما فات</span>
     </div>
    </footer>
-
    {config.show_profile_tickets!==false&&developer?.display_name&&<small className="ticket-developer-line">{L('developer')}: {developer.display_name}{developer.phone?` · ${developer.phone}`:''}</small>}
   </article>
  </>;
