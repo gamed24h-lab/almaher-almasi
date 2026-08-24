@@ -1,4 +1,4 @@
-const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[m]));
 
 function frame(){
  const iframe=document.createElement('iframe');
@@ -42,9 +42,14 @@ export function printElement(element,{title='Al Maher',dir,lang,pageSize='A4',or
  const clone=printableClone(element);
  const actualLang=lang||document.documentElement.lang||'ar';
  const actualDir=dir||document.documentElement.dir||(['ar','ur'].includes(actualLang)?'rtl':'ltr');
- const page=String(pageSize).toLowerCase()==='80mm'?'80mm auto':String(pageSize).toLowerCase()==='58mm'?'58mm auto':`A4 ${orientation==='landscape'?'landscape':'portrait'}`;
+ const normalized=String(pageSize).toLowerCase();
+ const thermal=normalized==='80mm'||normalized==='58mm';
+ const paperWidth=normalized==='80mm'?'80mm':normalized==='58mm'?'58mm':'';
+ const innerPad=normalized==='80mm'?'3mm':normalized==='58mm'?'2mm':'0';
+ const page=thermal?`${paperWidth} auto`:`A4 ${orientation==='landscape'?'landscape':'portrait'}`;
  const attrs=Object.entries(bodyAttributes||{}).map(([k,v])=>` ${esc(k)}="${esc(v)}"`).join('');
- const shellCss=`<style>@page{size:${page};margin:${pageSize==='A4'?'10mm':'3mm'}}html,body{background:#fff!important;margin:0!important;padding:0!important}body{direction:${actualDir}}.isolated-print-root{width:100%;max-width:none!important;margin:0!important;box-shadow:none!important}.isolated-print-root .print-only{display:block!important}.print-field-value{display:inline-block;padding:4px 0}a{color:inherit;text-decoration:none}@media print{.no-print,.page-actions,button{display:none!important}}</style>`;
+ const thermalCss=thermal?`html,body{width:${paperWidth}!important;max-width:${paperWidth}!important}body{padding:${innerPad}!important;overflow-x:hidden!important}.isolated-print-root{width:100%!important;max-width:100%!important}body[data-print-mode="80"] .ticket-page,body[data-print-mode="58"] .ticket-page{width:100%!important;max-width:100%!important;margin:0!important}img,svg,table{max-width:100%!important}table{width:100%!important;table-layout:fixed!important}th,td{overflow-wrap:anywhere!important;word-break:break-word!important}`:'';
+ const shellCss=`<style>@page{size:${page};margin:${thermal?'0':'10mm'}}*{box-sizing:border-box}html,body{background:#fff!important;margin:0!important;padding:0!important}body{direction:${actualDir}}.isolated-print-root{width:100%;max-width:none!important;margin:0!important;box-shadow:none!important}.isolated-print-root .print-only{display:block!important}.print-field-value{display:inline-block;padding:4px 0}a{color:inherit;text-decoration:none}${thermalCss}@media print{.no-print,.page-actions,button{display:none!important}}</style>`;
  const html=`<!doctype html><html lang="${esc(actualLang)}" dir="${esc(actualDir)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>${cssAssets()}${shellCss}</head><body${attrs}><div class="isolated-print-root">${clone.outerHTML}</div></body></html>`;
  printHtmlDocument(html,{title});
 }
