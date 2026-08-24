@@ -11,7 +11,7 @@ const bookingDisplayNumber=b=>text(b?.booking_number)||text(b?.booking_no)||text
 function normalizeBootstrap(raw){
  const x=raw&&typeof raw==='object'?raw:{};
  const bookings=Array.isArray(x.bookings)?x.bookings:[];
- const passengers=Array.isArray(x.passengers)?x.passengers:[];
+ const passengers=(Array.isArray(x.passengers)?x.passengers:[]).filter(p=>!['cancelled','canceled','refunded','deleted','ملغي'].includes(text(p?.status).toLowerCase()));
  const bookingById=new Map(bookings.map(b=>[text(b.id),b]));
  const counts=new Map();for(const p of passengers){const k=text(p.booking_id);counts.set(k,(counts.get(k)||0)+1)}
  const normalizedPassengers=passengers.map(p=>{
