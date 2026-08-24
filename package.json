@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check:worker": "node --check worker/bootstrap-capacity-index.js",
-    "check:workers": "node --check worker/bootstrap-capacity-index.js && node --check worker/capacity-guard-index.js && node --check worker/trip-destination-guard-index.js && node --check worker/booking-verify-index.js && node --check worker/strict-permissions-index.js && node --check worker/hotel-permissions-index.js && node --check worker/booking-timeline-index.js && node --check worker/fleet-permissions-index.js && node --check worker/seat-atomic-index.js && node --check worker/runtime-mode-index.js && node --check worker/inventory-index.js && node --check worker/index.js && node --check worker/secure-index.js && node --check worker/audit-index.js && node --check worker/prelaunch-index.js && node --check worker/production-index.js && node --check worker/restore-index.js",
+    "check:worker": "node --check worker/housing-integrity-index.js",
+    "check:workers": "node --check worker/housing-integrity-index.js && node --check worker/bootstrap-capacity-index.js && node --check worker/capacity-guard-index.js && node --check worker/trip-destination-guard-index.js && node --check worker/booking-verify-index.js && node --check worker/strict-permissions-index.js && node --check worker/hotel-permissions-index.js && node --check worker/booking-timeline-index.js && node --check worker/fleet-permissions-index.js && node --check worker/seat-atomic-index.js && node --check worker/runtime-mode-index.js && node --check worker/inventory-index.js && node --check worker/index.js && node --check worker/secure-index.js && node --check worker/audit-index.js && node --check worker/prelaunch-index.js && node --check worker/production-index.js && node --check worker/restore-index.js",
     "check:cloudflare": "npm run check:workers && npm run build && wrangler deploy --dry-run --outdir .wrangler-dry-run",
     "check": "npm run check:cloudflare",
     "deploy": "npm run build && wrangler deploy"
