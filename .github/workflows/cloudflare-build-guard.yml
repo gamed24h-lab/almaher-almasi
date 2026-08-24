@@ -8,62 +8,34 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch-trip-booking-count:
-    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: notify-trip-booking-counts
-          fetch-depth: 0
-      - name: Patch booking save notification
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('src/modules/bookings/BookingEditor.jsx')
-          s=p.read_text()
-          anchor=" async function save(e){e.preventDefault();setErr('');"
-          helper=""" function notifyTripBookingTotals(fresh){const involved=[tripId,['separate','roundtrip'].includes(journeyMode)?returnTripId:''].filter(Boolean).filter((id,i,a)=>a.indexOf(id)===i);for(const id of involved){const activeBookings=(fresh?.bookings||[]).filter(b=>!['cancelled','refunded'].includes(low(b.status))&&(s(b.trip_id)===s(id)||s(b.return_trip_id)===s(id)));const bookingIds=new Set(activeBookings.map(b=>s(b.id)));const pax=(fresh?.passengers||[]).filter(p=>bookingIds.has(s(p.booking_id))&&!['cancelled','refunded'].includes(low(p.status))).length;const t=(fresh?.trips||[]).find(x=>s(x.id)===s(id))||data.trips.find(x=>s(x.id)===s(id));notifyInfo(`حجوزات الرحلة حتى الآن${t?` — ${tripDisplay(t)}`:''}: ${activeBookings.length} حجز · ${pax} مسافر`)} }
-"""
-          if 'function notifyTripBookingTotals(fresh)' not in s:
-              if anchor not in s: raise SystemExit('save anchor not found')
-              s=s.replace(anchor,helper+anchor,1)
-          old="const fresh=await refresh();await applySeatsAfterSave(fresh,bookingNumber);"
-          new="const fresh=await refresh();notifyTripBookingTotals(fresh);await applySeatsAfterSave(fresh,bookingNumber);"
-          if old in s: s=s.replace(old,new,1)
-          elif new not in s: raise SystemExit('refresh anchor not found')
-          p.write_text(s)
-          PY
-      - name: Commit target branch
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/modules/bookings/BookingEditor.jsx
-          git commit -m "show trip booking totals after save" || exit 0
-          git push origin HEAD:notify-trip-booking-counts
-
   cloudflare-build-guard:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
       - name: Setup Node 22
         uses: actions/setup-node@v5
         with:
           node-version: '22.12.0'
           cache: npm
+
       - name: Install dependencies
         run: npm ci
+
       - name: Check all Worker entry layers
         run: npm run check:workers
+
       - name: Build Vite app
         run: npm run build
+
       - name: Validate Cloudflare bundle
         run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run
+
       - name: Upload diagnostic bundle on failure
         if: failure()
         uses: actions/upload-artifact@v4
