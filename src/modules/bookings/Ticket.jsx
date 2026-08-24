@@ -34,7 +34,7 @@ function BookingBarcode({value}){
 
 export default function TicketPage({bookingNo,go}){
  const {data}=useAppData();
- const {labels,config}=useSystemBrand();
+ const {profile:developer,config}=useSystemBrand();
  const b=data.bookings.find(x=>str(x.booking_number)===str(bookingNo));
  const passengers=data.passengers.filter(x=>str(x.booking_id)===str(b?.id));
  const [qr,setQr]=useState('');
@@ -117,7 +117,6 @@ export default function TicketPage({bookingNo,go}){
  const issuedDate=shortDate(first(b?.booking_date,b?.created_at,b?.createdAt,trip?.departure_date));
  const license=first(branch?.license_number,branch?.license_no,branch?.travel_license_number,branch?.travel_license_no,branchContact?.license_number,branchContact?.license_no);
  const showLegal=branch?.show_legal_on_ticket!==false;
- const website=first(config?.website,labels?.website,'almaheralmasi.sa');
  const paymentLabel=remaining>0?'مدفوع جزئي':'مدفوع بالكامل';
  const routeLabel=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'—';
 
@@ -139,11 +138,7 @@ export default function TicketPage({bookingNo,go}){
    <header className="ticket-head">
     <div className="ticket-brand-lockup">
      <img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/>
-     <div className="ticket-brand-copy">
-      <h1>الماهر الماسي</h1>
-      <strong>للسفر والسياحة</strong>
-      <span>ALMAHER ALMASI · TRAVEL & TOURISM</span>
-     </div>
+     <span className="ticket-brand-english">ALMAHER ALMASI · TRAVEL & TOURISM</span>
     </div>
 
     <div className="ticket-clock-tower" aria-hidden="true">
@@ -193,20 +188,18 @@ export default function TicketPage({bookingNo,go}){
     </div>
     <div className="ticket-passenger-table-wrap">
      <table className="ticket-passenger-table">
-      <thead><tr><th>#</th><th>الاسم</th><th>الجنس</th><th>الجنسية</th><th>رقم الهوية</th><th>تاريخ الميلاد</th><th>المقعد</th><th>الغرفة</th></tr></thead>
+      <thead><tr><th>#</th><th>الاسم</th><th>الجنس</th><th>الجنسية</th><th>رقم الهوية</th><th>المقعد</th><th>الغرفة</th></tr></thead>
       <tbody>
        {passengers.map((p,i)=>{
         const seats=seatByPassenger.get(str(p.id))||[];
         const room=roomByPassenger.get(str(p.id));
         const seatsText=seats.length?seats.map(s=>s.seat_no||s.seat_number||'—').join('، '):'—';
-        const birth=shortDate(first(p.birth_date,p.date_of_birth,p.dob,p.birthDate));
         return <tr key={p.id||i}>
          <td>{i+1}</td>
          <td><b>{p.full_name||'—'}</b></td>
          <td>{genderAr(first(p.gender,p.sex))}</td>
          <td>{p.nationality||'—'}</td>
          <td dir="ltr">{p.identity_number||p.passport_number||'—'}</td>
-         <td dir="ltr">{birth||'—'}</td>
          <td>{seatsText}</td>
          <td dir="ltr">{room?.room?.room_no||'—'}</td>
         </tr>;
@@ -254,16 +247,14 @@ export default function TicketPage({bookingNo,go}){
    </section>
 
    <footer className="ticket-footer-strip">
-    <div className="ticket-footer-meta">
-     <span>{website}</span>
-     {showLegal&&license&&<span>رقم الترخيص: {license}</span>}
-    </div>
-    <div className="ticket-footer-company">الماهر الماسي للسفر والسياحة</div>
+    {showLegal&&license&&<div className="ticket-footer-license">رقم الترخيص: {license}</div>}
     <div className="ticket-blessing">
      <strong>على دروب الطاعة .. راحتكم غايتنا</strong>
      <span>خطوة إلى الطاعات، ومغفرةٌ تمحو ما فات</span>
     </div>
    </footer>
+
+   {config.show_profile_tickets!==false&&developer?.display_name&&<small className="ticket-developer-line">{L('developer')}: {developer.display_name}{developer.phone?` · ${developer.phone}`:''}</small>}
   </article>
  </>;
 }
