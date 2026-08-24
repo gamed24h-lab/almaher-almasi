@@ -19,10 +19,22 @@ const first=(...vals)=>vals.find(v=>v!==undefined&&v!==null&&str(v).trim()!=='')
 const shortDate=v=>{const x=str(v);return x.includes('T')?x.slice(0,10):x};
 const statusAr=v=>({confirmed:'مؤكد',paid:'مسدد',pending:'قيد المراجعة',cancelled:'ملغي',refunded:'مسترد'})[lower(v)]||str(v||'مؤكد');
 const genderAr=v=>{const x=lower(v);if(['male','m','ذكر'].includes(x))return 'ذكر';if(['female','f','أنثى','انثى'].includes(x))return 'أنثى';return str(v||'—')};
+const CODE39={
+ '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn','6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn',
+ A:'wnnnnwnnw',B:'nnwnnwnnw',C:'wnwnnwnnn',D:'nnnnwwnnw',E:'wnnnwwnnn',F:'nnwnwwnnn',G:'nnnnnwwnw',H:'wnnnnwwnn',I:'nnwnnwwnn',J:'nnnnwwwnn',
+ K:'wnnnnnnww',L:'nnwnnnnww',M:'wnwnnnnwn',N:'nnnnwnnww',O:'wnnnwnnwn',P:'nnwnwnnwn',Q:'nnnnnnwww',R:'wnnnnnwwn',S:'nnwnnnwwn',T:'nnnnwnwwn',
+ U:'wwnnnnnnw',V:'nwwnnnnnw',W:'wwwnnnnnn',X:'nwnnwnnnw',Y:'wwnnwnnnn',Z:'nwwnwnnnn','-':'nwnnnnwnw','.':'wwnnnnwnn',' ':'nwwnnnwnn','$':'nwnwnwnnn','/':'nwnwnnnwn','+':'nwnnnwnwn','%':'nnnwnwnwn','*':'nwnnwnwnn'
+};
+function BookingBarcode({value}){
+ const raw=str(value).toUpperCase().replace(/[^0-9A-Z.\- $/+%]/g,'-');
+ const encoded=`*${raw}*`;let x=0;const bars=[];
+ encoded.split('').forEach((ch,ci)=>{const pattern=CODE39[ch]||CODE39['-'];let bar=true;pattern.split('').forEach((unit,pi)=>{const w=unit==='w'?3:1;if(bar)bars.push(<rect key={`${ci}-${pi}`} x={x} y="0" width={w} height="28"/>);x+=w;bar=!bar});x+=1});
+ return <svg className="ticket-booking-barcode" viewBox={`0 0 ${x} 28`} preserveAspectRatio="none" role="img" aria-label={`باركود الحجز ${value}`}>{bars}</svg>;
+}
 
 export default function TicketPage({bookingNo,go}){
  const {data}=useAppData();
- const {profile:developer,labels,config}=useSystemBrand();
+ const {labels,config}=useSystemBrand();
  const b=data.bookings.find(x=>str(x.booking_number)===str(bookingNo));
  const passengers=data.passengers.filter(x=>str(x.booking_id)===str(b?.id));
  const [qr,setQr]=useState('');
@@ -103,7 +115,8 @@ export default function TicketPage({bookingNo,go}){
  const checkIn=shortDate(first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.checkIn,trip?.departure_date));
  const checkOut=shortDate(first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.checkOut,returnDate));
  const issuedDate=shortDate(first(b?.booking_date,b?.created_at,b?.createdAt,trip?.departure_date));
- const license=first(branch?.license_number,branch?.license_no,branchContact?.license_number,branchContact?.license_no,config?.license_number,labels?.license_number);
+ const license=first(branch?.license_number,branch?.license_no,branch?.travel_license_number,branch?.travel_license_no,branchContact?.license_number,branchContact?.license_no);
+ const showLegal=branch?.show_legal_on_ticket!==false;
  const website=first(config?.website,labels?.website,'almaheralmasi.sa');
  const paymentLabel=remaining>0?'مدفوع جزئي':'مدفوع بالكامل';
  const routeLabel=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'—';
@@ -142,10 +155,13 @@ export default function TicketPage({bookingNo,go}){
     </div>
 
     <div className="ticket-meta-card">
-     <span>رقم الحجز</span>
+     <span className="ticket-meta-label">رقم الحجز</span>
      <b>{b.booking_number}</b>
-     <Badge tone={b.status==='cancelled'?'red':'green'}>{statusAr(b.status)}</Badge>
-     {issuedDate&&<small>{issuedDate}</small>}
+     <BookingBarcode value={b.booking_number}/>
+     <div className="ticket-meta-foot">
+      <Badge tone={b.status==='cancelled'?'red':'green'}>{statusAr(b.status)}</Badge>
+      {issuedDate&&<small>{issuedDate}</small>}
+     </div>
     </div>
    </header>
 
@@ -192,7 +208,7 @@ export default function TicketPage({bookingNo,go}){
          <td dir="ltr">{p.identity_number||p.passport_number||'—'}</td>
          <td dir="ltr">{birth||'—'}</td>
          <td>{seatsText}</td>
-         <td>{room?.room?.room_no||'—'}</td>
+         <td dir="ltr">{room?.room?.room_no||'—'}</td>
         </tr>;
        })}
       </tbody>
@@ -204,7 +220,7 @@ export default function TicketPage({bookingNo,go}){
     <div className="ticket-section-heading"><h3>بيانات السكن</h3><span>{b.accommodation_type==='none'?'بدون سكن':''}</span></div>
     <div className="ticket-housing-grid">
      <div><span>الفندق</span><strong>{hotelName||L('noHousing')}</strong></div>
-     <div><span>نوع الغرفة</span><strong>{roomLabel||'—'}</strong></div>
+     <div><span>نوع الغرفة</span><strong dir="ltr">{roomLabel||'—'}</strong></div>
      <div><span>الوصول</span><strong dir="ltr">{checkIn||'—'}</strong></div>
      <div><span>المغادرة</span><strong dir="ltr">{checkOut||'—'}</strong></div>
     </div>
@@ -238,12 +254,16 @@ export default function TicketPage({bookingNo,go}){
    </section>
 
    <footer className="ticket-footer-strip">
-    <span>{website}</span>
-    <span>الماهر الماسي للسفر والسياحة</span>
-    {license&&<span>ترخيص رقم {license}</span>}
+    <div className="ticket-footer-meta">
+     <span>{website}</span>
+     {showLegal&&license&&<span>رقم الترخيص: {license}</span>}
+    </div>
+    <div className="ticket-footer-company">الماهر الماسي للسفر والسياحة</div>
+    <div className="ticket-blessing">
+     <strong>على دروب الطاعة .. راحتكم غايتنا</strong>
+     <span>خطوة إلى الطاعات، ومغفرةٌ تمحو ما فات</span>
+    </div>
    </footer>
-
-   {config.show_profile_tickets!==false&&<small className="ticket-developer-line">{L('developer')}: {developer.display_name}{developer.phone?` · ${developer.phone}`:''}</small>}
   </article>
  </>;
 }

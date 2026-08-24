@@ -1,0 +1,140 @@
+/* Final ticket polish — isolated overrides for A4 / 80mm / 58mm */
+.ticket-head{grid-template-columns:minmax(320px,1.35fr) 92px minmax(230px,.82fr)!important;gap:20px!important;padding:2px 0 14px!important}
+.ticket-brand-lockup{gap:18px!important}
+.ticket-logo{width:108px!important;height:88px!important;object-fit:contain!important;transform:scale(1.04);transform-origin:center}
+.ticket-brand-copy h1{font-size:30px!important}
+.ticket-brand-copy strong{font-size:16px!important}
+.ticket-brand-copy span{font-size:9px!important;letter-spacing:.65px!important}
+.ticket-clock-tower{height:88px!important}
+.ticket-meta-card{min-width:230px!important;gap:5px!important}
+.ticket-meta-card>b{font-size:22px!important;padding:5px 11px!important;white-space:nowrap}
+.ticket-booking-barcode{display:block;width:185px;height:34px;fill:var(--ticket-deep);background:#fff;shape-rendering:crispEdges}
+.ticket-meta-foot{width:100%;display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.ticket-meta-foot small{direction:ltr;font-size:9px;color:#7b8490}
+.ticket-footer-strip{display:block!important;text-align:center!important;padding:8px 22px 10px!important}
+.ticket-footer-meta{display:flex;align-items:center;justify-content:center;gap:22px;font-size:7.5px;color:#eef4fb}
+.ticket-footer-company{margin-top:3px;font-size:8px;font-weight:900;color:#f1d98b}
+.ticket-blessing{margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.24);display:flex;flex-direction:column;align-items:center;gap:2px}
+.ticket-blessing strong{font-size:10.5px;line-height:1.35;color:#fff;font-weight:900}
+.ticket-blessing span{font-size:9px;line-height:1.35;color:#f7e7b4;font-weight:700}
+.ticket-passenger-table td[dir="ltr"],.ticket-housing-grid strong[dir="ltr"]{unicode-bidi:isolate}
+
+@media(max-width:760px){
+ .ticket-head{grid-template-columns:1fr auto!important;gap:12px!important}
+ .ticket-logo{width:78px!important;height:66px!important}
+ .ticket-brand-lockup{gap:10px!important}
+ .ticket-brand-copy h1{font-size:21px!important}
+ .ticket-meta-card{min-width:145px!important}
+ .ticket-booking-barcode{width:135px;height:27px}
+ .ticket-footer-meta{flex-wrap:wrap;gap:8px 14px}
+ .ticket-blessing strong{font-size:9px}
+ .ticket-blessing span{font-size:8px}
+}
+
+@media print{
+ body[data-print-mode="a4"] .isolated-print-root{height:276mm!important;max-height:276mm!important;overflow:hidden!important}
+ body[data-print-mode="a4"] .ticket-page{max-height:275.5mm!important;padding:4.2mm 4.6mm 0!important;break-after:avoid-page!important;page-break-after:avoid!important}
+ body[data-print-mode="a4"] .ticket-head{grid-template-columns:minmax(67mm,1.3fr) 19mm minmax(50mm,.85fr)!important;gap:2.2mm!important;padding:0 0 2.3mm!important}
+ body[data-print-mode="a4"] .ticket-brand-lockup{gap:2.5mm!important}
+ body[data-print-mode="a4"] .ticket-logo{width:24mm!important;height:19mm!important;transform:scale(1.03)!important}
+ body[data-print-mode="a4"] .ticket-brand-copy h1{font-size:21px!important}
+ body[data-print-mode="a4"] .ticket-brand-copy strong{font-size:11px!important}
+ body[data-print-mode="a4"] .ticket-brand-copy span{font-size:6.8px!important}
+ body[data-print-mode="a4"] .ticket-clock-tower{height:19mm!important}
+ body[data-print-mode="a4"] .ticket-meta-card{min-width:50mm!important;gap:.7mm!important}
+ body[data-print-mode="a4"] .ticket-meta-card>b{font-size:17px!important;padding:.8mm 1.5mm!important}
+ body[data-print-mode="a4"] .ticket-booking-barcode{width:43mm!important;height:6.8mm!important}
+ body[data-print-mode="a4"] .ticket-meta-foot{gap:1.6mm!important}
+ body[data-print-mode="a4"] .ticket-title-band{margin:0 -4.6mm 2.1mm!important;padding:1.6mm 4.6mm!important}
+ body[data-print-mode="a4"] .ticket-title-band h2{font-size:22px!important}
+ body[data-print-mode="a4"] .ticket-title-band span{font-size:6.8px!important}
+ body[data-print-mode="a4"] .ticket-customer-strip{margin-bottom:2mm!important}
+ body[data-print-mode="a4"] .ticket-customer-strip>div{padding:1.5mm 1.8mm!important}
+ body[data-print-mode="a4"] .ticket-customer-strip span{font-size:7px!important}
+ body[data-print-mode="a4"] .ticket-customer-strip strong{font-size:8.2px!important}
+ body[data-print-mode="a4"] .ticket-journeys{gap:1.8mm!important;margin-bottom:2mm!important}
+ body[data-print-mode="a4"] .journey-block{padding:1.5mm 1.8mm!important;min-height:21mm!important}
+ body[data-print-mode="a4"] .journey-label strong{font-size:9.2px!important}
+ body[data-print-mode="a4"] .journey-route b{font-size:10.5px!important}
+ body[data-print-mode="a4"] .journey-details span{font-size:6.4px!important}
+ body[data-print-mode="a4"] .journey-details strong{font-size:7.2px!important}
+ body[data-print-mode="a4"] .ticket-section{margin-top:1.7mm!important}
+ body[data-print-mode="a4"] .ticket-section-heading{margin-bottom:1mm!important;padding-bottom:.8mm!important}
+ body[data-print-mode="a4"] .ticket-section-heading h3{font-size:9.3px!important}
+ body[data-print-mode="a4"] .ticket-passenger-table th{padding:1mm .7mm!important;font-size:6.8px!important}
+ body[data-print-mode="a4"] .ticket-passenger-table td{padding:1.05mm .7mm!important;font-size:7.2px!important;overflow-wrap:normal!important;word-break:normal!important}
+ body[data-print-mode="a4"] .ticket-passenger-table td b{font-size:7.4px!important}
+ body[data-print-mode="a4"] .ticket-housing-grid>div,body[data-print-mode="a4"] .ticket-finance-grid>div{padding:1.3mm 1.6mm!important}
+ body[data-print-mode="a4"] .ticket-housing-grid strong{font-size:7.7px!important}
+ body[data-print-mode="a4"] .ticket-finance-grid b{font-size:9px!important}
+ body[data-print-mode="a4"] .ticket-bottom{grid-template-columns:44mm 1fr!important;gap:2.3mm!important;margin-top:1.8mm!important;padding-top:1.6mm!important}
+ body[data-print-mode="a4"] .ticket-qr-panel img{width:19mm!important;height:19mm!important}
+ body[data-print-mode="a4"] .ticket-terms h3{font-size:8.4px!important}
+ body[data-print-mode="a4"] .ticket-terms ol{font-size:6.7px!important;line-height:1.45!important}
+ body[data-print-mode="a4"] .ticket-branch-card{margin-top:1.4mm!important;padding:1.3mm 1.6mm!important}
+ body[data-print-mode="a4"] .ticket-branch-card>div{font-size:6.7px!important}
+ body[data-print-mode="a4"] .ticket-footer-strip{margin:1.4mm -4.6mm 0!important;padding:1.3mm 4.6mm 1.5mm!important}
+ body[data-print-mode="a4"] .ticket-footer-meta{gap:5mm!important;font-size:6.5px!important}
+ body[data-print-mode="a4"] .ticket-footer-company{font-size:7px!important;margin-top:.7mm!important}
+ body[data-print-mode="a4"] .ticket-blessing{margin-top:.9mm!important;padding-top:.9mm!important;gap:.25mm!important}
+ body[data-print-mode="a4"] .ticket-blessing strong{font-size:8.3px!important}
+ body[data-print-mode="a4"] .ticket-blessing span{font-size:7.2px!important}
+
+ body[data-print-mode="80"] .ticket-page,body[data-print-mode="58"] .ticket-page{padding:1.2mm 1.2mm 0!important}
+ body[data-print-mode="80"] .isolated-print-root,body[data-print-mode="58"] .isolated-print-root{break-inside:avoid!important;page-break-inside:avoid!important}
+ body[data-print-mode="80"] .ticket-head,body[data-print-mode="58"] .ticket-head{display:flex!important;flex-direction:column!important;gap:1mm!important;padding-bottom:1.3mm!important}
+ body[data-print-mode="80"] .ticket-brand-lockup,body[data-print-mode="58"] .ticket-brand-lockup{width:100%!important;justify-content:center!important;flex-direction:row!important;gap:1.8mm!important}
+ body[data-print-mode="80"] .ticket-logo{width:27mm!important;height:20mm!important;transform:scale(1.04)!important}
+ body[data-print-mode="58"] .ticket-logo{width:21mm!important;height:16mm!important;transform:scale(1.04)!important}
+ body[data-print-mode="80"] .ticket-brand-copy h1{font-size:15.5px!important}
+ body[data-print-mode="58"] .ticket-brand-copy h1{font-size:12.5px!important}
+ body[data-print-mode="80"] .ticket-brand-copy strong{font-size:9.5px!important}
+ body[data-print-mode="58"] .ticket-brand-copy strong{font-size:7.8px!important}
+ body[data-print-mode="80"] .ticket-brand-copy span{font-size:6.3px!important}
+ body[data-print-mode="58"] .ticket-brand-copy span{font-size:5.2px!important}
+ body[data-print-mode="80"] .ticket-meta-card,body[data-print-mode="58"] .ticket-meta-card{width:100%!important;min-width:0!important;justify-items:center!important;gap:.7mm!important}
+ body[data-print-mode="80"] .ticket-meta-card>b{font-size:14.5px!important;padding:.8mm 1.6mm!important}
+ body[data-print-mode="58"] .ticket-meta-card>b{font-size:11.5px!important;padding:.7mm 1.2mm!important}
+ body[data-print-mode="80"] .ticket-booking-barcode{width:50mm!important;height:8mm!important}
+ body[data-print-mode="58"] .ticket-booking-barcode{width:40mm!important;height:7mm!important}
+ body[data-print-mode="80"] .ticket-meta-foot,body[data-print-mode="58"] .ticket-meta-foot{justify-content:center!important;gap:2mm!important}
+ body[data-print-mode="80"] .ticket-title-band,body[data-print-mode="58"] .ticket-title-band{margin-left:-1.2mm!important;margin-right:-1.2mm!important}
+ body[data-print-mode="80"] .ticket-customer-strip>div,body[data-print-mode="58"] .ticket-customer-strip>div{padding:1mm!important}
+ body[data-print-mode="80"] .ticket-passenger-table td,body[data-print-mode="58"] .ticket-passenger-table td{overflow-wrap:normal!important;word-break:normal!important}
+ body[data-print-mode="80"] .ticket-passenger-table tr{grid-template-columns:18px 1fr 1fr!important;grid-template-rows:auto auto auto auto!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(1){grid-column:1!important;grid-row:1/5!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(2){grid-column:2/4!important;grid-row:1!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(3){grid-column:2!important;grid-row:2!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(4){grid-column:3!important;grid-row:2!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(5){grid-column:2!important;grid-row:3!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(6){grid-column:3!important;grid-row:3!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(7){grid-column:2!important;grid-row:4!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(8){grid-column:3!important;grid-row:4!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(n+3){display:flex!important;align-items:center!important;justify-content:space-between!important;gap:1mm!important;white-space:nowrap!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(5),body[data-print-mode="80"] .ticket-passenger-table td:nth-child(6),body[data-print-mode="80"] .ticket-passenger-table td:nth-child(7),body[data-print-mode="80"] .ticket-passenger-table td:nth-child(8){direction:ltr!important;text-align:left!important}
+ body[data-print-mode="80"] .ticket-passenger-table td:nth-child(5)::before,body[data-print-mode="80"] .ticket-passenger-table td:nth-child(6)::before,body[data-print-mode="80"] .ticket-passenger-table td:nth-child(7)::before,body[data-print-mode="80"] .ticket-passenger-table td:nth-child(8)::before{direction:rtl!important}
+ body[data-print-mode="58"] .ticket-passenger-table tr{grid-template-columns:16px 1fr!important;grid-template-rows:repeat(7,auto)!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(1){grid-column:1!important;grid-row:1/8!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(2){grid-column:2!important;grid-row:1!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(3){grid-column:2!important;grid-row:2!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(4){grid-column:2!important;grid-row:3!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(5){grid-column:2!important;grid-row:4!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(6){grid-column:2!important;grid-row:5!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(7){grid-column:2!important;grid-row:6!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(8){grid-column:2!important;grid-row:7!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(n+3){display:flex!important;align-items:center!important;justify-content:space-between!important;gap:1mm!important;white-space:nowrap!important;font-size:6.4px!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(5),body[data-print-mode="58"] .ticket-passenger-table td:nth-child(6),body[data-print-mode="58"] .ticket-passenger-table td:nth-child(7),body[data-print-mode="58"] .ticket-passenger-table td:nth-child(8){direction:ltr!important;text-align:left!important}
+ body[data-print-mode="58"] .ticket-passenger-table td:nth-child(5)::before,body[data-print-mode="58"] .ticket-passenger-table td:nth-child(6)::before,body[data-print-mode="58"] .ticket-passenger-table td:nth-child(7)::before,body[data-print-mode="58"] .ticket-passenger-table td:nth-child(8)::before{direction:rtl!important}
+ body[data-print-mode="80"] .ticket-qr-panel img{width:22mm!important;height:22mm!important}
+ body[data-print-mode="58"] .ticket-qr-panel img{width:17.5mm!important;height:17.5mm!important}
+ body[data-print-mode="80"] .ticket-terms ol{font-size:6.5px!important;line-height:1.4!important}
+ body[data-print-mode="58"] .ticket-terms ol{font-size:5.7px!important;line-height:1.35!important}
+ body[data-print-mode="80"] .ticket-footer-strip,body[data-print-mode="58"] .ticket-footer-strip{margin:1.3mm -1.2mm 0!important;padding:1.2mm 1.2mm 1.5mm!important;background:#fff!important;color:#111!important;border-top:2px solid #111!important}
+ body[data-print-mode="80"] .ticket-footer-meta,body[data-print-mode="58"] .ticket-footer-meta{display:flex!important;flex-direction:column!important;gap:.3mm!important;color:#111!important}
+ body[data-print-mode="80"] .ticket-footer-company,body[data-print-mode="58"] .ticket-footer-company{color:#111!important;margin-top:.7mm!important}
+ body[data-print-mode="80"] .ticket-blessing,body[data-print-mode="58"] .ticket-blessing{border-top:1px solid #999!important;margin-top:.8mm!important;padding-top:.8mm!important}
+ body[data-print-mode="80"] .ticket-blessing strong{font-size:8px!important;color:#111!important}
+ body[data-print-mode="80"] .ticket-blessing span{font-size:7px!important;color:#333!important}
+ body[data-print-mode="58"] .ticket-blessing strong{font-size:7px!important;color:#111!important}
+ body[data-print-mode="58"] .ticket-blessing span{font-size:6px!important;color:#333!important}
+}
