@@ -47,27 +47,36 @@ async function productionReadiness(request,env){
   if(!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات Supabase على الخادم غير مكتملة.'},500);
   const tableStatus=[];for(const t of coreTables)tableStatus.push(await envTableStatus(env,t));
   const url=base(env),h=headers(env);
-  const [branchesR,staffR,pendingR,healthR]=await Promise.all([
+  const [branchesR,staffInitialR,pendingR,healthR]=await Promise.all([
     countRows(env,'branches'),
     fetch(`${url}/rest/v1/staff_users?select=id,name,role,status,account_mode,branch_id&order=name.asc`,{headers:h}),
     countRows(env,'approval_requests','status=eq.pending'),
     auditWorker.fetch(new Request(new URL('/api/health',request.url),{method:'GET',headers:request.headers}),env)
   ]);
-  const staff=await staffR.json().catch(()=>[]);let health={};try{health=await healthR.clone().json()}catch{}
-  const activeStaff=Array.isArray(staff)?staff.filter(x=>!String(x.status||'نشط').includes('موق')&&String(x.status||'').toLowerCase()!=='inactive'):[];
-  const productionStaff=activeStaff.filter(x=>String(x.account_mode||'training')==='production');
-  const trainingStaff=activeStaff.filter(x=>String(x.account_mode||'training')!=='production');
+  let staffR=staffInitialR,staff=await staffInitialR.json().catch(()=>[]),accountModeSupported=true;
+  const staffInitialMessage=Array.isArray(staff)?'':String(staff?.message||'');
+  if(!staffInitialR.ok&&/account_mode|column/i.test(staffInitialMessage)){
+    accountModeSupported=false;
+    staffR=await fetch(`${url}/rest/v1/staff_users?select=id,name,role,status,branch_id&order=name.asc`,{headers:h});
+    staff=await staffR.json().catch(()=>[]);
+  }
+  const staffQueryOk=staffR.ok&&Array.isArray(staff);
+  const staffError=staffQueryOk?'':String((Array.isArray(staff)?null:staff?.message)||staffInitialMessage||`HTTP ${staffR.status}`);
+  let health={};try{health=await healthR.clone().json()}catch{}
+  const activeStaff=staffQueryOk?staff.filter(x=>!String(x.status||'نشط').includes('موق')&&String(x.status||'').toLowerCase()!=='inactive'):[];
+  const productionStaff=accountModeSupported?activeStaff.filter(x=>String(x.account_mode||'training')==='production'):[];
+  const trainingStaff=accountModeSupported?activeStaff.filter(x=>String(x.account_mode||'training')!=='production'):activeStaff;
   const missingEnvironmentTables=tableStatus.filter(x=>!x.ok),pendingApprovals=pendingR.ok?pendingR.count:0;
   const checks=[
     {key:'api',label:'الخادم وواجهة API',ok:healthR.ok&&health?.ok!==false,blocking:true,details:health?.version||'API'},
     {key:'branches',label:'وجود فرع واحد على الأقل',ok:branchesR.ok&&branchesR.count>0,blocking:true,details:`${branchesR.count||0} فرع`},
-    {key:'staff',label:'وجود حساب موظف نشط',ok:activeStaff.length>0,blocking:true,details:`${activeStaff.length} حساب نشط`},
+    {key:'staff',label:'وجود حساب موظف نشط',ok:staffQueryOk&&activeStaff.length>0,blocking:true,details:staffQueryOk?`${activeStaff.length} حساب نشط`:`تعذر قراءة staff_users: ${staffError}`},
     {key:'environment_schema',label:'عزل بيانات التدريب/التشغيل مثبت على الجداول الحرجة',ok:missingEnvironmentTables.length===0,blocking:true,details:missingEnvironmentTables.length?missingEnvironmentTables.map(x=>x.table).join(', '):'سليم'},
     {key:'approvals',label:'لا توجد موافقات حساسة معلقة',ok:pendingApprovals===0,blocking:true,details:`${pendingApprovals} طلب معلق`},
-    {key:'production_staff',label:'تحديد حساب تشغيل فعلي واحد على الأقل قبل الإطلاق',ok:productionStaff.length>0,blocking:false,details:`${productionStaff.length} تشغيل فعلي / ${trainingStaff.length} تدريب`}
+    {key:'production_staff',label:'تحديد حساب تشغيل فعلي واحد على الأقل قبل الإطلاق',ok:accountModeSupported&&productionStaff.length>0,blocking:false,details:accountModeSupported?`${productionStaff.length} تشغيل فعلي / ${trainingStaff.length} تدريب`:`account_mode غير مثبت — ${trainingStaff.length} حساب سيظل Training افتراضيًا`}
   ];
   const blockers=checks.filter(x=>x.blocking&&!x.ok);
-  return json({ok:true,ready:blockers.length===0,mode:'training',activation_locked:true,generated_at:new Date().toISOString(),checks,blockers:blockers.map(x=>x.key),counts:{branches:branchesR.count||0,active_staff:activeStaff.length,production_staff:productionStaff.length,training_staff:trainingStaff.length,pending_approvals:pendingApprovals},tables:tableStatus,policy:{snapshot_required:true,double_confirmation_required:true,training_cleanup_preview_required:true,rollback_required:true,production_activation_available:false}});
+  return json({ok:true,ready:blockers.length===0,mode:'training',activation_locked:true,generated_at:new Date().toISOString(),checks,blockers:blockers.map(x=>x.key),counts:{branches:branchesR.count||0,active_staff:activeStaff.length,production_staff:productionStaff.length,training_staff:trainingStaff.length,pending_approvals:pendingApprovals},staff_query:{ok:staffQueryOk,account_mode_supported:accountModeSupported,error:staffError||null},tables:tableStatus,policy:{snapshot_required:true,double_confirmation_required:true,training_cleanup_preview_required:true,rollback_required:true,production_activation_available:false}});
 }
 
 async function trainingCleanupPreview(request,env){
