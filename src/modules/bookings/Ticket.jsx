@@ -132,8 +132,12 @@ export default function TicketPage({bookingNo,go}){
  const license=first(branch?.license_number,branch?.license_no,branch?.travel_license_number,branch?.travel_license_no,branchContact?.license_number,branchContact?.license_no);
  const showLegal=branch?.show_legal_on_ticket!==false;
  const paymentLabel=remaining>0?'مدفوع جزئي':'مدفوع بالكامل';
- const routeLabel=trip?(mode==='returnonly'?`${tripDestination||'—'} ← ${tripOrigin||'—'}`:`${tripOrigin||'—'} ← ${tripDestination||'—'}`):'—';
- const wa=()=>{const returnOnly=mode==='returnonly';const route=trip?(returnOnly?`${tripDestination||'—'} ← ${tripOrigin||'—'}`:`${tripOrigin||'—'} ← ${tripDestination||'—'}`):'';const msgDate=returnOnly?returnDate:trip?.departure_date,msgTime=returnOnly?returnTime:trip?.departure_time;const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',msgDate?`التاريخ: ${weekdayAr(msgDate)} ${msgDate} ${msgTime||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
+ const outboundRouteLabel=trip?`${tripOrigin||'—'} ← ${tripDestination||'—'}`:'';
+ const returnStart=first(returnInfo?.to_city,returnInfo?.destination);
+ const returnEnd=first(returnInfo?.from_city,returnInfo?.origin);
+ const returnRouteLabel=returnInfo?`${returnStart||'—'} ← ${returnEnd||'—'}`:'';
+ const routeLabel=mode==='returnonly'?(returnRouteLabel||'—'):mode==='roundtrip'||mode==='separate'?`ذهاب: ${outboundRouteLabel||'—'} · عودة: ${returnRouteLabel||'—'}`:(outboundRouteLabel||'—');
+ const wa=()=>{const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,`نوع الرحلة: ${journeyLabel(b.journey_mode)||'—'}`,showOutbound&&outboundRouteLabel?`الذهاب: ${outboundRouteLabel}`:'',showOutbound&&trip?.departure_date?`تاريخ الذهاب: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',showReturn&&returnRouteLabel?`العودة: ${returnRouteLabel}`:'',showReturn&&returnDate?`تاريخ العودة: ${weekdayAr(returnDate)} ${returnDate} ${returnTime||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
 
  return <>
   <PageHeader title="تذكرة سفر" subtitle={`${L('bookingNo')} ${b.booking_number}`} actions={<>
