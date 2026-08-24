@@ -14,6 +14,7 @@ const successScan=x=>low(x?.result||x?.metadata?.scan_result||'success')==='succ
 export default function Readiness({initialTrip='',go}){
  const {data}=useAppData();
  const [tripId,setTripId]=useState(initialTrip||''),[cloud,setCloud]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const canonicalPassengerMap=useMemo(()=>new Map((data.passengers||[]).map(p=>[s(p.id),p])),[data.passengers]);
  async function load(){if(!tripId)return;setBusy(true);setError('');setCloud(null);try{
   const [ops,tickets,scanner,documents,fleet]=await Promise.all([
    api.admin({action:'trip_operational_data',trip_id:tripId}),
@@ -26,7 +27,7 @@ export default function Readiness({initialTrip='',go}){
   if(!cloud||!trip)return null;
   const bookings=(cloud.ops?.bookings||[]).filter(b=>goodStatus(b.status));
   const liveBookingIds=new Set(bookings.map(b=>s(b.id)));
-  const passengers=(cloud.ops?.passengers||[]).filter(p=>goodStatus(p.status)&&liveBookingIds.has(s(p.booking_id)));
+  const passengers=(cloud.ops?.passengers||[]).map(p=>({...p,...(canonicalPassengerMap.get(s(p.id))||{})})).filter(p=>goodStatus(p.status)&&liveBookingIds.has(s(p.booking_id)));
   const pids=new Set(passengers.map(p=>s(p.id)));
   const bookingsById=new Map(bookings.map(b=>[s(b.id),b]));
   const seats=(cloud.tickets?.seat_assignments||[]).filter(x=>s(x.trip_id)===s(tripId)&&pids.has(s(x.passenger_id))&&!['released','cancelled'].includes(low(x.status)));
@@ -53,7 +54,7 @@ export default function Readiness({initialTrip='',go}){
   ];
   const done=checks.filter(x=>x.ok).length,score=Math.round(done/checks.length*100);
   return {bookings,passengers,seated,housed,housingRequired,documentProblems,boarded,noShow,checks,score,departed,tripVehicles};
- },[cloud,trip,tripId]);
+ },[cloud,trip,tripId,canonicalPassengerMap]);
  const passengerCols=[
   {key:'full_name',label:'المسافر'},
   {key:'identity_number',label:'الهوية'},
