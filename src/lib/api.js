@@ -98,6 +98,7 @@ export const api={
   bookingTimeline:(bookingNo)=>request(`/api/bookings/timeline?bookingNo=${encodeURIComponent(bookingNo)}`),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
   destinations:()=>request('/api/destinations'),
+  returnTripOptions:()=>request('/api/return-trip-options'),
   destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
   customerLookup:(bookingNo,verification)=>request(`/api/customer/booking?bookingNo=${encodeURIComponent(bookingNo)}&verification=${encodeURIComponent(verification)}`),
   customerBook:async(booking,passengers)=>{const result=await request('/api/customer/book',{method:'POST',body:{booking,passengers}});emitBookingSaved({booking});return result},
