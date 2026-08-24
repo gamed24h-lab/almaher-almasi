@@ -10,7 +10,8 @@ const elevated=a=>!!a&&(String(a.role||'').toLowerCase()==='developer'||a.role==
 const allReturnBranches=a=>!!a&&(String(a.role||'').toLowerCase()==='developer'||a.role==='مدير عام'||a.permissions?.all||a.permissions?.allBranches);
 const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o||{},k);
 const canReconcile=a=>{if(!a)return false;if(elevated(a))return true;const p=a.permissions||{};if(hasOwn(p,'reconcileFinance'))return p.reconcileFinance===true;return !!(p.finance||p.reports)};
-const canChooseReturn=a=>{if(!a)return false;if(allReturnBranches(a))return true;const p=a.permissions||{};return !!(p.branchBooking||p.editBookings||p.changeTrip||p.bookings)};
+const canChooseReturn=a=>{if(!a)return false;if(allReturnBranches(a))return true;const p=a.permissions||{};return !!(p.branchBooking||p.viewBookings||p.editBookings||p.changeTrip||p.bookings)};
+const canSetReturn=a=>!!a&&(allReturnBranches(a)||a.permissions?.changeTrip===true);
 async function rows(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${table}?${query}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر قراءة ${table}`);return Array.isArray(out)?out:[]}
 const sum=(arr,key='amount')=>Number(arr.reduce((n,x)=>n+Number(x?.[key]||0),0).toFixed(2));
 const txKind=x=>String(x?.type??x?.transaction_type??x?.kind??x?.category??x?.action??'').trim().toLowerCase();
@@ -22,19 +23,19 @@ const shiftActual=x=>x?.actual_closing??x?.closing_balance??x?.actual_balance;
 const shiftVariance=x=>Number(x?.variance??x?.difference??0);
 
 async function returnTripOptions(request,env){
-  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canChooseReturn(actor))return json({error:'لا توجد صلاحية لاختيار رحلة عودة.'},403);
+  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canChooseReturn(actor))return json({error:'لا توجد صلاحية لعرض رحلات العودة.'},403);
   try{
-    const list=await rows(env,'trips','select=id,trip_code,branch_id,from_city,to_city,origin,destination,departure_date,departure_time,return_date,return_time,status,price_one_way&order=return_date.asc&limit=1000');
+    const list=await rows(env,'trips','select=id,trip_code,branch_id,from_city,to_city,departure_date,departure_time,return_date,return_time,status,price_one_way&order=return_date.asc&limit=1000');
     const today=new Date().toISOString().slice(0,10);
     const trips=list.filter(t=>t.return_date&&String(t.return_date)>=today&&!['cancelled','completed'].includes(String(t.status||'').toLowerCase())).map(t=>({
-      id:t.id,trip_code:t.trip_code||'',branch_id:t.branch_id||null,from_city:t.from_city||t.origin||'',to_city:t.to_city||t.destination||'',departure_date:t.departure_date||null,departure_time:t.departure_time||null,return_date:t.return_date||null,return_time:t.return_time||null,status:t.status||'',price_one_way:Number(t.price_one_way||0)
+      id:t.id,trip_code:t.trip_code||'',branch_id:t.branch_id||null,from_city:t.from_city||'',to_city:t.to_city||'',departure_date:t.departure_date||null,departure_time:t.departure_time||null,return_date:t.return_date||null,return_time:t.return_time||null,status:t.status||'',price_one_way:Number(t.price_one_way||0)
     }));
     return json({ok:true,trips});
   }catch(e){return json({error:e?.message||'تعذر تحميل رحلات العودة.'},502)}
 }
 
 async function crossBranchBookingUpdate(request,env,ctx,payload){
-  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canChooseReturn(actor))return json({error:'لا توجد صلاحية لتعديل رحلة العودة.'},403);
+  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.'},401);if(!canSetReturn(actor))return json({error:'تغيير رحلة العودة يتطلب صلاحية تغيير الرحلة.'},403);
   const b=payload?.booking||{},bookingNo=String(b.number||b.booking_number||'').trim(),targetId=String(b.returnTripId||'').trim();
   if(!bookingNo||!targetId||String(b.journeyMode||'').toLowerCase()!=='separate')return json({error:'بيانات رحلة العودة المنفصلة غير مكتملة.'},400);
   try{
