@@ -1,5 +1,7 @@
 import React,{createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from '../lib/api.js';
+import {notifyInfo} from '../lib/feedback.js';
+import {tripDisplay} from '../lib/format.js';
 const C=createContext(null);
 const emptyData={branches:[],branchContacts:[],trips:[],tripBranches:[],bookings:[],passengers:[],users:[],scope:null};
 const text=v=>String(v??'').trim();
@@ -37,12 +39,24 @@ function normalizeBootstrap(raw){
  });
  return {...emptyData,...x,bookings:normalizedBookings,passengers:normalizedPassengers};
 }
+function tripBookingSummary(data,tripId){
+ const activeBookings=(data.bookings||[]).filter(b=>!['cancelled','refunded'].includes(text(b.status).toLowerCase())&&(text(b.trip_id)===text(tripId)||text(b.return_trip_id)===text(tripId)));
+ const bookingIds=new Set(activeBookings.map(b=>text(b.id)));
+ const pax=(data.passengers||[]).filter(p=>bookingIds.has(text(p.booking_id))&&!['cancelled','refunded'].includes(text(p.status).toLowerCase())).length;
+ const trip=(data.trips||[]).find(t=>text(t.id)===text(tripId));
+ return {bookings:activeBookings.length,passengers:pax,trip};
+}
 export function AppDataProvider({children}){
  const [data,setData]=useState(emptyData);
  const [loading,setLoading]=useState(false),[error,setError]=useState('');
- const channelRef=useRef(null),lastRefreshRef=useRef(0);
- const load=useCallback(async({silent=false,broadcast=false}={})=>{if(!silent)setLoading(true);if(!silent)setError('');try{const raw=await api.bootstrap();const x=normalizeBootstrap(raw);setData(x);lastRefreshRef.current=Date.now();if(broadcast)try{channelRef.current?.postMessage({type:'data-changed',at:Date.now()})}catch{}return x}catch(e){if(!silent)setError(e.message);if(!silent)throw e;return null}finally{if(!silent)setLoading(false)}},[]);
+ const channelRef=useRef(null),lastRefreshRef=useRef(0),pendingTripSummaryRef=useRef([]);
+ const load=useCallback(async({silent=false,broadcast=false}={})=>{if(!silent)setLoading(true);if(!silent)setError('');try{const raw=await api.bootstrap();const x=normalizeBootstrap(raw);setData(x);lastRefreshRef.current=Date.now();const pending=[...new Set((pendingTripSummaryRef.current||[]).filter(Boolean).map(String))];if(pending.length){pendingTripSummaryRef.current=[];for(const id of pending){const summary=tripBookingSummary(x,id);const label=summary.trip?` — ${tripDisplay(summary.trip)}`:'';notifyInfo(`حجوزات الرحلة حتى الآن${label}: ${summary.bookings} حجز · ${summary.passengers} مسافر`)}}if(broadcast)try{channelRef.current?.postMessage({type:'data-changed',at:Date.now()})}catch{}return x}catch(e){if(!silent)setError(e.message);if(!silent)throw e;return null}finally{if(!silent)setLoading(false)}},[]);
  const refresh=useCallback(()=>load({silent:false,broadcast:true}),[load]);
+ useEffect(()=>{
+  const onBookingSaved=e=>{const ids=Array.isArray(e?.detail?.tripIds)?e.detail.tripIds:[];pendingTripSummaryRef.current=[...new Set([...(pendingTripSummaryRef.current||[]),...ids.map(String)])]};
+  window.addEventListener('almaher-booking-saved',onBookingSaved);
+  return()=>window.removeEventListener('almaher-booking-saved',onBookingSaved);
+ },[]);
  useEffect(()=>{
   let timer=null;
   if(typeof BroadcastChannel!=='undefined'){try{const ch=new BroadcastChannel('almaher-data-sync-v1');channelRef.current=ch;ch.onmessage=e=>{if(e?.data?.type==='data-changed')load({silent:true,broadcast:false})}}catch{}}
