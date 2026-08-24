@@ -14,8 +14,9 @@ function explicitOrLegacy(actor,key,legacy=[]){if(elevated(actor))return true;co
 const canViewReceipt=a=>!!a&&explicitOrLegacy(a,'viewPaymentReceipts',['finance','payments']);
 const canPrintReceipt=a=>!!a&&explicitOrLegacy(a,'printPaymentReceipts',['finance','payments']);
 const inScope=(a,branchId)=>!!a&&(elevated(a)||String(a.branch_id||'')===String(branchId||''));
+const txKind=x=>String(x?.type??x?.transaction_type??x?.kind??x?.category??x?.action??'').trim().toLowerCase();
 function receiptNo(){const d=new Date(),ymd=d.toISOString().slice(0,10).replace(/-/g,'');const tail=(globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`).replace(/-/g,'').slice(-8).toUpperCase();return `PAY-${ymd}-${tail}`}
-async function insertTransaction(env,row){const b=base(env),h=headers(env);const attempts=[row,((({reference,...rest})=>rest))(row)];let last=null;for(const candidate of attempts){const r=await fetch(`${b}/rest/v1/transactions`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(candidate)});const out=await parse(r);if(r.ok){const saved=Array.isArray(out)?out[0]||candidate:out;return {ok:true,row:saved}}last=out}return {ok:false,error:last?.message||last?.details||'تعذر إنشاء حركة التحصيل'}}
+async function insertTransaction(env,row){const b=base(env),h=headers(env);const withoutType=((({type,...rest})=>rest))(row);const attempts=[withoutType,row];let last=null;for(const candidate of attempts){const r=await fetch(`${b}/rest/v1/transactions`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(candidate)});const out=await parse(r);if(r.ok){const saved=Array.isArray(out)?out[0]||candidate:out;return {ok:true,row:saved}}last=out}return {ok:false,error:last?.message||last?.details||'تعذر إنشاء حركة التحصيل'}}
 async function deleteTransaction(env,id){if(!id)return;const b=base(env),h=headers(env);await fetch(`${b}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'DELETE',headers:h}).catch(()=>{})}
 async function markPosted(env,id){if(!id)return false;const b=base(env),h=headers(env);const r=await fetch(`${b}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'PATCH',headers:h,body:JSON.stringify({status:'posted'})});return r.ok}
 async function audit(env,actor,booking,meta){const b=base(env),h=headers(env);await fetch(`${b}/rest/v1/activity_events`,{method:'POST',headers:h,body:JSON.stringify({actor_id:String(actor?.id||''),actor_name:String(actor?.name||''),actor_role:String(actor?.role||''),branch_id:booking.branch_id,entity_type:'booking',entity_id:String(booking.id),action:'payment_collected',metadata:meta,created_at:new Date().toISOString()})}).catch(()=>{})}
@@ -23,8 +24,10 @@ async function one(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${
 async function receiptData(request,env,ref,mode='view'){
   const actor=await actorFrom(request,env);if(!actor)return {error:json({error:'انتهت الجلسة.'},401)};
   if(mode==='print'?!canPrintReceipt(actor):!canViewReceipt(actor))return {error:json({error:mode==='print'?'لا توجد صلاحية طباعة سندات القبض.':'لا توجد صلاحية عرض سندات القبض.'},403)};
-  const tx=await one(env,'transactions',`reference=eq.${enc(ref)}&type=eq.payment&select=id,booking_id,branch_id,type,amount,status,reference,created_at&limit=1`);
-  if(!tx)return {error:json({error:'سند القبض غير موجود.'},404)};if(!inScope(actor,tx.branch_id))return {error:json({error:'سند القبض خارج النطاق المالي لفرعك.'},403)};
+  const tx=await one(env,'transactions',`reference=eq.${enc(ref)}&select=*&limit=1`);
+  if(!tx)return {error:json({error:'سند القبض غير موجود.'},404)};
+  if(!String(ref).startsWith('PAY-')&&txKind(tx)!=='payment')return {error:json({error:'المرجع المطلوب ليس سند قبض.'},404)};
+  if(!inScope(actor,tx.branch_id))return {error:json({error:'سند القبض خارج النطاق المالي لفرعك.'},403)};
   const booking=await one(env,'bookings',`id=eq.${enc(tx.booking_id)}&select=id,booking_number,branch_id,customer_name,customer_phone,total_price,paid_amount,payment_method,payment_reference,financial_status,status&limit=1`);
   const branch=tx.branch_id?await one(env,'branches',`id=eq.${enc(tx.branch_id)}&select=id,name,address,phone,whatsapp&limit=1`):null;
   const ev=await one(env,'activity_events',`entity_id=eq.${enc(tx.booking_id)}&action=eq.payment_collected&metadata->>receipt_no=eq.${enc(ref)}&select=actor_id,actor_name,actor_role,metadata,created_at&limit=1`).catch(()=>null);
