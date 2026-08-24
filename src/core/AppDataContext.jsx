@@ -6,6 +6,8 @@ const C=createContext(null);
 const emptyData={branches:[],branchContacts:[],trips:[],tripBranches:[],bookings:[],passengers:[],users:[],scope:null};
 const text=v=>String(v??'').trim();
 const digits=v=>text(v).replace(/\D/g,'');
+const naturalCollator=new Intl.Collator('ar',{numeric:true,sensitivity:'base'});
+const bookingDisplayNumber=b=>text(b?.booking_number)||text(b?.booking_no)||text(b?.code)||text(b?.reference)||text(b?.id);
 function normalizeBootstrap(raw){
  const x=raw&&typeof raw==='object'?raw:{};
  const bookings=Array.isArray(x.bookings)?x.bookings:[];
@@ -25,10 +27,15 @@ function normalizeBootstrap(raw){
    nationality:text(b.customer_nationality)||p.nationality,
    gender:text(b.customer_gender)||p.gender
   };
+ }).sort((a,b)=>{
+  const ba=bookingById.get(text(a.booking_id)),bb=bookingById.get(text(b.booking_id));
+  const byBooking=naturalCollator.compare(bookingDisplayNumber(ba),bookingDisplayNumber(bb));if(byBooking)return byBooking;
+  const byOrder=Number(a.passenger_order||0)-Number(b.passenger_order||0);if(byOrder)return byOrder;
+  return naturalCollator.compare(text(a.full_name),text(b.full_name));
  });
  const passengerByBooking=new Map();for(const p of normalizedPassengers){const k=text(p.booking_id),a=passengerByBooking.get(k)||[];a.push(p);passengerByBooking.set(k,a)}
  const normalizedBookings=bookings.map(b=>{
-  const displayNumber=text(b.booking_number)||text(b.booking_no)||text(b.code)||text(b.reference)||text(b.id);
+  const displayNumber=bookingDisplayNumber(b);
   const base={...b,booking_number:displayNumber,booking_no:displayNumber,code:displayNumber,reference:displayNumber};
   const snapshot=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:null;if(!snapshot)return base;
   const current=passengerByBooking.get(text(b.id))||[];if(!current.length)return base;
@@ -36,7 +43,7 @@ function normalizeBootstrap(raw){
   const byId=new Map(current.filter(p=>p.id).map(p=>[text(p.id),p]));
   const nextDetails=details.map((d,i)=>{const p=byId.get(text(d?.id))||current[i];if(!p)return d;return {...d,name:p.full_name,full_name:p.full_name,phone:p.phone,identity:p.identity_number,identity_number:p.identity_number,nationality:p.nationality,gender:p.gender}});
   return {...base,snapshot:{...snapshot,passengerDetails:nextDetails}};
- });
+ }).sort((a,b)=>naturalCollator.compare(bookingDisplayNumber(a),bookingDisplayNumber(b)));
  return {...emptyData,...x,bookings:normalizedBookings,passengers:normalizedPassengers};
 }
 function tripBookingSummary(data,tripId){
