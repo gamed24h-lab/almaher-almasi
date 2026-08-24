@@ -178,7 +178,7 @@ export default function TicketPage({bookingNo,go}){
 
    <section className="ticket-journeys">
     {showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={tripBranch?.boarding_point||snap?.boardingPoint} boardingTime={tripBranch?.boarding_time||snap?.boardingTime} unavailable={L('tripUnavailable')}/>} 
-    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} reverse={!returnTrip&&lower(b.journey_mode)==='roundtrip'} unavailable={L('tripUnavailable')}/>} 
+    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} reverse={!returnTrip&&['roundtrip','returnonly'].includes(lower(b.journey_mode))} unavailable={L('tripUnavailable')}/>} 
    </section>
 
    <section className="ticket-section ticket-passenger-section">
