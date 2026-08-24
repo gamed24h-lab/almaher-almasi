@@ -3,29 +3,25 @@ import {api} from '../lib/api.js';
 import {notifyInfo} from '../lib/feedback.js';
 import {tripDisplay} from '../lib/format.js';
 const C=createContext(null);
-const emptyData={branches:[],branchContacts:[],trips:[],tripBranches:[],bookings:[],passengers:[],users:[],scope:null};
+const emptyData={branches:[],branchContacts:[],trips:[],tripBranches:[],bookings:[],passengers:[],allPassengers:[],users:[],scope:null};
 const text=v=>String(v??'').trim();
-const digits=v=>text(v).replace(/\D/g,'');
 const naturalCollator=new Intl.Collator('ar',{numeric:true,sensitivity:'base'});
 const bookingDisplayNumber=b=>text(b?.booking_number)||text(b?.booking_no)||text(b?.code)||text(b?.reference)||text(b?.id);
+const inactivePassenger=p=>['cancelled','canceled','refunded','deleted','removed','ملغي'].includes(text(p?.status).toLowerCase());
 function normalizeBootstrap(raw){
  const x=raw&&typeof raw==='object'?raw:{};
  const bookings=Array.isArray(x.bookings)?x.bookings:[];
- const passengers=(Array.isArray(x.passengers)?x.passengers:[]).filter(p=>!['cancelled','canceled','refunded','deleted','ملغي'].includes(text(p?.status).toLowerCase()));
+ const rawPassengers=Array.isArray(x.passengers)?x.passengers:[];
+ const passengers=rawPassengers.filter(p=>!inactivePassenger(p));
  const bookingById=new Map(bookings.map(b=>[text(b.id),b]));
- const counts=new Map();for(const p of passengers){const k=text(p.booking_id);counts.set(k,(counts.get(k)||0)+1)}
  const normalizedPassengers=passengers.map(p=>{
   const b=bookingById.get(text(p.booking_id));if(!b)return p;
-  const one=(counts.get(text(p.booking_id))||0)===1;
-  const sameIdentity=digits(p.identity_number)&&digits(b.customer_identity)&&digits(p.identity_number)===digits(b.customer_identity);
-  const samePhone=digits(p.phone)&&digits(b.customer_phone)&&digits(p.phone)===digits(b.customer_phone);
-  if(!one&&!sameIdentity&&!samePhone)return p;
   return {...p,
-   full_name:text(b.customer_name)||p.full_name,
-   phone:text(b.customer_phone)||p.phone,
-   identity_number:text(b.customer_identity)||p.identity_number,
-   nationality:text(b.customer_nationality)||p.nationality,
-   gender:text(b.customer_gender)||p.gender
+   full_name:text(p.full_name)||text(b.customer_name),
+   phone:text(p.phone)||text(b.customer_phone),
+   identity_number:text(p.identity_number)||text(b.customer_identity),
+   nationality:text(p.nationality)||text(b.customer_nationality),
+   gender:text(p.gender)||text(b.customer_gender)
   };
  }).sort((a,b)=>{
   const ba=bookingById.get(text(a.booking_id)),bb=bookingById.get(text(b.booking_id));
@@ -38,18 +34,18 @@ function normalizeBootstrap(raw){
   const displayNumber=bookingDisplayNumber(b);
   const base={...b,booking_number:displayNumber,booking_no:displayNumber,code:displayNumber,reference:displayNumber};
   const snapshot=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:null;if(!snapshot)return base;
-  const current=passengerByBooking.get(text(b.id))||[];if(!current.length)return base;
-  const details=Array.isArray(snapshot.passengerDetails)?snapshot.passengerDetails:[];if(!details.length)return base;
-  const byId=new Map(current.filter(p=>p.id).map(p=>[text(p.id),p]));
-  const nextDetails=details.map((d,i)=>{const p=byId.get(text(d?.id))||current[i];if(!p)return d;return {...d,name:p.full_name,full_name:p.full_name,phone:p.phone,identity:p.identity_number,identity_number:p.identity_number,nationality:p.nationality,gender:p.gender}});
+  const current=passengerByBooking.get(text(b.id))||[];
+  if(!current.length)return {...base,snapshot:{...snapshot,passengerDetails:[]}};
+  const details=Array.isArray(snapshot.passengerDetails)?snapshot.passengerDetails:[];
+  const nextDetails=current.map((p,i)=>{const old=details.find(d=>text(d?.id)===text(p.id))||details[i]||{};return {...old,id:p.id,name:p.full_name,full_name:p.full_name,phone:p.phone,identity:p.identity_number,identity_number:p.identity_number,nationality:p.nationality,gender:p.gender}});
   return {...base,snapshot:{...snapshot,passengerDetails:nextDetails}};
  }).sort((a,b)=>naturalCollator.compare(bookingDisplayNumber(a),bookingDisplayNumber(b)));
- return {...emptyData,...x,bookings:normalizedBookings,passengers:normalizedPassengers};
+ return {...emptyData,...x,bookings:normalizedBookings,passengers:normalizedPassengers,allPassengers:rawPassengers};
 }
 function tripBookingSummary(data,tripId){
  const activeBookings=(data.bookings||[]).filter(b=>!['cancelled','refunded'].includes(text(b.status).toLowerCase())&&(text(b.trip_id)===text(tripId)||text(b.return_trip_id)===text(tripId)));
  const bookingIds=new Set(activeBookings.map(b=>text(b.id)));
- const pax=(data.passengers||[]).filter(p=>bookingIds.has(text(p.booking_id))&&!['cancelled','refunded'].includes(text(p.status).toLowerCase())).length;
+ const pax=(data.passengers||[]).filter(p=>bookingIds.has(text(p.booking_id))).length;
  const trip=(data.trips||[]).find(t=>text(t.id)===text(tripId));
  return {bookings:activeBookings.length,passengers:pax,trip};
 }
