@@ -2,6 +2,8 @@ import React,{useState} from 'react';
 import {Badge,Button,Card,ErrorBox,Loading,Table} from '../../components/UI.jsx';
 import {RefreshCw,ShieldCheck,TriangleAlert} from 'lucide-react';
 import {money,dateTime} from '../../lib/format.js';
+import {useAuth} from '../../core/AuthContext.jsx';
+import {has} from '../../lib/permissions.js';
 
 const LABELS={
  stale_pending_transactions:'حركات معلقة منذ أكثر من 10 دقائق',
@@ -14,7 +16,11 @@ const arr=v=>Array.isArray(v)?v:[];
 const countIssues=a=>Object.values(a||{}).reduce((n,v)=>n+arr(v).length,0);
 
 export default function FinanceReconciliation(){
+ const {user}=useAuth();
  const [result,setResult]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const explicit=Object.prototype.hasOwnProperty.call(user?.permissions||{},'reconcileFinance');
+ const allowed=has(user,'reconcileFinance')||(!explicit&&(has(user,'finance')||has(user,'reports')));
+ if(!allowed)return null;
  async function run(){
   setBusy(true);setError('');
   try{
