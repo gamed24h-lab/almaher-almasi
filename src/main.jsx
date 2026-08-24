@@ -11,5 +11,6 @@ import './developer-footer.css';
 import './modal-feedback.css';
 import './feedback.css';
 import './ticket-approved.css';
+import './ticket-polish.css';
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
