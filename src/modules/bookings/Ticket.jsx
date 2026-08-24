@@ -44,8 +44,10 @@ export default function TicketPage({bookingNo,go}){
  const [error,setError]=useState('');
  const [printLanguage,setPrintLanguage]=useState('ar');
  const [languageTouched,setLanguageTouched]=useState(false);
+ const [returnCatalog,setReturnCatalog]=useState([]);
  const trip=data.trips.find(x=>str(x.id)===str(b?.trip_id));
- const returnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
+ const localReturnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
+ const returnTrip=localReturnTrip||returnCatalog.find(x=>str(x.id)===str(b?.return_trip_id));
  const branch=data.branches.find(x=>str(x.id)===str(b?.branch_id));
  const branchContact=data.branchContacts.find(x=>str(x.branch_id)===str(b?.branch_id));
  const tripBranch=(data.tripBranches||[]).find(x=>str(x.trip_id)===str(b?.trip_id)&&str(x.branch_id)===str(b?.branch_id));
@@ -54,6 +56,7 @@ export default function TicketPage({bookingNo,go}){
  const customerNationality=first(b?.customer_nationality,passengers[0]?.nationality,b?.snapshot?.nationality);
 
  useEffect(()=>{if(!b||languageTouched)return;setPrintLanguage(suggestedLanguageForNationality(customerNationality))},[b?.id,customerNationality,languageTouched]);
+ useEffect(()=>{if(lower(b?.journey_mode)!=='separate'||!b?.return_trip_id||localReturnTrip)return;api.returnTripOptions().then(x=>setReturnCatalog(Array.isArray(x?.trips)?x.trips:[])).catch(()=>setReturnCatalog([]))},[b?.journey_mode,b?.return_trip_id,localReturnTrip?.id]);
  useEffect(()=>{if(!b)return;QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{})},[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
