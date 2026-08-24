@@ -17,6 +17,7 @@ const DAY_NAMES=['الأحد','الاثنين','الثلاثاء','الأربع�
 const weekdayAr=d=>d?DAY_NAMES[new Date(d+'T12:00:00').getDay()]||'':'';
 const first=(...vals)=>vals.find(v=>v!==undefined&&v!==null&&str(v).trim()!=='')??'';
 const shortDate=v=>{const x=str(v);return x.includes('T')?x.slice(0,10):x};
+const minusDays=(d,n)=>{if(!d||!Number(n))return'';const x=new Date(`${d}T12:00:00`);x.setDate(x.getDate()-Number(n));return x.toISOString().slice(0,10)};
 const statusAr=v=>({confirmed:'مؤكد',paid:'مسدد',pending:'قيد المراجعة',cancelled:'ملغي',refunded:'مسترد'})[lower(v)]||str(v||'مؤكد');
 const genderAr=v=>{const x=lower(v);if(['male','m','ذكر'].includes(x))return 'ذكر';if(['female','f','أنثى','انثى'].includes(x))return 'أنثى';return str(v||'—')};
 const CODE39={
@@ -44,19 +45,28 @@ export default function TicketPage({bookingNo,go}){
  const [error,setError]=useState('');
  const [printLanguage,setPrintLanguage]=useState('ar');
  const [languageTouched,setLanguageTouched]=useState(false);
- const [returnCatalog,setReturnCatalog]=useState([]);
+ const [linkedReturnTrip,setLinkedReturnTrip]=useState(null);
  const trip=data.trips.find(x=>str(x.id)===str(b?.trip_id));
  const localReturnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
- const returnTrip=localReturnTrip||returnCatalog.find(x=>str(x.id)===str(b?.return_trip_id));
+ const returnTrip=localReturnTrip||linkedReturnTrip;
  const branch=data.branches.find(x=>str(x.id)===str(b?.branch_id));
  const branchContact=data.branchContacts.find(x=>str(x.branch_id)===str(b?.branch_id));
  const tripBranch=(data.tripBranches||[]).find(x=>str(x.trip_id)===str(b?.trip_id)&&str(x.branch_id)===str(b?.branch_id));
- const locationText=first(tripBranch?.boarding_point,branch?.address,branchContact?.address);
- const locationUrl=first(branch?.map_url,branch?.mapUrl,branchContact?.map_url,branchContact?.mapUrl,locationText?`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationText)}`:'');
- const customerNationality=first(b?.customer_nationality,passengers[0]?.nationality,b?.snapshot?.nationality);
+ const snap=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};
+ const mode=lower(b?.journey_mode);
+ const tripOrigin=first(trip?.from_city,trip?.origin);
+ const tripDestination=first(trip?.to_city,trip?.destination);
+ const rawOutboundBoarding=first(tripBranch?.boarding_point,snap?.boardingPoint);
+ const outboundBoardingPoint=rawOutboundBoarding&&str(rawOutboundBoarding)!==str(tripDestination)?rawOutboundBoarding:tripOrigin;
+ const outboundBoardingTime=first(tripBranch?.boarding_time,snap?.boardingTime);
+ const returnInfo=mode==='separate'?returnTrip:trip;
+ const returnBoardingPoint=first(snap?.returnBoardingPoint,returnInfo?.to_city,returnInfo?.destination,tripDestination);
+ const locationText=mode==='returnonly'?first(returnBoardingPoint,tripDestination,branch?.address,branchContact?.address):first(outboundBoardingPoint,branch?.address,branchContact?.address);
+ const locationUrl=mode==='returnonly'?(locationText?`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationText)}`:''):first(branch?.map_url,branch?.mapUrl,branchContact?.map_url,branchContact?.mapUrl,locationText?`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationText)}`:'');
+ const customerNationality=first(b?.customer_nationality,passengers[0]?.nationality,snap?.nationality);
 
  useEffect(()=>{if(!b||languageTouched)return;setPrintLanguage(suggestedLanguageForNationality(customerNationality))},[b?.id,customerNationality,languageTouched]);
- useEffect(()=>{if(lower(b?.journey_mode)!=='separate'||!b?.return_trip_id||localReturnTrip)return;api.returnTripOptions().then(x=>setReturnCatalog(Array.isArray(x?.trips)?x.trips:[])).catch(()=>setReturnCatalog([]))},[b?.journey_mode,b?.return_trip_id,localReturnTrip?.id]);
+ useEffect(()=>{if(mode!=='separate'||!b?.return_trip_id||localReturnTrip){setLinkedReturnTrip(null);return}api.returnTripInfo(b.booking_number).then(x=>setLinkedReturnTrip(x?.trip||null)).catch(()=>setLinkedReturnTrip(null))},[mode,b?.booking_number,b?.return_trip_id,localReturnTrip?.id]);
  useEffect(()=>{if(!b)return;QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{})},[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
@@ -94,36 +104,36 @@ export default function TicketPage({bookingNo,go}){
  const remaining=Math.max(0,total-paid);
  const L=(key,f='')=>pt(printLanguage,key,f);
  const dir=printDirection(printLanguage);
- const printOptions=mode=>({title:`تذكرة سفر — ${b.booking_number}`,pageSize:mode==='a4'?'A4':`${mode}mm`,orientation:'portrait',lang:printLanguage,dir,singlePage:mode==='a4',bodyAttributes:{'data-print-mode':mode,'data-print-language':printLanguage}});
+ const printOptions=modeName=>({title:`تذكرة سفر — ${b.booking_number}`,pageSize:modeName==='a4'?'A4':`${modeName}mm`,orientation:'portrait',lang:printLanguage,dir,singlePage:modeName==='a4',bodyAttributes:{'data-print-mode':modeName,'data-print-language':printLanguage}});
  const ticketNode=()=>document.querySelector('.ticket-page');
- const doPrint=mode=>{setError('');const el=ticketNode();if(!el)return setError('تعذر تجهيز التذكرة للطباعة.');try{printElement(el,printOptions(mode))}catch(e){setError(e.message||'تعذر فتح الطباعة.')}};
- const wa=()=>{const route=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'';const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',trip?.departure_date?`التاريخ: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
+ const doPrint=modeName=>{setError('');const el=ticketNode();if(!el)return setError('تعذر تجهيز التذكرة للطباعة.');try{printElement(el,printOptions(modeName))}catch(e){setError(e.message||'تعذر فتح الطباعة.')}};
 
  const phone=first(branchContact?.phone,branchContact?.whatsapp,branch?.whatsapp,branch?.phone);
  const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';
- const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};
  const privateType=snap.privateRoomType||(Array.isArray(b.private_room_types)?b.private_room_types[0]:'');
  const privateTypeLabel={single:'مفردة',double:'مزدوجة',triple:'ثلاثية',quad:'رباعية',quint:'خماسية'}[privateType]||privateType;
  const ticketCancelled=['cancelled','refunded'].includes(lower(b.status))||lower(trip?.status)==='cancelled';
- const mode=lower(b.journey_mode);
  const showOutbound=mode!=='returnonly';
  const showReturn=['roundtrip','separate','returnonly'].includes(mode);
- const returnInfo=mode==='separate'?returnTrip:trip;
  const reverseReturn=showReturn;
  const returnDate=mode==='separate'?first(returnTrip?.return_date,returnTrip?.departure_date):first(trip?.return_date,trip?.departure_date);
  const returnTime=mode==='separate'?first(returnTrip?.return_time,returnTrip?.departure_time):first(trip?.return_time,trip?.departure_time);
  const defaultTerms=[L('defaultTerm1'),L('defaultTerm2'),L('defaultTerm3')];
  const housingEntries=[...roomByPassenger.values()];
  const housing=housingEntries[0];
+ const hasHousing=b?.accommodation_type!=='none';
+ const returnOnlyHousingDays=mode==='returnonly'&&hasHousing?Number(snap?.housingDays||0):0;
+ const calculatedReturnOnlyCheckIn=returnOnlyHousingDays>0?minusDays(returnDate,returnOnlyHousingDays):'';
  const hotelName=first(housing?.hotel?.name,b?.hotel_name,snap?.hotelName,b?.accommodation_label,b?.accommodation_type==='none'?L('noHousing'):'');
  const roomLabel=first(housing?.room?.room_no,privateTypeLabel?`غرفة ${privateTypeLabel}`:'',b?.accommodation_label);
- const checkIn=shortDate(first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.checkIn,trip?.departure_date));
- const checkOut=shortDate(first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.checkOut,returnDate));
+ const checkIn=hasHousing?shortDate(mode==='returnonly'?first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.housingCheckInDate,snap?.checkIn,calculatedReturnOnlyCheckIn):first(housing?.tripHotel?.check_in_date,housing?.tripHotel?.checkin_date,snap?.checkIn,trip?.departure_date)):'';
+ const checkOut=hasHousing?shortDate(mode==='returnonly'?first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.housingCheckOutDate,snap?.checkOut,returnDate):first(housing?.tripHotel?.check_out_date,housing?.tripHotel?.checkout_date,snap?.checkOut,returnDate)):'';
  const issuedDate=shortDate(first(b?.booking_date,b?.created_at,b?.createdAt,trip?.departure_date));
  const license=first(branch?.license_number,branch?.license_no,branch?.travel_license_number,branch?.travel_license_no,branchContact?.license_number,branchContact?.license_no);
  const showLegal=branch?.show_legal_on_ticket!==false;
  const paymentLabel=remaining>0?'مدفوع جزئي':'مدفوع بالكامل';
- const routeLabel=trip?`${trip.from_city||trip.origin||'—'} ← ${trip.to_city||trip.destination||'—'}`:'—';
+ const routeLabel=trip?(mode==='returnonly'?`${tripDestination||'—'} ← ${tripOrigin||'—'}`:`${tripOrigin||'—'} ← ${tripDestination||'—'}`):'—';
+ const wa=()=>{const returnOnly=mode==='returnonly';const route=trip?(returnOnly?`${tripDestination||'—'} ← ${tripOrigin||'—'}`:`${tripOrigin||'—'} ← ${tripDestination||'—'}`):'';const msgDate=returnOnly?returnDate:trip?.departure_date,msgTime=returnOnly?returnTime:trip?.departure_time;const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,route?`الرحلة: ${route}`:'',msgDate?`التاريخ: ${weekdayAr(msgDate)} ${msgDate} ${msgTime||''}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
 
  return <>
   <PageHeader title="تذكرة سفر" subtitle={`${L('bookingNo')} ${b.booking_number}`} actions={<>
@@ -182,8 +192,8 @@ export default function TicketPage({bookingNo,go}){
    </section>
 
    <section className="ticket-journeys">
-    {showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={tripBranch?.boarding_point||snap?.boardingPoint} boardingTime={tripBranch?.boarding_time||snap?.boardingTime} unavailable={L('tripUnavailable')}/>} 
-    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} reverse={reverseReturn} unavailable={L('tripUnavailable')}/>} 
+    {showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={outboundBoardingPoint} boardingTime={outboundBoardingTime} unavailable={L('tripUnavailable')}/>} 
+    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} boardingPoint={returnBoardingPoint} reverse={reverseReturn} unavailable={L('tripUnavailable')}/>} 
    </section>
 
    <section className="ticket-section ticket-passenger-section">
