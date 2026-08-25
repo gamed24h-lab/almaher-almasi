@@ -13,9 +13,10 @@ const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
 const canCollect=a=>elevated(a)||a?.permissions?.payments===true;
 const canReactivate=a=>elevated(a)||a?.permissions?.reactivateBooking===true;
 const cancelled=b=>['cancelled','canceled','ملغي','ملغى'].includes(s(b?.status).trim().toLowerCase());
+const grossPaidOf=b=>Math.max(n(b?.paid_amount),n(b?.snapshot?.finance?.grossPaidHistory));
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
- const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,branch_id,trip_id,return_trip_id,customer_name,total_price,paid_amount,payment_method,payment_reference,status&limit=1`,{headers:headers(env)});
+ const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,branch_id,trip_id,return_trip_id,customer_name,total_price,paid_amount,payment_method,payment_reference,status,snapshot&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
 }
@@ -33,9 +34,14 @@ async function insertPayment(env,booking,amount,ref){
 }
 async function deletePayment(env,id){if(!id)return;await fetch(`${base(env)}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'DELETE',headers:headers(env)}).catch(()=>{})}
 async function markPaymentPosted(env,id){if(!id)return false;const r=await fetch(`${base(env)}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'PATCH',headers:headers(env),body:JSON.stringify({status:'posted'})});return r.ok}
-async function patchGrossPaid(env,bookingId,paid){
- const r=await fetch(`${base(env)}/rest/v1/bookings?id=eq.${enc(bookingId)}`,{method:'PATCH',headers:{...headers(env),Prefer:'return=minimal'},body:JSON.stringify({paid_amount:paid,updated_at:new Date().toISOString()})});
- if(!r.ok){const out=await parse(r);throw new Error(out?.message||out?.details||'تعذر تثبيت إجمالي التحصيل التاريخي بعد الاسترداد.')}
+async function patchGrossHistory(env,bookingId,paid){
+ const url=base(env),h=headers(env);
+ const rr=await fetch(`${url}/rest/v1/bookings?id=eq.${enc(bookingId)}&select=snapshot&limit=1`,{headers:h});
+ const rows=await parse(rr);if(!rr.ok)throw new Error(rows?.message||rows?.details||'تعذر قراءة Snapshot المالية للحجز.');
+ const current=Array.isArray(rows)?rows[0]?.snapshot||{}:{};const snapshot=current&&typeof current==='object'?current:{};
+ const nextSnapshot={...snapshot,finance:{...(snapshot.finance&&typeof snapshot.finance==='object'?snapshot.finance:{}),grossPaidHistory:paid,grossPaidHistoryUpdatedAt:new Date().toISOString()}};
+ const r=await fetch(`${url}/rest/v1/bookings?id=eq.${enc(bookingId)}`,{method:'PATCH',headers:{...h,Prefer:'return=minimal'},body:JSON.stringify({snapshot:nextSnapshot,updated_at:new Date().toISOString()})});
+ if(!r.ok){const out=await parse(r);throw new Error(out?.message||out?.details||'تعذر تثبيت إجمالي التحصيل التاريخي في Snapshot المالية.')}
 }
 async function auditPayment(env,actor,booking,meta){await fetch(`${base(env)}/rest/v1/activity_events`,{method:'POST',headers:headers(env),body:JSON.stringify({actor_id:s(actor?.id),actor_name:s(actor?.name),actor_role:s(actor?.role),branch_id:booking.branch_id,entity_type:'booking',entity_id:s(booking.id),action:'payment_collected',metadata:meta,created_at:new Date().toISOString()})}).catch(()=>{})}
 async function auditReactivation(env,actor,booking){await fetch(`${base(env)}/rest/v1/activity_events`,{method:'POST',headers:headers(env),body:JSON.stringify({actor_id:s(actor?.id),actor_name:s(actor?.name),actor_role:s(actor?.role),branch_id:booking.branch_id,entity_type:'booking',entity_id:s(booking.id),action:'booking_reactivated',metadata:{booking_number:booking.booking_number,previous_status:booking.status,new_status:'confirmed',trip_id:booking.trip_id,return_trip_id:booking.return_trip_id},created_at:new Date().toISOString()})}).catch(()=>{})}
@@ -95,9 +101,11 @@ export default {async fetch(request,env,ctx){
     try{before=await bookingByNo(env,no)}catch(e){return json({error:e?.message||'تعذر التحقق من السجل المالي للحجز.',code:'BOOKING_FINANCE_GUARD_READ_FAILED'},502)}
     if(before){
      if(cancelled(before))return json({error:'الحجز ملغي ومتاح للعرض فقط. لا يمكن تعديل الرحلة أو السكن أو الركاب أو السعر أو التحصيل قبل إعادة التفعيل بإجراء مستقل.',code:'CANCELLED_BOOKING_READ_ONLY',booking_number:no},409);
-     const oldPaid=n(before.paid_amount),oldTotal=n(before.total_price);
+     const storedPaid=n(before.paid_amount),oldPaid=grossPaidOf(before),oldTotal=n(before.total_price);
      const nextPaid=n(input.paidAmount??input.paid_amount??oldPaid);
      const nextTotal=n(input.totalPrice??input.total_price??oldTotal);
+     let refunded=0;
+     try{refunded=await completedRefundTotal(env,before)}catch(e){return json({error:e?.message||'تعذر التحقق من الاستردادات السابقة.',code:'BOOKING_REFUND_GUARD_READ_FAILED'},502)}
      if(nextPaid<oldPaid-0.001){
       return json({error:'لا يمكن تخفيض المبلغ المدفوع من تعديل الحجز. نفّذ أي مبلغ راجع للعميل من شاشة الاسترداد حتى يبقى السجل المالي وسند الاسترداد صحيحين.',code:'REFUND_REQUIRED',paid_amount:oldPaid},409);
      }
@@ -105,8 +113,6 @@ export default {async fetch(request,env,ctx){
       const actor=await actorFrom(request,env);
       if(!actor)return json({error:'تسجيل تحصيل جديد يتطلب جلسة مستخدم صالحة.',code:'PAYMENT_AUTH_REQUIRED'},401);
       if(!canCollect(actor))return json({error:'لا توجد لديك صلاحية تحصيل دفعات الحجوزات. يمكنك تعديل الحجز بدون تسجيل دفعة جديدة.',code:'PAYMENT_PERMISSION_REQUIRED'},403);
-      let refunded=0;
-      try{refunded=await completedRefundTotal(env,before)}catch(e){return json({error:e?.message||'تعذر التحقق من الاستردادات السابقة.',code:'BOOKING_REFUND_GUARD_READ_FAILED'},502)}
       const maxGrossPaid=Math.max(oldPaid,nextTotal+refunded);
       if(nextPaid>maxGrossPaid+0.001){
        return json({error:'التحصيل الجديد يتجاوز المبلغ المطلوب بعد احتساب الاستردادات السابقة. أدخل فقط المبلغ الذي تم تحصيله الآن.',code:'OVER_COLLECTION_BLOCKED',paid_amount:oldPaid,refunded_amount:refunded,net_paid:Math.max(0,oldPaid-refunded),total_price:nextTotal,max_gross_paid:maxGrossPaid},409);
@@ -114,15 +120,18 @@ export default {async fetch(request,env,ctx){
       if(refunded>0.001&&nextPaid>nextTotal+0.001){
        const delta=Number((nextPaid-oldPaid).toFixed(2)),ref=receiptNo();let tx=null;
        try{tx=await insertPayment(env,before,delta,ref)}catch(e){return json({error:e?.message||'تعذر إنشاء سند القبض.',code:'PAYMENT_LEDGER_WRITE_FAILED'},500)}
-       const downstream=await appWorker.fetch(requestWithPaid(request,body,oldPaid),env,ctx);
+       const downstream=await appWorker.fetch(requestWithPaid(request,body,storedPaid),env,ctx);
        if(!downstream.ok){await deletePayment(env,tx?.id);return downstream}
-       try{await patchGrossPaid(env,before.id,nextPaid)}catch(e){await deletePayment(env,tx?.id);return json({error:e?.message||'تعذر تثبيت التحصيل بعد الاسترداد.',code:'REFUND_AWARE_GROSS_PAYMENT_PATCH_FAILED'},502)}
+       try{await patchGrossHistory(env,before.id,nextPaid)}catch(e){await deletePayment(env,tx?.id);return json({error:e?.message||'تعذر تثبيت سجل التحصيل التاريخي بعد الاسترداد.',code:'REFUND_AWARE_GROSS_HISTORY_PATCH_FAILED'},502)}
        const posted=await markPaymentPosted(env,tx?.id);
-       await auditPayment(env,actor,before,{receipt_no:ref,amount:delta,previous_paid:oldPaid,new_paid:nextPaid,refunded_amount:refunded,net_paid_after:Math.max(0,nextPaid-refunded),payment_method:input.paymentMethod||input.payment_method||before.payment_method||null,payment_reference:input.paymentReference||input.payment_reference||before.payment_reference||null,transaction_id:tx?.id||null,ledger_status:posted?'posted':'pending'});
+       await auditPayment(env,actor,before,{receipt_no:ref,amount:delta,previous_paid:oldPaid,new_paid:nextPaid,stored_paid_amount:storedPaid,refunded_amount:refunded,net_paid_after:Math.max(0,nextPaid-refunded),payment_method:input.paymentMethod||input.payment_method||before.payment_method||null,payment_reference:input.paymentReference||input.payment_reference||before.payment_reference||null,transaction_id:tx?.id||null,ledger_status:posted?'posted':'pending'});
        const out=await downstream.clone().json().catch(()=>null);const receipt={receipt_no:ref,amount:delta,previous_paid:oldPaid,new_paid:nextPaid,transaction_id:tx?.id||null,status:posted?'posted':'pending',view_url:`/api/payments/receipt/view?receipt_no=${encodeURIComponent(ref)}`,print_url:`/api/payments/receipt/print?receipt_no=${encodeURIComponent(ref)}`};
        if(out&&typeof out==='object')return json({...out,payment_receipt:receipt,refund_aware_collection:true,gross_paid:nextPaid,refunded_amount:refunded,net_paid:Math.max(0,nextPaid-refunded)},downstream.status);
        return downstream;
       }
+     }
+     if(refunded>0.001&&oldPaid>storedPaid+0.001){
+      return appWorker.fetch(requestWithPaid(request,body,storedPaid),env,ctx);
      }
     }
    }
