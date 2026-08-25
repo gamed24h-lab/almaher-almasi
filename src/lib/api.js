@@ -35,7 +35,7 @@ async function request(path,{method='GET',body,headers={},feedback=true}={}){
     const e=new Error(message);e.rawMessage=networkError?.message||String(networkError);throw e;
   }
   const text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch{data={message:text}}
-  if(!response.ok){const raw=data?.error||data?.message||`HTTP ${response.status}`;const message=arabicError(raw,response.status);if(method!=='GET'&&feedback)notifyError(message);const e=new Error(message);e.status=response.status;e.data=data;e.rawMessage=raw;throw e}
+  if(!response.ok){const raw=data?.error||data?.message||`HTTP ${response.status}`;const baseMessage=arabicError(raw,response.status);const isBookingUpdateDiagnostic=Number(response.status)>=500&&path==='/api/admin'&&body?.action==='update_booking';const code=data?.code?String(data.code):'';const message=isBookingUpdateDiagnostic?`${baseMessage} — التفاصيل التقنية: ${raw}${code?` — الكود: ${code}`:''}`:baseMessage;if(method!=='GET'&&feedback)notifyError(message);const e=new Error(message);e.status=response.status;e.data=data;e.rawMessage=raw;throw e}
   if(method!=='GET'&&feedback){const message=mutationSuccessMessage(path,body);if(message)notifySuccess(message)}
   return data;
 }
