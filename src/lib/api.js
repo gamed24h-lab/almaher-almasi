@@ -101,6 +101,7 @@ export const api={
   seatAtomic:(body)=>request('/api/seats/atomic',{method:'POST',body}),
   seatAtomicSilent:(body)=>request('/api/seats/atomic',{method:'POST',body,feedback:false}),
   bookingTimeline:(bookingNo)=>request(`/api/bookings/timeline?bookingNo=${encodeURIComponent(bookingNo)}`),
+  bookingRefundSummaries:()=>request('/api/bookings/refund-summaries'),
   autoHouseBooking:(bookingNumber,tripHotelId)=>request('/api/bookings/auto-house',{method:'POST',body:{booking_number:bookingNumber,trip_hotel_id:tripHotelId},feedback:false}),
   customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
   customerAccessLink,
