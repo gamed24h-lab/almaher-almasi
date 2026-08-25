@@ -6,6 +6,7 @@ import {useAuth} from '../../core/AuthContext.jsx';
 import {has} from '../../lib/permissions.js';
 
 const LABELS={
+ booking_finance_mismatches:'عدم تطابق السجل المالي للحجز',
  stale_pending_transactions:'حركات معلقة منذ أكثر من 10 دقائق',
  payments_without_receipt:'تحصيلات بدون رقم سند PAY',
  duplicate_references:'أرقام سندات مكررة',
@@ -37,6 +38,7 @@ export default function FinanceReconciliation(){
   {key:'label',label:'الفحص'},
   {key:'details',label:'التفاصيل',render:r=>{
     const x=r.item||{};
+    if(r.kind==='booking_finance_mismatches')return `${x.booking_number||'—'} · قيمة ${money(x.total_price)} · تحصيل تاريخي ${money(x.gross_collected)} · مسترد ${money(x.refunded_amount)} · ${arr(x.reasons).join('، ')||'اختلاف مالي'}`;
     if(r.kind==='duplicate_references')return `${x.reference||'—'} · مكرر ${x.count||0} مرة`;
     if(r.kind==='shift_variances')return `وردية ${x.id||'—'} · الفرق ${money(x.variance)}`;
     if(r.kind==='closed_shifts_missing_actual')return `وردية ${x.id||'—'} · أغلقت ${dateTime(x.closed_at)}`;
@@ -47,7 +49,7 @@ export default function FinanceReconciliation(){
  ];
  return <Card>
   <div className="card-title">
-   <div><h3>فحص المطابقة المالية</h3><small>مراجعة التحصيلات والسندات والخزن والورديات واكتشاف الفروقات بدون تعديل أي بيانات.</small></div>
+   <div><h3>فحص المطابقة المالية</h3><small>مراجعة التحصيلات والاستردادات والسندات والخزن والورديات واكتشاف الفروقات بدون تعديل أي بيانات.</small></div>
    <Button onClick={run} disabled={busy}>{busy?<><RefreshCw size={16}/> جاري الفحص...</>:<><ShieldCheck size={16}/> فحص المطابقة المالية</>}</Button>
   </div>
   <ErrorBox error={error}/>
@@ -58,7 +60,7 @@ export default function FinanceReconciliation(){
     <span className="muted-small">آخر فحص: {dateTime(result.generated_at)} · النطاق: {result?.scope?.all_branches?'كل الفروع':'الفرع الحالي'}</span>
    </div>
    <div className="table-summary" style={{marginTop:10}}>
-    <span>التحصيل: <b>{money(summary.collected)}</b></span><span>الاسترداد: <b>{money(summary.refund_total)}</b></span><span>المصروفات: <b>{money(summary.expense_total)}</b></span><span>صافي الحركة: <b>{money(summary.net_movement)}</b></span><span>الورديات المفتوحة: <b>{summary.open_shifts||0}</b></span><span>حركات Pending: <b>{summary.pending_transactions||0}</b></span>
+    <span>التحصيل التاريخي: <b>{money(summary.collected)}</b></span><span>الاسترداد المكتمل: <b>{money(summary.refund_total)}</b></span><span>صافي التحصيل: <b>{money(summary.net_collected)}</b></span><span>المصروفات: <b>{money(summary.expense_total)}</b></span><span>صافي الحركة: <b>{money(summary.net_movement)}</b></span><span>الورديات المفتوحة: <b>{summary.open_shifts||0}</b></span><span>حركات Pending: <b>{summary.pending_transactions||0}</b></span>
    </div>
    {issueRows.length?<div style={{marginTop:12}}><Table rows={issueRows} columns={issueCols}/></div>:<div className="empty" style={{marginTop:12}}>✅ نتائج الفحص سليمة.</div>}
   </>}
