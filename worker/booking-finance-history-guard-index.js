@@ -10,6 +10,7 @@ async function actorFrom(request,env){try{const r=await appWorker.fetch(new Requ
 const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مدير عام'||a.permissions?.all===true);
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
+const canCollect=a=>elevated(a)||a?.permissions?.payments===true;
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
  const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,total_price,paid_amount&limit=1`,{headers:headers(env)});
@@ -66,6 +67,9 @@ export default {async fetch(request,env,ctx){
       return json({error:'لا يمكن تخفيض المبلغ المدفوع من تعديل الحجز. نفّذ أي مبلغ راجع للعميل من شاشة الاسترداد حتى يبقى السجل المالي وسند الاسترداد صحيحين.',code:'REFUND_REQUIRED',paid_amount:oldPaid},409);
      }
      if(nextPaid>oldPaid+0.001){
+      const actor=await actorFrom(request,env);
+      if(!actor)return json({error:'تسجيل تحصيل جديد يتطلب جلسة مستخدم صالحة.',code:'PAYMENT_AUTH_REQUIRED'},401);
+      if(!canCollect(actor))return json({error:'لا توجد لديك صلاحية التحصيل. يمكنك تعديل الحجز، لكن تسجيل مبلغ جديد يحتاج صلاحية «التحصيل».',code:'PAYMENT_PERMISSION_REQUIRED'},403);
       let refunded=0;
       try{refunded=await completedRefundTotal(env,before)}catch(e){return json({error:e?.message||'تعذر التحقق من الاستردادات السابقة.',code:'BOOKING_REFUND_GUARD_READ_FAILED'},502)}
       const maxGrossPaid=Math.max(oldPaid,nextTotal+refunded);
