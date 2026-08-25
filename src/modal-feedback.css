@@ -1,5 +1,28 @@
 /* Global operation feedback: always render above every modal/page layer. */
-.global-error-feedback {
+.global-error-feedback-stack {
+  position: fixed;
+  top: 82px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(820px, calc(100vw - 32px));
+  z-index: 2147483000;
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+.global-error-feedback-stack .global-error-feedback {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  transform: none !important;
+  width: 100% !important;
+  z-index: auto !important;
+  box-shadow: 0 16px 42px rgba(80, 20, 16, .24);
+  margin: 0 !important;
+  pointer-events: auto;
+}
+/* Legacy fallback for a notice rendered outside the stack. */
+body > .global-error-feedback {
   position: fixed !important;
   top: 82px;
   left: 50%;
@@ -10,13 +33,9 @@
   margin: 0 !important;
   pointer-events: auto;
 }
-
 .modal-backdrop { z-index: 1000; }
 .modal-backdrop .modal { position: relative; z-index: 1001; }
-
 @media (max-width: 700px) {
-  .global-error-feedback {
-    top: 68px;
-    width: calc(100vw - 20px);
-  }
+  .global-error-feedback-stack { top: 68px; width: calc(100vw - 20px); gap: 8px; }
+  body > .global-error-feedback { top: 68px; width: calc(100vw - 20px); }
 }
