@@ -31,6 +31,12 @@ function unavailableTrip(t){return !t||['cancelled','completed'].includes(s(t.st
 function legMoment(date,time){const d=s(date).slice(0,10);if(!d)return'';const raw=s(time||'00:00:00').trim();const parts=raw.split(':');const hh=s(parts[0]||'00').padStart(2,'0'),mm=s(parts[1]||'00').padStart(2,'0'),ss=s(parts[2]||'00').padStart(2,'0');return `${d}T${hh}:${mm}:${ss}`}
 function privateCapacity(v){return ({single:1,double:2,triple:3,quad:4,quint:5})[s(v).toLowerCase()]||2}
 function female(v){return ['female','f','أنثى','انثى'].includes(s(v).trim().toLowerCase())}
+function b64urlEncodeText(text){const bytes=new TextEncoder().encode(text);let bin='';for(const b of bytes)bin+=String.fromCharCode(b);return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function b64urlDecodeText(value){const raw=s(value).replace(/-/g,'+').replace(/_/g,'/');const pad=raw+'='.repeat((4-raw.length%4)%4);const bin=atob(pad);const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));return new TextDecoder().decode(bytes)}
+async function hmac(env,text){const secret=s(env.SUPABASE_SERVICE_ROLE_KEY);if(!secret)throw new Error('Customer access signing secret is unavailable');const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const sig=new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(text)));let bin='';for(const b of sig)bin+=String.fromCharCode(b);return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+async function issueAccessToken(env,bookingNo){const payload=b64urlEncodeText(JSON.stringify({b:s(bookingNo),exp:Math.floor(Date.now()/1000)+60*60*24*180,v:1}));return `${payload}.${await hmac(env,payload)}`}
+async function verifyAccessToken(env,token){try{const [payload,sig]=s(token).split('.');if(!payload||!sig)return null;const expected=await hmac(env,payload);if(expected!==sig)return null;const body=JSON.parse(b64urlDecodeText(payload));if(!body?.b||!body?.exp||Number(body.exp)<Math.floor(Date.now()/1000))return null;return body}catch{return null}}
+const maskIdentifier=v=>{const x=s(v).trim();if(!x)return'';return x.length<=4?x:`••••${x.slice(-4)}`};
 async function tripIncludesBranch(env,trip,branchId){
  if(!trip||!branchId)return true;
  if(s(trip.branch_id)===s(branchId))return true;
@@ -57,6 +63,26 @@ async function returnSeatContext(request,env){
  const ownBookingIds=new Set((ownBookings||[]).map(x=>s(x.id)));
  const safeAssignments=elevated(actor)?seatAssignments:seatAssignments.map(a=>ownBookingIds.has(s(a.booking_id))?a:{...a,passenger_id:null,booking_id:null});
  return json({ok:true,trip,trip_vehicles:activeTripVehicles,vehicles,vehicle_seats:vehicleSeats,seat_assignments:safeAssignments});
+}
+async function customerAccessToken(request,env){
+ const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'CUSTOMER_ACCESS_TOKEN_AUTH_REQUIRED'},401);
+ const u=new URL(request.url),bookingNo=s(u.searchParams.get('bookingNo')).trim();if(!bookingNo)return json({error:'رقم الحجز مطلوب.',code:'CUSTOMER_ACCESS_BOOKING_REQUIRED'},400);
+ const booking=(await rows(env,'bookings',`booking_number=eq.${enc(bookingNo)}&select=id,booking_number,branch_id&limit=1`))[0];if(!booking)return json({error:'الحجز غير موجود.',code:'CUSTOMER_ACCESS_BOOKING_NOT_FOUND'},404);
+ if(!allBranches(actor)&&s(booking.branch_id)!==s(actor.branch_id))return json({error:'لا يمكنك إنشاء رابط بوابة لحجز فرع آخر.',code:'CUSTOMER_ACCESS_BRANCH_FORBIDDEN'},403);
+ return json({ok:true,token:await issueAccessToken(env,booking.booking_number),expires_in_days:180});
+}
+async function customerAccess(request,env){
+ const u=new URL(request.url),verified=await verifyAccessToken(env,u.searchParams.get('token'));if(!verified)return json({error:'رابط الحجز غير صالح أو انتهت صلاحيته.',code:'CUSTOMER_ACCESS_INVALID'},403);
+ const b=(await rows(env,'bookings',`booking_number=eq.${enc(verified.b)}&select=*&limit=1`))[0];if(!b)return json({error:'الحجز غير موجود.',code:'CUSTOMER_ACCESS_NOT_FOUND'},404);
+ const passengers=await rows(env,'booking_passengers',`booking_id=eq.${enc(b.id)}&status=neq.cancelled&select=id,passenger_order,full_name,gender,nationality,identity_number,status,accommodation_status,preferred_language&order=passenger_order.asc&limit=200`);
+ const snap=b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};
+ const booking={...snap,id:b.booking_number,number:b.booking_number,bookingNo:b.booking_number,tripId:b.trip_id,returnTripId:b.return_trip_id,branchId:b.branch_id,name:b.customer_name,journeyMode:b.journey_mode,accommodationType:b.accommodation_type,accommodationLabel:b.accommodation_label,privateRooms:b.private_rooms,privateRoomTypes:b.private_room_types||[],paymentMethod:b.payment_method,totalPrice:Number(b.total_price||0),paidAmount:Number(b.paid_amount||0),status:b.status,createdAt:b.created_at,cloudSynced:true,cloudBookingId:b.id};
+ const safePassengers=passengers.map(p=>({...p,identity_number:maskIdentifier(p.identity_number)}));
+ const safeRow=async(table,id)=>{if(!id)return null;return (await rows(env,table,`id=eq.${enc(id)}&select=*&limit=1`))[0]||null};
+ const [tripRow,returnRow,branchRow]=await Promise.all([safeRow('trips',b.trip_id),safeRow('trips',b.return_trip_id),safeRow('branches',b.branch_id)]);
+ const safeTrip=t=>t?{id:t.id,trip_code:t.trip_code||t.code||'',from_city:t.from_city||t.origin||'',to_city:t.to_city||t.destination||'',departure_date:t.departure_date||null,departure_time:t.departure_time||null,return_date:t.return_date||null,return_time:t.return_time||null,status:t.status||''}:null;
+ const safeBranch=branchRow?{id:branchRow.id,name:branchRow.name||'',address:branchRow.address||'',whatsapp:branchRow.whatsapp||'',phone:branchRow.phone||'',map_url:branchRow.map_url||branchRow.mapUrl||''}:null;
+ return json({booking,passengers:safePassengers,trip:safeTrip(tripRow),returnTrip:safeTrip(returnRow),branch:safeBranch,access_mode:'signed_ticket_qr'});
 }
 async function autoHouseBooking(request,env){
  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'AUTO_HOUSING_AUTH_REQUIRED'},401);
@@ -155,6 +181,12 @@ async function guardReturnHousing(env,body){
 
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
+ if(request.method==='GET'&&u.pathname==='/api/customer/access-token'){
+   try{return await customerAccessToken(request,env)}catch(e){return json({error:e?.message||'تعذر إنشاء رابط بوابة العميل.',code:'CUSTOMER_ACCESS_TOKEN_FAILED'},502)}
+ }
+ if(request.method==='GET'&&u.pathname==='/api/customer/access'){
+   try{return await customerAccess(request,env)}catch(e){return json({error:e?.message||'تعذر فتح الحجز من الرابط.',code:'CUSTOMER_ACCESS_FAILED'},502)}
+ }
  if(request.method==='POST'&&u.pathname==='/api/bookings/auto-house'){
    try{return await autoHouseBooking(request,env)}catch(e){return json({error:e?.message||'تعذر تنفيذ التسكين الفوري.',code:'AUTO_HOUSING_FAILED'},502)}
  }
