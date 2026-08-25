@@ -1,0 +1,27 @@
+/* Mobile layout safety: keep fixed bottom navigation from covering page content. */
+@media (max-width:760px){
+  :root{--almaher-mobile-nav-height:76px}
+  .sidebar{
+    height:calc(var(--almaher-mobile-nav-height) + env(safe-area-inset-bottom,0px));
+    padding:6px 6px env(safe-area-inset-bottom,0px);
+  }
+  .sidebar nav{height:var(--almaher-mobile-nav-height);align-items:stretch}
+  .content-shell{
+    padding-bottom:calc(var(--almaher-mobile-nav-height) + env(safe-area-inset-bottom,0px) + 28px);
+  }
+  .content-shell main{
+    padding-bottom:calc(var(--almaher-mobile-nav-height) + env(safe-area-inset-bottom,0px) + 34px);
+  }
+  .sticky-save{
+    bottom:calc(var(--almaher-mobile-nav-height) + env(safe-area-inset-bottom,0px) + 10px);
+    z-index:35;
+    padding:8px;
+    margin-inline:-4px;
+    border-radius:12px;
+    background:rgba(243,246,250,.94);
+    backdrop-filter:blur(8px);
+    -webkit-backdrop-filter:blur(8px);
+  }
+  .sticky-save .btn{min-width:0;flex:1}
+  .developer-footer{margin-bottom:18px}
+}
