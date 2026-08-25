@@ -28,10 +28,10 @@ for(const type of ['none','shared','private'])assertEq(price('returnonly',type),
 assertEq(price('oneway','shared'),2200,'oneway shared uses one-way leg price for 2 travelers');
 assertEq(price('returnonly','shared'),2200,'returnonly shared mirrors one-way shared price');
 
-// Private housing supplement is per room-day and is identical for one-way and return-only.
-assertEq(price('oneway','private'),4000,'oneway private includes room-day supplement');
-assertEq(price('returnonly','private'),4000,'returnonly private includes same room-day supplement');
-assertEq(price('oneway','private',{rooms:2,days:2,roomDays:[2,4],separateRoomDays:true}),5800,'separate private room days are summed per room');
+// Private housing supplement is charged once per room-day, not once per traveler, and is identical for one-way and return-only.
+assertEq(price('oneway','private'),3100,'oneway private includes one room x three days supplement');
+assertEq(price('returnonly','private'),3100,'returnonly private includes same room-day supplement');
+assertEq(price('oneway','private',{rooms:2,days:2,roomDays:[2,4],separateRoomDays:true}),4000,'separate private room days are summed once per room');
 
 // Round-trip and separate-return rules remain distinct.
 assertEq(price('roundtrip','none'),3600,'roundtrip no-housing uses package price');
