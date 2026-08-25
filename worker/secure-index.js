@@ -9,7 +9,7 @@ const SENSITIVE_KEYS=new Set([
 
 const APPROVAL_KEYS=new Set([
   'managePermissions','manageUsers','allBranches','allBranchesFinance','addBranches',
-  'manageCompanyProfile','refund_approve','refund_complete','approvals'
+  'manageCompanyProfile','refund_approve','refund_complete','approvals','bookingDiscount'
 ]);
 
 const ROLE_RANK={
