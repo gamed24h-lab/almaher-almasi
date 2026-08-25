@@ -4,17 +4,30 @@ const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:
 const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const headers=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
 const enc=v=>encodeURIComponent(String(v??''));
-const n=v=>Number(v||0);
+const n=v=>Number(v||0),s=v=>String(v??'');
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
+async function actorFrom(request,env){try{const r=await appWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env);if(!r.ok)return null;const b=await r.json().catch(()=>({}));return b?.user||null}catch{return null}}
+const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مدير عام'||a.permissions?.all===true);
+const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
  const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,total_price,paid_amount&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
 }
+async function refundSummaries(request,env){
+ const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'REFUND_SUMMARY_AUTH_REQUIRED'},401);
+ const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return json({error:'إعدادات قاعدة البيانات غير مكتملة.',code:'REFUND_SUMMARY_ENV_MISSING'},500);
+ let q='status=eq.completed&select=booking_id,booking_number,branch_id,amount&limit=10000';
+ if(!allBranches(actor)){const branch=s(actor.branch_id).trim();if(!branch)return json({ok:true,by_booking_id:{},by_booking_number:{},total_refunded:0});q+=`&branch_id=eq.${enc(branch)}`}
+ const r=await fetch(`${url}/rest/v1/booking_refunds?${q}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)return json({error:out?.message||out?.details||'تعذر قراءة ملخص الاستردادات.',code:'REFUND_SUMMARY_READ_FAILED'},502);
+ const byId={},byNo={};let total=0;for(const row of Array.isArray(out)?out:[]){const amount=Math.max(0,n(row.amount));total+=amount;const id=s(row.booking_id).trim(),no=s(row.booking_number).trim();if(id)byId[id]=n(byId[id])+amount;if(no)byNo[no]=n(byNo[no])+amount}
+ return json({ok:true,by_booking_id:byId,by_booking_number:byNo,total_refunded:total});
+}
 
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
+ if(request.method==='GET'&&u.pathname==='/api/bookings/refund-summaries')return refundSummaries(request,env);
  if(request.method==='POST'&&u.pathname==='/api/admin'){
   const body=await request.clone().json().catch(()=>({}));
   if(String(body?.action||'')==='update_booking'){
