@@ -5,10 +5,12 @@ const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const headers=env=>{const key=String(env.SUPABASE_SERVICE_ROLE_KEY||'');return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
 const low=v=>String(v??'').toLowerCase();
+const num=v=>Number(v||0);
 const activeLink=x=>!['cancelled','released','inactive'].includes(low(x?.status||'assigned'));
 const activeBooking=x=>!['cancelled','deleted','refunded'].includes(low(x?.status));
 const activePassenger=x=>low(x?.status)!=='cancelled';
 const activeSeat=x=>low(x?.status)==='assigned'&&!!x?.passenger_id;
+const grossPaidHistory=b=>Math.max(num(b?.paid_amount),num(b?.snapshot?.finance?.grossPaidHistory));
 
 async function readTable(env,table,select){
   const b=base(env);if(!b||!env.SUPABASE_SERVICE_ROLE_KEY)return [];
@@ -18,7 +20,8 @@ async function readTable(env,table,select){
 
 async function enrichBootstrap(env,payload){
   const trips=Array.isArray(payload?.trips)?payload.trips:[];
-  if(!trips.length||!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return payload;
+  const visibleBookings=Array.isArray(payload?.bookings)?payload.bookings.map(b=>{const gross=grossPaidHistory(b);return gross>num(b?.paid_amount)+0.001?{...b,stored_paid_amount:b.paid_amount,paid_amount:gross}:b}):payload?.bookings;
+  if(!trips.length||!base(env)||!env.SUPABASE_SERVICE_ROLE_KEY)return {...payload,bookings:visibleBookings};
   const [tripVehicles,bookings,passengers,seats]=await Promise.all([
     readTable(env,'trip_vehicles','id,trip_id,booking_capacity,capacity,status'),
     readTable(env,'bookings','id,trip_id,return_trip_id,status'),
@@ -49,7 +52,7 @@ async function enrichBootstrap(env,payload){
     const seated=seatedByTrip.get(tid)?.size||0;
     return {...t,live_capacity:liveCapacity,booked_passengers:booked,available_seats:Math.max(0,liveCapacity-booked),seated_passengers:seated,unseated_passengers:Math.max(0,booked-seated),assigned_vehicle_count:fleet.length};
   });
-  return {...payload,trips:enriched};
+  return {...payload,bookings:visibleBookings,trips:enriched};
 }
 
 export default {async fetch(request,env,ctx){
