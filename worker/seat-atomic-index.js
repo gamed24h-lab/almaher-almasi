@@ -96,9 +96,12 @@ async function atomicSeat(request,env){
   if(!['outbound','return'].includes(segment))return json({error:'اتجاه المقعد غير مدعوم.',code:'INVALID_SEAT_SEGMENT'},400);
 
   const fullSeatAccess=has(actor,'seats')||has(actor,'operations')||has(actor,'trips');
-  const bookingSeatAccess=fullSeatAccess?false:await bookingSeatContextAllowed(actor,env,body,tripVehicleId,action,segment,seatNo);
+  const scopedBookingSeatAccess=await bookingSeatContextAllowed(actor,env,body,tripVehicleId,action,segment,seatNo);
+  const bookingSeatAccess=fullSeatAccess?false:scopedBookingSeatAccess;
   if(!fullSeatAccess&&!bookingSeatAccess)return json({error:'لا توجد صلاحية لإدارة هذا المقعد ضمن الحجز.'},403);
-  if(!(await canAccessTripVehicle(actor,env,tripVehicleId)))return json({error:'المركبة/الرحلة خارج نطاق تشغيل فرعك.'},403);
+  const normalTripAccess=await canAccessTripVehicle(actor,env,tripVehicleId);
+  const scopedCrossBranchReturn=segment==='return'&&scopedBookingSeatAccess&&actor?.permissions?.crossBranchReturn===true;
+  if(!normalTripAccess&&!scopedCrossBranchReturn)return json({error:'المركبة/الرحلة خارج نطاق تشغيل فرعك.'},403);
 
   const assignedBy=actor.name||actor.id||null;
   let rpc,payload;
@@ -117,7 +120,7 @@ async function atomicSeat(request,env){
   if(action==='assign'&&body.passenger_id&&body.booking_id){
     staleReleased=await releaseStalePassengerSeats(env,{passengerId:body.passenger_id,bookingId:body.booking_id,segment,tripVehicleId,seatNo,assignedBy});
   }
-  return json({ok:true,result:out,scope:bookingSeatAccess?'booking':'seat_management',stale_released:staleReleased});
+  return json({ok:true,result:out,scope:bookingSeatAccess?'booking':scopedCrossBranchReturn?'cross_branch_return':'seat_management',stale_released:staleReleased});
 }
 
 export default {async fetch(request,env,ctx){const u=new URL(request.url);if(u.pathname==='/api/seats/atomic')return atomicSeat(request,env);return runtimeModeWorker.fetch(request,env,ctx)}};
