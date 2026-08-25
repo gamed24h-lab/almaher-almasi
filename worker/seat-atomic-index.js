@@ -41,13 +41,24 @@ async function bookingSeatContextAllowed(actor,env,body,tripVehicleId,action,seg
   }
 
   if(!bookingId)return false;
-  const br=await fetch(`${b}/rest/v1/bookings?id=eq.${encodeURIComponent(bookingId)}&select=id,branch_id,trip_id,return_trip_id,status&limit=1`,{headers:h});
+  const br=await fetch(`${b}/rest/v1/bookings?id=eq.${encodeURIComponent(bookingId)}&select=id,branch_id,trip_id,return_trip_id,journey_mode,status&limit=1`,{headers:h});
   const bb=await parse(br);if(!br.ok||!Array.isArray(bb)||!bb[0])return false;
   const booking=bb[0];
   if(['cancelled','deleted','refunded'].includes(String(booking.status||'').toLowerCase()))return false;
   if(!elevated(actor)&&!actor?.permissions?.allBranches&&String(booking.branch_id||'')!==String(actor?.branch_id||''))return false;
-  const expectedTrip=segment==='return'?(booking.return_trip_id||booking.trip_id):booking.trip_id;
-  if(String(expectedTrip||'')!==String(tripId))return false;
+
+  const mode=String(booking.journey_mode||'').toLowerCase();
+  if(['oneway','roundtrip','separate','returnonly'].includes(mode)){
+    if(segment==='outbound'&&mode==='returnonly')return false;
+    if(segment==='return'&&mode==='oneway')return false;
+  }
+  let expectedTrip=booking.trip_id;
+  if(segment==='return'){
+    if(mode==='separate')expectedTrip=booking.return_trip_id;
+    else if(mode==='roundtrip'||mode==='returnonly')expectedTrip=booking.trip_id;
+    else expectedTrip=booking.return_trip_id||booking.trip_id;
+  }
+  if(!expectedTrip||String(expectedTrip)!==String(tripId))return false;
 
   if(passengerId){
     const pr=await fetch(`${b}/rest/v1/booking_passengers?id=eq.${encodeURIComponent(passengerId)}&booking_id=eq.${encodeURIComponent(bookingId)}&select=id,status&limit=1`,{headers:h});
@@ -82,6 +93,7 @@ async function atomicSeat(request,env){
   const segment=String(body?.segment_type||'outbound');
   const seatNo=String(body?.seat_no||'').trim();
   if(!tripVehicleId||!seatNo)return json({error:'بيانات المقعد أو الباص غير مكتملة.'},400);
+  if(!['outbound','return'].includes(segment))return json({error:'اتجاه المقعد غير مدعوم.',code:'INVALID_SEAT_SEGMENT'},400);
 
   const fullSeatAccess=has(actor,'seats')||has(actor,'operations')||has(actor,'trips');
   const bookingSeatAccess=fullSeatAccess?false:await bookingSeatContextAllowed(actor,env,body,tripVehicleId,action,segment,seatNo);
