@@ -11,10 +11,11 @@ const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مد
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
 const canCollect=a=>elevated(a)||a?.permissions?.payments===true;
+const canReactivate=a=>elevated(a)||a?.permissions?.reactivateBooking===true;
 const cancelled=b=>['cancelled','canceled','ملغي','ملغى'].includes(s(b?.status).trim().toLowerCase());
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
- const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,branch_id,customer_name,total_price,paid_amount,payment_method,payment_reference,status&limit=1`,{headers:headers(env)});
+ const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,branch_id,trip_id,return_trip_id,customer_name,total_price,paid_amount,payment_method,payment_reference,status&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
 }
@@ -37,6 +38,7 @@ async function patchGrossPaid(env,bookingId,paid){
  if(!r.ok){const out=await parse(r);throw new Error(out?.message||out?.details||'تعذر تثبيت إجمالي التحصيل التاريخي بعد الاسترداد.')}
 }
 async function auditPayment(env,actor,booking,meta){await fetch(`${base(env)}/rest/v1/activity_events`,{method:'POST',headers:headers(env),body:JSON.stringify({actor_id:s(actor?.id),actor_name:s(actor?.name),actor_role:s(actor?.role),branch_id:booking.branch_id,entity_type:'booking',entity_id:s(booking.id),action:'payment_collected',metadata:meta,created_at:new Date().toISOString()})}).catch(()=>{})}
+async function auditReactivation(env,actor,booking){await fetch(`${base(env)}/rest/v1/activity_events`,{method:'POST',headers:headers(env),body:JSON.stringify({actor_id:s(actor?.id),actor_name:s(actor?.name),actor_role:s(actor?.role),branch_id:booking.branch_id,entity_type:'booking',entity_id:s(booking.id),action:'booking_reactivated',metadata:{booking_number:booking.booking_number,previous_status:booking.status,new_status:'confirmed',trip_id:booking.trip_id,return_trip_id:booking.return_trip_id},created_at:new Date().toISOString()})}).catch(()=>{})}
 function requestWithPaid(request,body,paid){const next={...body,booking:{...(body?.booking||{}),paidAmount:paid,paid_amount:paid}};return new Request(request.url,{method:request.method,headers:request.headers,body:JSON.stringify(next)})}
 function discountAmounts(input={}){
  const total=n(input.totalPrice??input.total_price);
@@ -60,12 +62,29 @@ async function refundSummaries(request,env){
  const byId={},byNo={};let total=0;for(const row of Array.isArray(out)?out:[]){const amount=Math.max(0,n(row.amount));total+=amount;const id=s(row.booking_id).trim(),no=s(row.booking_number).trim();if(id)byId[id]=n(byId[id])+amount;if(no)byNo[no]=n(byNo[no])+amount}
  return json({ok:true,by_booking_id:byId,by_booking_number:byNo,total_refunded:total});
 }
+async function reactivateBooking(request,env,no){
+ const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'BOOKING_REACTIVATION_AUTH_REQUIRED'},401);
+ if(!canReactivate(actor))return json({error:'لا توجد لديك صلاحية إعادة تفعيل الحجوزات الملغية.',code:'BOOKING_REACTIVATION_FORBIDDEN'},403);
+ let booking=null;try{booking=await bookingByNo(env,no)}catch(e){return json({error:e?.message||'تعذر قراءة الحجز.',code:'BOOKING_REACTIVATION_READ_FAILED'},502)}
+ if(!booking)return json({error:'الحجز غير موجود.',code:'BOOKING_NOT_FOUND'},404);
+ if(!allBranches(actor)&&s(actor.branch_id)!==s(booking.branch_id))return json({error:'الحجز خارج نطاق فرعك.',code:'BOOKING_REACTIVATION_BRANCH_FORBIDDEN'},403);
+ if(!cancelled(booking))return json({error:'الحجز غير ملغي ولا يحتاج إعادة تفعيل.',code:'BOOKING_NOT_CANCELLED'},409);
+ const payload={p_booking_number:no,p_booking:{status:'confirmed'},p_passengers:null,p_actor:{id:s(actor.id),name:s(actor.name),role:s(actor.role),action:'reactivate_booking'}};
+ const r=await fetch(`${base(env)}/rest/v1/rpc/almaher_update_booking_atomic`,{method:'POST',headers:{...headers(env),Prefer:'return=representation'},body:JSON.stringify(payload)});
+ const out=await parse(r);if(!r.ok)return json({error:out?.message||out?.details||'تعذر إعادة تفعيل الحجز. تأكد من توفر مقاعد كافية في الرحلة.',code:'BOOKING_REACTIVATION_FAILED'},409);
+ await auditReactivation(env,actor,booking);
+ return json({ok:true,booking_number:no,status:'confirmed',message:'تمت إعادة تفعيل الحجز بنجاح. يمكنك تعديله الآن.',result:out});
+}
 
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
  if(request.method==='GET'&&u.pathname==='/api/bookings/refund-summaries')return refundSummaries(request,env);
  if(request.method==='POST'&&(u.pathname==='/api/admin'||u.pathname==='/api/customer/book')){
   const body=await request.clone().json().catch(()=>({}));
+  if(u.pathname==='/api/admin'&&String(body?.action||'')==='reactivate_booking'){
+   const no=s(body?.booking_number||body?.number).trim();if(!no)return json({error:'رقم الحجز مطلوب.',code:'BOOKING_NUMBER_REQUIRED'},400);
+   return reactivateBooking(request,env,no);
+  }
   const input=u.pathname==='/api/customer/book'?body?.booking||{}:String(body?.action||'')==='update_booking'?body?.booking||{}:null;
   if(input){const blocked=await discountGuard(request,env,input);if(blocked)return blocked}
   if(u.pathname==='/api/admin'&&String(body?.action||'')==='update_booking'){
