@@ -12,7 +12,7 @@ const n=v=>Number(v||0);const s=v=>String(v??'');const lower=v=>s(v).toLowerCase
 export default function Reports(){
  const {data:app}=useAppData();
  const [data,setData]=useState(null),[brief,setBrief]=useState(null),[refundSummary,setRefundSummary]=useState({byId:{},byNo:{}}),[error,setError]=useState(''),[type,setType]=useState('bookings_csv'),[busy,setBusy]=useState(''),[orientation,setOrientation]=useState('portrait'),[tripId,setTripId]=useState('');
- async function load(){setError('');try{const [reports,kpi,refunds]=await Promise.all([api.module('reports'),api.mega('executive_brief',{}),api.bookingRefundSummaries().catch(()=>null)]);setData(reports);setBrief(kpi);setRefundSummary({byId:refunds?.by_booking_id||{},byNo:refunds?.by_booking_number||{}})}catch(e){setError(e.message)}}
+ async function load(){setError('');try{const [reports,kpi,refunds]=await Promise.all([api.module('reports'),api.mega('executive_brief',{},'GET'),api.bookingRefundSummaries().catch(()=>null)]);setData(reports);setBrief(kpi);setRefundSummary({byId:refunds?.by_booking_id||{},byNo:refunds?.by_booking_number||{}})}catch(e){setError(e.message)}}
  useEffect(()=>{load()},[]);
  useEffect(()=>{if(!tripId&&app.trips?.length)setTripId(s(app.trips[0].id))},[app.trips,tripId]);
  async function create(e){e.preventDefault();setBusy('new');setError('');try{await api.moduleWrite({action:'insert',table:'export_jobs',row:{export_type:type,status:'pending'}});await load()}catch(e){setError(e.message)}finally{setBusy('')}}
