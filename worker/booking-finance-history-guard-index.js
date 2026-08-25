@@ -9,11 +9,25 @@ async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}cat
 async function actorFrom(request,env){try{const r=await appWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env);if(!r.ok)return null;const b=await r.json().catch(()=>({}));return b?.user||null}catch{return null}}
 const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مدير عام'||a.permissions?.all===true);
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
+const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
  const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,total_price,paid_amount&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
+}
+function discountAmounts(input={}){
+ const total=n(input.totalPrice??input.total_price);
+ const original=n(input.originalPrice??input.original_price??input?.snapshot?.suggestedPrice??input?.snapshot?.originalPrice??total);
+ return {total,original,discount:Math.max(0,original-total)};
+}
+async function discountGuard(request,env,input){
+ const {total,original,discount}=discountAmounts(input);
+ if(discount<=0.001)return null;
+ const actor=await actorFrom(request,env);
+ if(!actor)return json({error:'تطبيق خصم على الحجز يتطلب تسجيل الدخول وصلاحية مستقلة.',code:'BOOKING_DISCOUNT_AUTH_REQUIRED'},401);
+ if(!canDiscount(actor))return json({error:'لا توجد لديك صلاحية منح خصم على الحجز. اعتمد السعر المقترح أو اطلب من مدير مخول تطبيق الخصم.',code:'BOOKING_DISCOUNT_FORBIDDEN',suggested_price:original,final_price:total,discount_amount:discount},403);
+ return null;
 }
 async function refundSummaries(request,env){
  const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'REFUND_SUMMARY_AUTH_REQUIRED'},401);
@@ -28,9 +42,11 @@ async function refundSummaries(request,env){
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
  if(request.method==='GET'&&u.pathname==='/api/bookings/refund-summaries')return refundSummaries(request,env);
- if(request.method==='POST'&&u.pathname==='/api/admin'){
+ if(request.method==='POST'&&(u.pathname==='/api/admin'||u.pathname==='/api/customer/book')){
   const body=await request.clone().json().catch(()=>({}));
-  if(String(body?.action||'')==='update_booking'){
+  const input=u.pathname==='/api/customer/book'?body?.booking||{}:String(body?.action||'')==='update_booking'?body?.booking||{}:null;
+  if(input){const blocked=await discountGuard(request,env,input);if(blocked)return blocked}
+  if(u.pathname==='/api/admin'&&String(body?.action||'')==='update_booking'){
    const input=body?.booking||{};
    const no=String(input.number||input.booking_number||'').trim();
    if(no){
