@@ -10,11 +10,18 @@ async function actorFrom(request,env){try{const r=await appWorker.fetch(new Requ
 const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مدير عام'||a.permissions?.all===true);
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
+const canCollect=a=>elevated(a)||a?.permissions?.payments===true;
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
  const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,total_price,paid_amount&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
+}
+async function completedRefundTotal(env,booking){
+ const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY||!booking?.id)return 0;
+ const r=await fetch(`${url}/rest/v1/booking_refunds?booking_id=eq.${enc(booking.id)}&status=eq.completed&select=amount&limit=1000`,{headers:headers(env)});
+ const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الاستردادات المكتملة للحجز.');
+ return (Array.isArray(out)?out:[]).reduce((sum,row)=>sum+Math.max(0,n(row?.amount)),0);
 }
 function discountAmounts(input={}){
  const total=n(input.totalPrice??input.total_price);
@@ -59,8 +66,16 @@ export default {async fetch(request,env,ctx){
      if(nextPaid<oldPaid-0.001){
       return json({error:'لا يمكن تخفيض المبلغ المدفوع من تعديل الحجز. نفّذ أي مبلغ راجع للعميل من شاشة الاسترداد حتى يبقى السجل المالي وسند الاسترداد صحيحين.',code:'REFUND_REQUIRED',paid_amount:oldPaid},409);
      }
-     if(nextPaid>oldPaid+0.001&&nextPaid>Math.max(oldPaid,nextTotal)+0.001){
-      return json({error:'لا يمكن تسجيل تحصيل جديد يتجاوز إجمالي الحجز. إذا انخفض سعر الحجز وأصبح المدفوع السابق أعلى من الإجمالي، اترك المدفوع كما هو ونفّذ الفرق من شاشة الاسترداد.',code:'OVER_COLLECTION_BLOCKED',paid_amount:oldPaid,total_price:nextTotal},409);
+     if(nextPaid>oldPaid+0.001){
+      const actor=await actorFrom(request,env);
+      if(!actor)return json({error:'تسجيل تحصيل جديد يتطلب جلسة مستخدم صالحة.',code:'PAYMENT_AUTH_REQUIRED'},401);
+      if(!canCollect(actor))return json({error:'لا توجد لديك صلاحية التحصيل. يمكنك تعديل الحجز، لكن تسجيل مبلغ جديد يحتاج صلاحية «التحصيل».',code:'PAYMENT_PERMISSION_REQUIRED'},403);
+      let refunded=0;
+      try{refunded=await completedRefundTotal(env,before)}catch(e){return json({error:e?.message||'تعذر التحقق من الاستردادات السابقة.',code:'BOOKING_REFUND_GUARD_READ_FAILED'},502)}
+      const maxGrossPaid=Math.max(oldPaid,nextTotal+refunded);
+      if(nextPaid>maxGrossPaid+0.001){
+       return json({error:'التحصيل الجديد يتجاوز المبلغ المطلوب بعد احتساب الاستردادات السابقة. أدخل فقط المبلغ الذي تم تحصيله الآن.',code:'OVER_COLLECTION_BLOCKED',paid_amount:oldPaid,refunded_amount:refunded,net_paid:Math.max(0,oldPaid-refunded),total_price:nextTotal,max_gross_paid:maxGrossPaid},409);
+      }
      }
     }
    }
