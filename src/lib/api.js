@@ -100,6 +100,7 @@ export const api={
   destinations:()=>request('/api/destinations'),
   returnTripOptions:()=>request('/api/return-trip-options'),
   returnTripInfo:(bookingNo)=>request(`/api/return-trip-info?booking_number=${encodeURIComponent(bookingNo)}`),
+  returnSeatContext:(tripId)=>request(`/api/return-seat-context?trip_id=${encodeURIComponent(tripId)}`),
   destinationWrite:(body)=>request('/api/destinations',{method:'POST',body}),
   customerLookup:(bookingNo,verification)=>request(`/api/customer/booking?bookingNo=${encodeURIComponent(bookingNo)}&verification=${encodeURIComponent(verification)}`),
   customerBook:async(booking,passengers)=>{const result=await request('/api/customer/book',{method:'POST',body:{booking,passengers}});emitBookingSaved({booking});return result},
