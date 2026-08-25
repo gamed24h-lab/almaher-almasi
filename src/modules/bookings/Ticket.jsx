@@ -50,6 +50,7 @@ export default function TicketPage({bookingNo,go}){
  const [ops,setOps]=useState(null);
  const [terms,setTerms]=useState([]);
  const [error,setError]=useState('');
+ const [refundedAmount,setRefundedAmount]=useState(0);
  const [printLanguage,setPrintLanguage]=useState('ar');
  const [languageTouched,setLanguageTouched]=useState(false);
  const [linkedReturnTrip,setLinkedReturnTrip]=useState(null);
@@ -74,6 +75,7 @@ export default function TicketPage({bookingNo,go}){
 
  useEffect(()=>{if(!b||languageTouched)return;setPrintLanguage(suggestedLanguageForNationality(customerNationality))},[b?.id,customerNationality,languageTouched]);
  useEffect(()=>{if(mode!=='separate'||!b?.return_trip_id||localReturnTrip){setLinkedReturnTrip(null);return}api.returnTripInfo(b.booking_number).then(x=>setLinkedReturnTrip(x?.trip||null)).catch(()=>setLinkedReturnTrip(null))},[mode,b?.booking_number,b?.return_trip_id,localReturnTrip?.id]);
+ useEffect(()=>{if(!b?.booking_number){setRefundedAmount(0);return}let alive=true;api.admin({action:'refund_quote',booking_number:b.booking_number}).then(x=>{if(alive)setRefundedAmount(Math.max(0,Number(x?.refunded_amount||0)))}).catch(()=>{if(alive)setRefundedAmount(0)});return()=>{alive=false}},[b?.booking_number]);
  useEffect(()=>{if(!b)return;QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});api.customerAccessLink(b.booking_number).then(x=>x?.url?QRCode.toDataURL(x.url,{width:220,margin:1,errorCorrectionLevel:'M'}):'').then(x=>{if(x)setPortalQr(x)}).catch(()=>setPortalQr(''));api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{})},[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
@@ -102,7 +104,7 @@ export default function TicketPage({bookingNo,go}){
 
  if(!b)return <Card>الحجز غير موجود في البيانات الحالية.</Card>;
 
- const paid=Number(b.paid_amount||0),total=Number(b.total_price||0),remaining=Math.max(0,total-paid);
+ const grossPaid=Number(b.paid_amount||0),paid=Math.max(0,grossPaid-Number(refundedAmount||0)),total=Number(b.total_price||0),remaining=Math.max(0,total-paid);
  const L=(key,f='')=>pt(printLanguage,key,f),dir=printDirection(printLanguage);
  const printOptions=modeName=>({title:`تذكرة سفر — ${b.booking_number}`,pageSize:modeName==='a4'?'A4':`${modeName}mm`,orientation:'portrait',lang:printLanguage,dir,singlePage:modeName==='a4',bodyAttributes:{'data-print-mode':modeName,'data-print-language':printLanguage}});
  const ticketNode=()=>document.querySelector('.ticket-page');
