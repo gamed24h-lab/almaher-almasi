@@ -6,7 +6,7 @@ import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,PageHeader,Select,Table} from '../../components/UI.jsx';
 
 const GENERAL_PERMS=[
- ['branchBooking','إنشاء حجوزات'],['viewBookings','عرض الحجوزات'],['editBookings','تعديل الحجوزات'],['editPassenger','تعديل الركاب'],['changeTrip','نقل الحجز بين الرحلات'],['crossBranchReturn','اختيار عودة من فرع آخر'],['bookingDiscount','منح خصم على الحجز'],['printTickets','طباعة التذاكر'],
+ ['branchBooking','إنشاء حجوزات'],['viewBookings','عرض الحجوزات'],['editBookings','تعديل الحجوزات'],['editPassenger','تعديل الركاب'],['changeTrip','نقل الحجز بين الرحلات'],['crossBranchReturn','اختيار عودة من فرع آخر'],['bookingDiscount','منح خصم على الحجز'],['reactivateBooking','إعادة تفعيل حجز ملغي'],['printTickets','طباعة التذاكر'],
  ['trips','إدارة الرحلات'],['viewDestinations','عرض إدارة الوجهات'],['addDestinations','إضافة وجهات'],['editDestinations','تعديل/تفعيل الوجهات'],['deleteDestinations','حذف الوجهات والمسارات'],['manageDestinationRoutes','إدارة المسارات الجاهزة'],['manageDestinations','إدارة الوجهات كاملة'],
  ['operations','التشغيل'],['manifest','كشف التشغيل'],['housingManifest','كشف التسكين'],['scanner','QR والمسح'],['housing','تنفيذ التسكين'],['seats','المقاعد'],
  ['viewHotels','عرض دليل الفنادق'],['addHotels','إضافة فنادق'],['editHotels','تعديل/تفعيل الفنادق'],['deleteHotels','حذف الفنادق'],['linkHotels','ربط الفنادق بالرحلات'],['manageHotelRooms','إدارة غرف الفنادق'],['manageHotels','إدارة الفنادق كاملة'],
@@ -22,7 +22,7 @@ const DEVELOPER_PERMS=[
  ['developer_console_access','الدخول إلى المطور والنظام'],['developer_backup','نسخ احتياطي'],['developer_restore','استعادة نسخة احتياطية'],['developer_purge','حذف نهائي للبيانات'],['developer_templates','إدارة القوالب'],['developer_labels','إدارة المسميات'],['developer_languages','إدارة اللغات'],['developer_rules','إدارة قواعد النظام']
 ];
 const SENSITIVE=new Set(DEVELOPER_PERMS.map(([k])=>k));
-const HIGH_RISK=new Set(['managePermissions','manageUsers','allBranches','allBranchesFinance','crossBranchReturn','bookingDiscount','payments','addBranches','manageCompanyProfile','refund_approve','refund_complete','approvals','deleteDestinations','manageDestinations','deleteDrivers','deleteVehicles','manageDrivers','deleteHotels','manageHotels']);
+const HIGH_RISK=new Set(['managePermissions','manageUsers','allBranches','allBranchesFinance','crossBranchReturn','bookingDiscount','payments','reactivateBooking','addBranches','manageCompanyProfile','refund_approve','refund_complete','approvals','deleteDestinations','manageDestinations','deleteDrivers','deleteVehicles','manageDrivers','deleteHotels','manageHotels']);
 const ROLES=['موظف حجوزات','محاسب','مشرف تشغيل','موظف تسكين','خدمة عملاء','مدير فرع','مدير عام','موظف'];
 const ROLE_RANK={'developer':100,'مدير عام':90,'مدير فرع':70,'مشرف تشغيل':60,'محاسب':50,'موظف تسكين':40,'موظف حجوزات':40,'خدمة عملاء':40,'موظف':30};
 const rankOf=role=>ROLE_RANK[String(role||'').trim()]||20;
