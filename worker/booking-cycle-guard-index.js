@@ -42,12 +42,15 @@ async function returnSeatContext(request,env){
  const tvIds=activeTripVehicles.map(x=>s(x.id)).filter(Boolean),vehicleIds=[...new Set(activeTripVehicles.map(x=>s(x.vehicle_id)).filter(Boolean))];
  if(!tvIds.length)return json({ok:true,trip,trip_vehicles:[],vehicles:[],vehicle_seats:[],seat_assignments:[]});
  const tvIn=tvIds.map(enc).join(','),vIn=vehicleIds.map(enc).join(',');
- const [vehicles,vehicleSeats,seatAssignments]=await Promise.all([
+ const [vehicles,vehicleSeats,seatAssignments,ownBookings]=await Promise.all([
    vehicleIds.length?rows(env,'vehicles',`id=in.(${vIn})&select=id,name,plate_no,booking_capacity,physical_capacity&limit=100`):Promise.resolve([]),
    vehicleIds.length?rows(env,'vehicle_seats',`vehicle_id=in.(${vIn})&select=id,vehicle_id,seat_no,seat_index,seat_type,active&limit=1000`):Promise.resolve([]),
-   rows(env,'seat_assignments',`trip_vehicle_id=in.(${tvIn})&segment_type=eq.return&status=in.(assigned,hold,blocked)&select=id,trip_vehicle_id,segment_type,seat_no,passenger_id,booking_id,status&limit=2000`)
+   rows(env,'seat_assignments',`trip_vehicle_id=in.(${tvIn})&segment_type=eq.return&status=in.(assigned,hold,blocked)&select=id,trip_vehicle_id,segment_type,seat_no,passenger_id,booking_id,status&limit=2000`),
+   elevated(actor)||!actor?.branch_id?Promise.resolve([]):rows(env,'bookings',`branch_id=eq.${enc(actor.branch_id)}&return_trip_id=eq.${enc(tripId)}&select=id&limit=2000`)
  ]);
- return json({ok:true,trip,trip_vehicles:activeTripVehicles,vehicles,vehicle_seats:vehicleSeats,seat_assignments:seatAssignments});
+ const ownBookingIds=new Set((ownBookings||[]).map(x=>s(x.id)));
+ const safeAssignments=elevated(actor)?seatAssignments:seatAssignments.map(a=>ownBookingIds.has(s(a.booking_id))?a:{...a,passenger_id:null,booking_id:null});
+ return json({ok:true,trip,trip_vehicles:activeTripVehicles,vehicles,vehicle_seats:vehicleSeats,seat_assignments:safeAssignments});
 }
 async function guardBooking(request,env,path,body){
  const b=bookingInput(path,body);if(!b)return null;
