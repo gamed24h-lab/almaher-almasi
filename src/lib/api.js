@@ -81,6 +81,11 @@ async function adminRequest(body){
   notifySuccess('تم حفظ الرحلات بنجاح.');
   return {ok:true,batches:results.length,results};
 }
+async function customerAccessLink(bookingNo){
+  const out=await request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`);
+  const origin=typeof window!=='undefined'?window.location.origin:'';
+  return {...out,url:out?.token?`${origin}/customer?access=${encodeURIComponent(out.token)}`:''};
+}
 export const api={
   health:()=>request('/api/health'),
   me:()=>request('/api/auth/me'),
@@ -97,6 +102,9 @@ export const api={
   seatAtomicSilent:(body)=>request('/api/seats/atomic',{method:'POST',body,feedback:false}),
   bookingTimeline:(bookingNo)=>request(`/api/bookings/timeline?bookingNo=${encodeURIComponent(bookingNo)}`),
   autoHouseBooking:(bookingNumber,tripHotelId)=>request('/api/bookings/auto-house',{method:'POST',body:{booking_number:bookingNumber,trip_hotel_id:tripHotelId},feedback:false}),
+  customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
+  customerAccessLink,
+  customerAccess:(token)=>request(`/api/customer/access?token=${encodeURIComponent(token)}`),
   mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
   destinations:()=>request('/api/destinations'),
   returnTripOptions:()=>request('/api/return-trip-options'),

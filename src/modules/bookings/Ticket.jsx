@@ -23,6 +23,9 @@ const genderAr=v=>{const x=lower(v);if(['male','m','ذكر'].includes(x))return 
 const accommodationLabel=v=>({none:'بدون سكن',shared:'سكن مشترك',private:'غرفة خاصة'})[lower(v)]||'بدون سكن';
 const roomTypeLabel=v=>({single:'مفردة',double:'مزدوجة',triple:'ثلاثية',quad:'رباعية',quint:'خماسية'})[str(v)]||str(v||'مزدوجة');
 const privateRoomSpecs=(b,snap)=>{const count=Math.max(1,Number(b?.private_rooms||snap?.privateRooms||1));const stored=Array.isArray(snap?.privateRoomSpecs)?snap.privateRoomSpecs:[];const types=Array.isArray(b?.private_room_types)&&b.private_room_types.length?b.private_room_types:Array.isArray(snap?.privateRoomTypes)&&snap.privateRoomTypes.length?snap.privateRoomTypes:[snap?.privateRoomType||'double'];const fallbackDays=Math.max(1,Number(snap?.housingDays||1));return Array.from({length:count},(_,i)=>({type:str(stored[i]?.type||types[i]||types[0]||'double'),days:Math.max(1,Number(stored[i]?.days||fallbackDays))}))};
+const operationalRoom=v=>/^\s*(P-|M-)/i.test(str(v));
+const actualRoom=r=>str(r?.metadata?.actual_room_no).trim();
+const displayRoom=r=>actualRoom(r)||str(r?.room_no).trim();
 const CODE39={
  '0':'nnnwwnwnn','1':'wnnwnnnnw','2':'nnwwnnnnw','3':'wnwwnnnnn','4':'nnnwwnnnw','5':'wnnwwnnnn','6':'nnwwwnnnn','7':'nnnwnnwnw','8':'wnnwnnwnn','9':'nnwwnnwnn',
  A:'wnnnnwnnw',B:'nnwnnwnnw',C:'wnwnnwnnn',D:'nnnnwwnnw',E:'wnnnwwnnn',F:'nnwnwwnnn',G:'nnnnnwwnw',H:'wnnnnwwnn',I:'nnwnnwwnn',J:'nnnnwwwnn',
@@ -43,6 +46,7 @@ export default function TicketPage({bookingNo,go}){
  const passengers=data.passengers.filter(x=>str(x.booking_id)===str(b?.id));
  const [qr,setQr]=useState('');
  const [locationQr,setLocationQr]=useState('');
+ const [portalQr,setPortalQr]=useState('');
  const [ops,setOps]=useState(null);
  const [terms,setTerms]=useState([]);
  const [error,setError]=useState('');
@@ -70,17 +74,13 @@ export default function TicketPage({bookingNo,go}){
 
  useEffect(()=>{if(!b||languageTouched)return;setPrintLanguage(suggestedLanguageForNationality(customerNationality))},[b?.id,customerNationality,languageTouched]);
  useEffect(()=>{if(mode!=='separate'||!b?.return_trip_id||localReturnTrip){setLinkedReturnTrip(null);return}api.returnTripInfo(b.booking_number).then(x=>setLinkedReturnTrip(x?.trip||null)).catch(()=>setLinkedReturnTrip(null))},[mode,b?.booking_number,b?.return_trip_id,localReturnTrip?.id]);
- useEffect(()=>{if(!b)return;QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{})},[b?.id,locationUrl]);
+ useEffect(()=>{if(!b)return;QRCode.toDataURL(`ALMAHER|BOOKING=${b.booking_number}`,{width:280,margin:1,errorCorrectionLevel:'M'}).then(setQr).catch(()=>{});if(locationUrl)QRCode.toDataURL(locationUrl,{width:220,margin:1,errorCorrectionLevel:'M'}).then(setLocationQr).catch(()=>{});api.customerAccessLink(b.booking_number).then(x=>x?.url?QRCode.toDataURL(x.url,{width:220,margin:1,errorCorrectionLevel:'M'}):'').then(x=>{if(x)setPortalQr(x)}).catch(()=>setPortalQr(''));api.module('tickets').then(setOps).catch(e=>setError(e.message));api.mega('ticket_terms',{},'GET').then(x=>setTerms(Array.isArray(x?.terms)?x.terms:[])).catch(()=>{})},[b?.id,locationUrl]);
 
  const seatByPassenger=useMemo(()=>{
   const map=new Map();
   for(const x of ops?.seat_assignments||[]){
    if(!['assigned','hold'].includes(lower(x.status||'assigned')))continue;
-   if(str(x.booking_id)===str(b?.id)||passengers.some(p=>str(p.id)===str(x.passenger_id))){
-    const k=str(x.passenger_id||'booking');
-    const arr=map.get(k)||[];
-    arr.push(x);map.set(k,arr);
-   }
+   if(str(x.booking_id)===str(b?.id)||passengers.some(p=>str(p.id)===str(x.passenger_id))){const k=str(x.passenger_id||'booking');const arr=map.get(k)||[];arr.push(x);map.set(k,arr)}
   }
   return map;
  },[ops,b?.id,passengers]);
@@ -92,11 +92,9 @@ export default function TicketPage({bookingNo,go}){
   const hotelMap=new Map((ops?.hotels||[]).map(x=>[str(x.id),x]));
   const out=new Map();
   for(const a of ops?.room_assignments||[]){
-   if(!currentPassengerIds.has(str(a.passenger_id)))continue;
-   if(lower(a.status||'assigned')==='released')continue;
+   if(!currentPassengerIds.has(str(a.passenger_id))||lower(a.status||'assigned')==='released')continue;
    const room=roomMap.get(str(a.hotel_room_id));if(!room)continue;
-   const th=tripHotelMap.get(str(room.trip_hotel_id));
-   const hotel=hotelMap.get(str(th?.hotel_id));
+   const th=tripHotelMap.get(str(room.trip_hotel_id));const hotel=hotelMap.get(str(th?.hotel_id));
    out.set(str(a.passenger_id),{assignment:a,room,tripHotel:th,hotel});
   }
   return out;
@@ -104,32 +102,25 @@ export default function TicketPage({bookingNo,go}){
 
  if(!b)return <Card>الحجز غير موجود في البيانات الحالية.</Card>;
 
- const paid=Number(b.paid_amount||0);
- const total=Number(b.total_price||0);
- const remaining=Math.max(0,total-paid);
- const L=(key,f='')=>pt(printLanguage,key,f);
- const dir=printDirection(printLanguage);
+ const paid=Number(b.paid_amount||0),total=Number(b.total_price||0),remaining=Math.max(0,total-paid);
+ const L=(key,f='')=>pt(printLanguage,key,f),dir=printDirection(printLanguage);
  const printOptions=modeName=>({title:`تذكرة سفر — ${b.booking_number}`,pageSize:modeName==='a4'?'A4':`${modeName}mm`,orientation:'portrait',lang:printLanguage,dir,singlePage:modeName==='a4',bodyAttributes:{'data-print-mode':modeName,'data-print-language':printLanguage}});
  const ticketNode=()=>document.querySelector('.ticket-page');
  const doPrint=modeName=>{setError('');const el=ticketNode();if(!el)return setError('تعذر تجهيز التذكرة للطباعة.');try{printElement(el,printOptions(modeName))}catch(e){setError(e.message||'تعذر فتح الطباعة.')}};
-
  const phone=first(branchContact?.phone,branchContact?.whatsapp,branch?.whatsapp,branch?.phone);
  const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';
  const ticketCancelled=['cancelled','refunded'].includes(lower(b.status))||lower(trip?.status)==='cancelled';
- const showOutbound=mode!=='returnonly';
- const showReturn=['roundtrip','separate','returnonly'].includes(mode);
- const reverseReturn=showReturn;
+ const showOutbound=mode!=='returnonly',showReturn=['roundtrip','separate','returnonly'].includes(mode),reverseReturn=showReturn;
  const returnDate=mode==='separate'?first(returnTrip?.return_date,returnTrip?.departure_date):first(trip?.return_date,trip?.departure_date);
  const returnTime=mode==='separate'?first(returnTrip?.return_time,returnTrip?.departure_time):first(trip?.return_time,trip?.departure_time);
  const defaultTerms=[L('defaultTerm1'),L('defaultTerm2'),L('defaultTerm3')];
- const housingType=lower(first(b?.accommodation_type,snap?.accommodationType,'none'))||'none';
- const housingTypeLabel=accommodationLabel(housingType);
- const hasHousing=housingType!=='none';
+ const housingType=lower(first(b?.accommodation_type,snap?.accommodationType,'none'))||'none',housingTypeLabel=accommodationLabel(housingType),hasHousing=housingType!=='none';
  const requestedPrivateRooms=housingType==='private'?privateRoomSpecs(b,snap):[];
  const privateRoomPlanLabel=requestedPrivateRooms.map((r,i)=>`غ${i+1}: ${roomTypeLabel(r.type)} — ${r.days} يوم`).join(' · ');
  const housingEntries=hasHousing?[...roomByPassenger.values()].filter(x=>housingType==='shared'?lower(x?.room?.room_type)==='shared5':housingType==='private'?lower(x?.room?.room_type)==='private':false):[];
  const housing=housingEntries[0];
- const roomNumbers=[...new Set(housingEntries.map(x=>str(x?.room?.room_no)).filter(Boolean))];
+ const roomNumbers=[...new Set(housingEntries.map(x=>displayRoom(x?.room)).filter(Boolean))];
+ const hasOperationalRoom=housingEntries.some(x=>!actualRoom(x?.room)&&operationalRoom(x?.room?.room_no));
  const hotelNames=[...new Set(housingEntries.map(x=>str(x?.hotel?.name)).filter(Boolean))];
  const housingDays=Number(snap?.housingDays||0);
  const returnOnlyHousingDays=mode==='returnonly'&&hasHousing?(housingType==='private'&&requestedPrivateRooms.length?Math.max(...requestedPrivateRooms.map(x=>x.days),1):housingDays):0;
@@ -144,146 +135,26 @@ export default function TicketPage({bookingNo,go}){
  const showLegal=branch?.show_legal_on_ticket!==false;
  const paymentLabel=remaining>0?'مدفوع جزئي':'مدفوع بالكامل';
  const outboundRouteLabel=trip?`${tripOrigin||'—'} ← ${tripDestination||'—'}`:'';
- const returnStart=first(returnInfo?.to_city,returnInfo?.destination);
- const returnEnd=first(returnInfo?.from_city,returnInfo?.origin);
+ const returnStart=first(returnInfo?.to_city,returnInfo?.destination),returnEnd=first(returnInfo?.from_city,returnInfo?.origin);
  const returnRouteLabel=returnInfo?`${returnStart||'—'} ← ${returnEnd||'—'}`:'';
  const routeLabel=mode==='returnonly'?(returnRouteLabel||'—'):mode==='roundtrip'||mode==='separate'?`ذهاب: ${outboundRouteLabel||'—'} · عودة: ${returnRouteLabel||'—'}`:(outboundRouteLabel||'—');
  const wa=()=>{const msg=[`الماهر الماسي للسفر والسياحة`,`تذكرة سفر: ${b.booking_number}`,`العميل: ${b.customer_name||''}`,`نوع الرحلة: ${journeyLabel(b.journey_mode)||'—'}`,showOutbound&&outboundRouteLabel?`الذهاب: ${outboundRouteLabel}`:'',showOutbound&&trip?.departure_date?`تاريخ الذهاب: ${weekdayAr(trip.departure_date)} ${trip.departure_date} ${trip.departure_time||''}`:'',showReturn&&returnRouteLabel?`العودة: ${returnRouteLabel}`:'',showReturn&&returnDate?`تاريخ العودة: ${weekdayAr(returnDate)} ${returnDate} ${returnTime||''}`:'',`السكن: ${housingTypeLabel}`,housingType==='private'&&privateRoomPlanLabel?`تفاصيل الغرف: ${privateRoomPlanLabel}`:'',`المدفوع: ${money(paid)}`,remaining?`المتبقي: ${money(remaining)}`:'الحجز مسدد بالكامل'].filter(Boolean).join('\n');window.open(`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(msg)}`,'_blank')};
 
  return <>
-  <PageHeader title="تذكرة سفر" subtitle={`${L('bookingNo')} ${b.booking_number}`} actions={<>
-   <Button onClick={()=>go('/bookings/'+b.booking_number)}><ArrowRight size={16}/> {L('back')}</Button>
-   <label className="btn" style={{gap:7}}><Languages size={16}/><select value={printLanguage} onChange={e=>{setLanguageTouched(true);setPrintLanguage(e.target.value)}} style={{border:0,padding:0,width:'auto',background:'transparent'}}>{PRINT_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}</select></label>
-   <Button onClick={()=>doPrint('a4')}><Printer size={16}/> A4</Button>
-   <Button onClick={()=>doPrint('80')}><Printer size={16}/> 80mm</Button>
-   <Button onClick={()=>doPrint('58')}><Printer size={16}/> 58mm</Button>
-   <Button variant="primary" onClick={wa}><MessageCircle size={16}/> إرسال التذكرة واتساب</Button>
-  </>}/>
-  <ErrorBox error={error}/>
-  {!ops&&!error&&<Loading text="استكمال بيانات المقعد والسكن..."/>}
-
+  <PageHeader title="تذكرة سفر" subtitle={`${L('bookingNo')} ${b.booking_number}`} actions={<><Button onClick={()=>go('/bookings/'+b.booking_number)}><ArrowRight size={16}/> {L('back')}</Button><label className="btn" style={{gap:7}}><Languages size={16}/><select value={printLanguage} onChange={e=>{setLanguageTouched(true);setPrintLanguage(e.target.value)}} style={{border:0,padding:0,width:'auto',background:'transparent'}}>{PRINT_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}</select></label><Button onClick={()=>doPrint('a4')}><Printer size={16}/> A4</Button><Button onClick={()=>doPrint('80')}><Printer size={16}/> 80mm</Button><Button onClick={()=>doPrint('58')}><Printer size={16}/> 58mm</Button><Button variant="primary" onClick={wa}><MessageCircle size={16}/> إرسال التذكرة واتساب</Button></>}/>
+  <ErrorBox error={error}/>{!ops&&!error&&<Loading text="استكمال بيانات المقعد والسكن..."/>}
   <article className={`ticket-page ${dense} ${ticketCancelled?'ticket-cancelled':''}`} dir={dir} lang={printLanguage}>
    {ticketCancelled&&<div className="ticket-cancelled-banner">هذه التذكرة ملغاة</div>}
-
-   <header className="ticket-head">
-    <div className="ticket-brand-lockup">
-     <img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/>
-     <span className="ticket-brand-english">ALMAHER ALMASI · TRAVEL & TOURISM</span>
-    </div>
-
-    <div className="ticket-clock-tower" aria-hidden="true">
-     <span className="tower-spire"/>
-     <span className="tower-crown">◆</span>
-     <span className="tower-clock">◷</span>
-     <span className="tower-body"/>
-     <span className="tower-base"/>
-    </div>
-
-    <div className="ticket-meta-card">
-     <span className="ticket-meta-label">رقم الحجز</span>
-     <b>{b.booking_number}</b>
-     <BookingBarcode value={b.booking_number}/>
-     <div className="ticket-meta-foot">
-      <Badge tone={b.status==='cancelled'?'red':'green'}>{statusAr(b.status)}</Badge>
-      {issuedDate&&<small>{issuedDate}</small>}
-     </div>
-    </div>
-   </header>
-
-   <section className="ticket-title-band">
-    <div className="ticket-title-rule"/>
-    <div>
-     <h2>تذكرة سفر</h2>
-     <span>TRAVEL TICKET</span>
-    </div>
-    <div className="ticket-title-rule"/>
-   </section>
-
-   <section className="ticket-customer-strip">
-    <div><span>اسم العميل</span><strong>{b.customer_name||'—'}</strong></div>
-    <div><span>رقم الجوال</span><strong dir="ltr">{b.customer_phone||'—'}</strong></div>
-    <div><span>نوع الرحلة</span><strong>{journeyLabel(b.journey_mode)||routeLabel}</strong></div>
-    <div><span>حالة الدفع</span><strong>{paymentLabel}</strong><small>{b.payment_method||''}</small></div>
-   </section>
-
-   <section className="ticket-journeys">
-    {showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={outboundBoardingPoint} boardingTime={outboundBoardingTime} unavailable={L('tripUnavailable')}/>} 
-    {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} boardingPoint={returnBoardingPoint} reverse={reverseReturn} unavailable={L('tripUnavailable')}/>} 
-   </section>
-
-   <section className="ticket-section ticket-passenger-section">
-    <div className="ticket-section-heading">
-     <h3>بيانات المسافرين</h3>
-     <span>{passengers.length} مسافر</span>
-    </div>
-    <div className="ticket-passenger-table-wrap">
-     <table className="ticket-passenger-table">
-      <thead><tr><th>#</th><th>الاسم</th><th>الجنس</th><th>الجنسية</th><th>رقم الهوية</th><th>المقعد</th><th>الغرفة</th></tr></thead>
-      <tbody>
-       {passengers.map((p,i)=>{
-        const seats=seatByPassenger.get(str(p.id))||[];
-        const rawRoom=roomByPassenger.get(str(p.id));
-        const room=housingType==='shared'&&lower(rawRoom?.room?.room_type)==='shared5'?rawRoom:housingType==='private'&&lower(rawRoom?.room?.room_type)==='private'?rawRoom:null;
-        const seatsText=seats.length?seats.map(s=>s.seat_no||s.seat_number||'—').join('، '):'—';
-        return <tr key={p.id||i}>
-         <td>{i+1}</td>
-         <td><b>{p.full_name||'—'}</b></td>
-         <td>{genderAr(first(p.gender,p.sex))}</td>
-         <td>{p.nationality||'—'}</td>
-         <td dir="ltr">{p.identity_number||p.passport_number||'—'}</td>
-         <td>{seatsText}</td>
-         <td dir="ltr">{room?.room?.room_no||'—'}</td>
-        </tr>;
-       })}
-      </tbody>
-     </table>
-    </div>
-   </section>
-
-   <section className="ticket-section ticket-housing-section">
-    <div className="ticket-section-heading"><h3>بيانات السكن</h3><span>{housingTypeLabel}</span></div>
-    <div className="ticket-housing-grid">
-     <div><span>الفندق</span><strong>{hasHousing?(hotelName||'غير مسكن بعد'):'—'}</strong></div>
-     <div><span>نوع السكن</span><strong>{housingDetailLabel}{hasHousing&&roomNumberLabel?` · ${roomNumberLabel}`:''}</strong></div>
-     <div><span>الوصول</span><strong dir="ltr">{hasHousing?(checkIn||'—'):'—'}</strong></div>
-     <div><span>المغادرة</span><strong dir="ltr">{hasHousing?(checkOut||'—'):'—'}</strong></div>
-    </div>
-   </section>
-
-   <section className="ticket-section ticket-finance-section">
-    <div className="ticket-section-heading"><h3>البيانات المالية</h3><span>{paymentLabel}</span></div>
-    <div className="ticket-finance-grid">
-     <div><span>الإجمالي</span><b>{money(total)}</b></div>
-     <div><span>المدفوع</span><b>{money(paid)}</b></div>
-     <div><span>المتبقي</span><b>{money(remaining)}</b></div>
-     <div><span>عدد المسافرين</span><b>{passengers.length}</b></div>
-    </div>
-   </section>
-
-   <section className="ticket-bottom">
-    <div className="ticket-qr-panel">
-     {qr&&<div><img src={qr} alt="QR"/><span>رمز الحجز</span></div>}
-     {locationQr&&<div><img src={locationQr} alt="QR location"/><span>موقع الصعود</span></div>}
-    </div>
-    <div className="ticket-terms">
-     <h3>الشروط والأحكام</h3>
-     <ol>{(terms.length?terms:defaultTerms).map((x,i)=><li key={i}>{typeof x==='string'?x:x?.[printLanguage]||x?.text||x?.ar}</li>)}</ol>
-    </div>
-   </section>
-
-   <section className="ticket-branch-card">
-    <div><MapPin size={14}/><span>{locationText||branch?.name||'الماهر الماسي'}</span></div>
-    {phone&&<div><Phone size={14}/><span dir="ltr">{phone}</span></div>}
-    <div><BusFront size={14}/><span>{routeLabel}</span></div>
-   </section>
-
-   <footer className="ticket-footer-strip">
-    {showLegal&&license&&<div className="ticket-footer-license">رقم الترخيص: {license}</div>}
-    <div className="ticket-blessing">
-     <strong>على دروب الطاعة .. راحتكم غايتنا</strong>
-     <span>خطوة إلى الطاعات، ومغفرةٌ تمحو ما فات</span>
-    </div>
-   </footer>
+   <header className="ticket-head"><div className="ticket-brand-lockup"><img className="ticket-logo" src={branchLogo(branch)} alt={`شعار ${branch?.name||'الماهر الماسي'}`}/><span className="ticket-brand-english">ALMAHER ALMASI · TRAVEL & TOURISM</span></div><div className="ticket-clock-tower" aria-hidden="true"><span className="tower-spire"/><span className="tower-crown">◆</span><span className="tower-clock">◷</span><span className="tower-body"/><span className="tower-base"/></div><div className="ticket-meta-card"><span className="ticket-meta-label">رقم الحجز</span><b>{b.booking_number}</b><BookingBarcode value={b.booking_number}/><div className="ticket-meta-foot"><Badge tone={b.status==='cancelled'?'red':'green'}>{statusAr(b.status)}</Badge>{issuedDate&&<small>{issuedDate}</small>}</div></div></header>
+   <section className="ticket-title-band"><div className="ticket-title-rule"/><div><h2>تذكرة سفر</h2><span>TRAVEL TICKET</span></div><div className="ticket-title-rule"/></section>
+   <section className="ticket-customer-strip"><div><span>اسم العميل</span><strong>{b.customer_name||'—'}</strong></div><div><span>رقم الجوال</span><strong dir="ltr">{b.customer_phone||'—'}</strong></div><div><span>نوع الرحلة</span><strong>{journeyLabel(b.journey_mode)||routeLabel}</strong></div><div><span>حالة الدفع</span><strong>{paymentLabel}</strong><small>{b.payment_method||''}</small></div></section>
+   <section className="ticket-journeys">{showOutbound&&<JourneyBlock title={L('outbound')} trip={trip} date={trip?.departure_date} time={trip?.departure_time} boardingPoint={outboundBoardingPoint} boardingTime={outboundBoardingTime} unavailable={L('tripUnavailable')}/>} {showReturn&&<JourneyBlock title={L('return')} trip={returnInfo} date={returnDate} time={returnTime} boardingPoint={returnBoardingPoint} reverse={reverseReturn} unavailable={L('tripUnavailable')}/>}</section>
+   <section className="ticket-section ticket-passenger-section"><div className="ticket-section-heading"><h3>بيانات المسافرين</h3><span>{passengers.length} مسافر</span></div><div className="ticket-passenger-table-wrap"><table className="ticket-passenger-table"><thead><tr><th>#</th><th>الاسم</th><th>الجنس</th><th>الجنسية</th><th>رقم الهوية</th><th>المقعد</th><th>الغرفة</th></tr></thead><tbody>{passengers.map((p,i)=>{const seats=seatByPassenger.get(str(p.id))||[];const rawRoom=roomByPassenger.get(str(p.id));const room=housingType==='shared'&&lower(rawRoom?.room?.room_type)==='shared5'?rawRoom:housingType==='private'&&lower(rawRoom?.room?.room_type)==='private'?rawRoom:null;const seatsText=seats.length?seats.map(s=>s.seat_no||s.seat_number||'—').join('، '):'—';return <tr key={p.id||i}><td>{i+1}</td><td><b>{p.full_name||'—'}</b></td><td>{genderAr(first(p.gender,p.sex))}</td><td>{p.nationality||'—'}</td><td dir="ltr">{p.identity_number||p.passport_number||'—'}</td><td>{seatsText}</td><td dir="ltr">{room?displayRoom(room.room)||'—':'—'}</td></tr>})}</tbody></table></div></section>
+   <section className="ticket-section ticket-housing-section"><div className="ticket-section-heading"><h3>بيانات السكن</h3><span>{housingTypeLabel}</span></div><div className="ticket-housing-grid"><div><span>الفندق</span><strong>{hasHousing?(hotelName||'غير مسكن بعد'):'—'}</strong></div><div><span>نوع السكن</span><strong>{housingDetailLabel}{hasHousing&&roomNumberLabel?` · ${roomNumberLabel}`:''}</strong>{hasOperationalRoom&&<small>رقم الغرفة المعروض تشغيلي مؤقت، ويظهر رقم الغرفة الفعلي بعد تحديثه من الفندق.</small>}</div><div><span>الوصول</span><strong dir="ltr">{hasHousing?(checkIn||'—'):'—'}</strong></div><div><span>المغادرة</span><strong dir="ltr">{hasHousing?(checkOut||'—'):'—'}</strong></div></div></section>
+   <section className="ticket-section ticket-finance-section"><div className="ticket-section-heading"><h3>البيانات المالية</h3><span>{paymentLabel}</span></div><div className="ticket-finance-grid"><div><span>الإجمالي</span><b>{money(total)}</b></div><div><span>المدفوع</span><b>{money(paid)}</b></div><div><span>المتبقي</span><b>{money(remaining)}</b></div><div><span>عدد المسافرين</span><b>{passengers.length}</b></div></div></section>
+   <section className="ticket-bottom"><div className="ticket-qr-panel">{qr&&<div><img src={qr} alt="QR"/><span>رمز الحجز</span></div>}{locationQr&&<div><img src={locationQr} alt="QR location"/><span>موقع الصعود</span></div>}{portalQr&&<div><img src={portalQr} alt="QR customer portal"/><span>بوابة العميل</span></div>}</div><div className="ticket-terms"><h3>الشروط والأحكام</h3><ol>{(terms.length?terms:defaultTerms).map((x,i)=><li key={i}>{typeof x==='string'?x:x?.[printLanguage]||x?.text||x?.ar}</li>)}</ol></div></section>
+   <section className="ticket-branch-card"><div><MapPin size={14}/><span>{locationText||branch?.name||'الماهر الماسي'}</span></div>{phone&&<div><Phone size={14}/><span dir="ltr">{phone}</span></div>}<div><BusFront size={14}/><span>{routeLabel}</span></div></section>
+   <footer className="ticket-footer-strip">{showLegal&&license&&<div className="ticket-footer-license">رقم الترخيص: {license}</div>}<div className="ticket-blessing"><strong>على دروب الطاعة .. راحتكم غايتنا</strong><span>خطوة إلى الطاعات، ومغفرةٌ تمحو ما فات</span></div></footer>
    {config.show_profile_tickets!==false&&developer?.display_name&&<small className="ticket-developer-line">{L('developer')}: {developer.display_name}{developer.phone?` · ${developer.phone}`:''}</small>}
   </article>
  </>;
@@ -291,15 +162,6 @@ export default function TicketPage({bookingNo,go}){
 
 function JourneyBlock({title,trip,date,time,boardingPoint,boardingTime,reverse=false,unavailable='بيانات الرحلة غير متاحة'}){
  if(!trip)return <div className="journey-block"><div className="journey-label"><BusFront size={18}/><strong>{title}</strong></div><span className="journey-unavailable">{unavailable}</span></div>;
- const from=reverse?(trip.to_city||trip.destination):(trip.from_city||trip.origin);
- const to=reverse?(trip.from_city||trip.origin):(trip.to_city||trip.destination);
- return <div className="journey-block">
-  <div className="journey-label"><BusFront size={18}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div>
-  <div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div>
-  <div className="journey-details">
-   <div><span>التاريخ</span><strong>{weekdayAr(date)} {date||'—'}</strong></div>
-   <div><span>الوقت</span><strong>{time||'—'}</strong></div>
-   {boardingPoint&&<div><span>نقطة الصعود</span><strong>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</strong></div>}
-  </div>
- </div>;
+ const from=reverse?(trip.to_city||trip.destination):(trip.from_city||trip.origin);const to=reverse?(trip.from_city||trip.origin):(trip.to_city||trip.destination);
+ return <div className="journey-block"><div className="journey-label"><BusFront size={18}/><strong>{title}</strong><span>{trip.trip_code||''}</span></div><div className="journey-route"><b>{from||'—'}</b><span>←</span><b>{to||'—'}</b></div><div className="journey-details"><div><span>التاريخ</span><strong>{weekdayAr(date)} {date||'—'}</strong></div><div><span>الوقت</span><strong>{time||'—'}</strong></div>{boardingPoint&&<div><span>نقطة الصعود</span><strong>{boardingPoint}{boardingTime?` · ${boardingTime}`:''}</strong></div>}</div></div>;
 }
