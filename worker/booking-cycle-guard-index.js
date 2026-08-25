@@ -31,6 +31,24 @@ async function tripIncludesBranch(env,trip,branchId){
  const rel=await rows(env,'trip_branches',`trip_id=eq.${enc(trip.id)}&branch_id=eq.${enc(branchId)}&select=id&limit=1`);
  return rel.length>0;
 }
+async function returnSeatContext(request,env){
+ const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'RETURN_SEAT_AUTH_REQUIRED'},401);
+ if(!canCrossBranchReturn(actor))return json({error:'عرض مقاعد عودة فرع آخر يتطلب صلاحية «عودة من فرع آخر».',code:'CROSS_BRANCH_RETURN_SEATS_FORBIDDEN'},403);
+ const u=new URL(request.url),tripId=s(u.searchParams.get('trip_id')).trim();if(!tripId)return json({error:'حدد رحلة العودة.',code:'RETURN_TRIP_REQUIRED'},400);
+ const trip=(await rows(env,'trips',`id=eq.${enc(tripId)}&select=id,branch_id,return_date,return_time,status&limit=1`))[0];
+ if(unavailableTrip(trip)||!trip?.return_date)return json({error:'رحلة العودة غير متاحة حاليًا.',code:'RETURN_TRIP_UNAVAILABLE'},409);
+ const tripVehicles=await rows(env,'trip_vehicles',`trip_id=eq.${enc(tripId)}&select=id,trip_id,vehicle_id,bus_label,booking_capacity,capacity,status&limit=50`);
+ const activeTripVehicles=tripVehicles.filter(x=>!['cancelled','released','inactive'].includes(s(x.status||'assigned').toLowerCase()));
+ const tvIds=activeTripVehicles.map(x=>s(x.id)).filter(Boolean),vehicleIds=[...new Set(activeTripVehicles.map(x=>s(x.vehicle_id)).filter(Boolean))];
+ if(!tvIds.length)return json({ok:true,trip,trip_vehicles:[],vehicles:[],vehicle_seats:[],seat_assignments:[]});
+ const tvIn=tvIds.map(enc).join(','),vIn=vehicleIds.map(enc).join(',');
+ const [vehicles,vehicleSeats,seatAssignments]=await Promise.all([
+   vehicleIds.length?rows(env,'vehicles',`id=in.(${vIn})&select=id,name,plate_no,booking_capacity,physical_capacity&limit=100`):Promise.resolve([]),
+   vehicleIds.length?rows(env,'vehicle_seats',`vehicle_id=in.(${vIn})&select=id,vehicle_id,seat_no,seat_index,seat_type,active&limit=1000`):Promise.resolve([]),
+   rows(env,'seat_assignments',`trip_vehicle_id=in.(${tvIn})&segment_type=eq.return&status=in.(assigned,hold,blocked)&select=id,trip_vehicle_id,segment_type,seat_no,passenger_id,booking_id,status&limit=2000`)
+ ]);
+ return json({ok:true,trip,trip_vehicles:activeTripVehicles,vehicles,vehicle_seats:vehicleSeats,seat_assignments:seatAssignments});
+}
 async function guardBooking(request,env,path,body){
  const b=bookingInput(path,body);if(!b)return null;
  const mode=modeOf(b),tripId=primaryTripId(b),returnId=returnTripId(b),branchId=bookingBranchId(b);
@@ -82,6 +100,9 @@ async function guardReturnHousing(env,body){
 
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
+ if(request.method==='GET'&&u.pathname==='/api/return-seat-context'){
+   try{return await returnSeatContext(request,env)}catch(e){return json({error:e?.message||'تعذر تحميل مقاعد رحلة العودة.',code:'RETURN_SEAT_CONTEXT_FAILED'},502)}
+ }
  if(request.method==='GET'&&u.pathname==='/api/return-trip-options'){
    const actor=await actorFrom(request,env);
    if(!canCrossBranchReturn(actor))return json({error:'لا توجد لديك صلاحية عرض رحلات العودة الخاصة بالفروع الأخرى.',code:'CROSS_BRANCH_RETURN_CATALOG_FORBIDDEN'},403);
