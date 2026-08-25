@@ -106,7 +106,7 @@ export const api={
   customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
   customerAccessLink,
   customerAccess:(token)=>request(`/api/customer/access?token=${encodeURIComponent(token)}`),
-  mega:(action,body={},method='POST')=>request(`/api/mega?action=${encodeURIComponent(action)}`,{method,body:method==='GET'?undefined:{action,...body}}),
+  mega:(action,body={},method='POST')=>{const effectiveMethod=action==='executive_brief'?'POST':method;return request(`/api/mega?action=${encodeURIComponent(action)}`,{method:effectiveMethod,body:effectiveMethod==='GET'?undefined:{action,...body}})},
   destinations:()=>request('/api/destinations'),
   returnTripOptions:()=>request('/api/return-trip-options'),
   returnTripInfo:(bookingNo)=>request(`/api/return-trip-info?booking_number=${encodeURIComponent(bookingNo)}`),
