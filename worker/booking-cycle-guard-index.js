@@ -7,6 +7,8 @@ const enc=v=>encodeURIComponent(String(v??''));
 const s=v=>String(v??'');
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
 async function rows(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${table}?${query}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر قراءة ${table}`);return Array.isArray(out)?out:[]}
+async function insertRow(env,table,row){const r=await fetch(`${base(env)}/rest/v1/${table}`,{method:'POST',headers:{...headers(env),Prefer:'return=representation'},body:JSON.stringify(row)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر إضافة ${table}`);return Array.isArray(out)?out[0]||null:out}
+async function patchRows(env,table,filter,row){const r=await fetch(`${base(env)}/rest/v1/${table}?${filter}`,{method:'PATCH',headers:{...headers(env),Prefer:'return=representation'},body:JSON.stringify(row)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر تحديث ${table}`);return Array.isArray(out)?out:[]}
 async function actorFrom(request,env){
  try{
   const r=await appWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env);
@@ -16,7 +18,9 @@ async function actorFrom(request,env){
  }catch{return null}
 }
 const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مدير عام'||a.permissions?.all===true);
+const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canCrossBranchReturn=a=>elevated(a)||a?.permissions?.crossBranchReturn===true;
+const canHousing=a=>elevated(a)||a?.permissions?.housing===true;
 function bookingInput(path,body){if(path==='/api/customer/book')return body?.booking||{};if(path==='/api/admin'&&s(body?.action)==='update_booking')return body?.booking||{};return null}
 function snapOf(b={}){return b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{}}
 function modeOf(b={}){const snap=snapOf(b);return s(b.journey_mode||b.journeyMode||snap.journeyMode||'oneway').toLowerCase()}
@@ -25,6 +29,8 @@ function returnTripId(b={}){const snap=snapOf(b);return s(b.return_trip_id||b.re
 function bookingBranchId(b={}){const snap=snapOf(b);return s(b.branch_id||b.branchId||snap.branchId||'')}
 function unavailableTrip(t){return !t||['cancelled','completed'].includes(s(t.status).toLowerCase())}
 function legMoment(date,time){const d=s(date).slice(0,10);if(!d)return'';const raw=s(time||'00:00:00').trim();const parts=raw.split(':');const hh=s(parts[0]||'00').padStart(2,'0'),mm=s(parts[1]||'00').padStart(2,'0'),ss=s(parts[2]||'00').padStart(2,'0');return `${d}T${hh}:${mm}:${ss}`}
+function privateCapacity(v){return ({single:1,double:2,triple:3,quad:4,quint:5})[s(v).toLowerCase()]||2}
+function female(v){return ['female','f','أنثى','انثى'].includes(s(v).trim().toLowerCase())}
 async function tripIncludesBranch(env,trip,branchId){
  if(!trip||!branchId)return true;
  if(s(trip.branch_id)===s(branchId))return true;
@@ -51,6 +57,54 @@ async function returnSeatContext(request,env){
  const ownBookingIds=new Set((ownBookings||[]).map(x=>s(x.id)));
  const safeAssignments=elevated(actor)?seatAssignments:seatAssignments.map(a=>ownBookingIds.has(s(a.booking_id))?a:{...a,passenger_id:null,booking_id:null});
  return json({ok:true,trip,trip_vehicles:activeTripVehicles,vehicles,vehicle_seats:vehicleSeats,seat_assignments:safeAssignments});
+}
+async function autoHouseBooking(request,env){
+ const actor=await actorFrom(request,env);if(!actor)return json({error:'انتهت الجلسة.',code:'AUTO_HOUSING_AUTH_REQUIRED'},401);
+ if(!canHousing(actor))return json({error:'التسكين الفوري من الحجز يتطلب صلاحية التسكين.',code:'AUTO_HOUSING_FORBIDDEN'},403);
+ const body=await request.json().catch(()=>({}));const bookingNo=s(body?.booking_number).trim(),tripHotelId=s(body?.trip_hotel_id).trim();
+ if(!bookingNo||!tripHotelId)return json({error:'رقم الحجز والفندق مطلوبان للتسكين الفوري.',code:'AUTO_HOUSING_INPUT_REQUIRED'},400);
+ const booking=(await rows(env,'bookings',`booking_number=eq.${enc(bookingNo)}&select=*&limit=1`))[0];
+ if(!booking)return json({error:'الحجز غير موجود.',code:'AUTO_HOUSING_BOOKING_NOT_FOUND'},404);
+ if(!allBranches(actor)&&s(booking.branch_id)!==s(actor.branch_id))return json({error:'لا يمكنك تسكين حجز تابع لفرع آخر.',code:'AUTO_HOUSING_BRANCH_FORBIDDEN'},403);
+ const accommodation=s(booking.accommodation_type||booking?.snapshot?.accommodationType||'none').toLowerCase();
+ if(accommodation==='none')return json({ok:true,skipped:true,reason:'no_housing'});
+ if(!['shared','private'].includes(accommodation))return json({error:'نوع السكن غير مدعوم للتسكين التلقائي.',code:'AUTO_HOUSING_TYPE_INVALID'},409);
+ const tripHotel=(await rows(env,'trip_hotels',`id=eq.${enc(tripHotelId)}&select=*&limit=1`))[0];
+ if(!tripHotel)return json({error:'الفندق المختار غير مربوط بالرحلة.',code:'AUTO_HOUSING_HOTEL_NOT_FOUND'},404);
+ if(s(tripHotel.trip_id)!==s(booking.trip_id))return json({error:'الفندق المختار يجب أن يكون تابعًا للرحلة الأساسية للحجز. رحلة العودة المنفصلة للنقل فقط.',code:'AUTO_HOUSING_WRONG_TRIP'},409);
+ if(tripHotel.rooming_locked===true)return json({error:'التسكين مقفول لهذا الفندق/الرحلة.',code:'AUTO_HOUSING_LOCKED'},409);
+ const passengers=await rows(env,'booking_passengers',`booking_id=eq.${enc(booking.id)}&status=neq.cancelled&select=id,booking_id,full_name,gender,nationality,status&order=passenger_order.asc&limit=200`);
+ if(!passengers.length)return json({error:'لا يوجد مسافرون نشطون في الحجز.',code:'AUTO_HOUSING_NO_PASSENGERS'},409);
+ if(accommodation==='shared'&&passengers.some(p=>female(p.gender)))return json({error:'السكن المشترك غير متاح للنساء.',code:'AUTO_HOUSING_SHARED_FEMALE'},409);
+ let hotelRooms=await rows(env,'hotel_rooms',`trip_hotel_id=eq.${enc(tripHotelId)}&select=*&limit=1000`);
+ const passengerIds=passengers.map(p=>s(p.id));
+ const pIn=passengerIds.map(enc).join(',');
+ let ownAssignments=passengerIds.length?await rows(env,'room_assignments',`passenger_id=in.(${pIn})&status=neq.released&select=*&limit=500`):[];
+ const roomIds=hotelRooms.map(r=>s(r.id)).filter(Boolean),rIn=roomIds.map(enc).join(',');
+ let allHotelAssignments=roomIds.length?await rows(env,'room_assignments',`hotel_room_id=in.(${rIn})&status=neq.released&select=*&limit=5000`):[];
+ const assignmentByPassenger=new Map(ownAssignments.map(a=>[s(a.passenger_id),a]));
+ const occupancy=new Map();for(const a of allHotelAssignments)occupancy.set(s(a.hotel_room_id),(occupancy.get(s(a.hotel_room_id))||0)+1);
+ async function releaseAssignment(a){if(!a)return;await patchRows(env,'room_assignments',`id=eq.${enc(a.id)}`,{status:'released'});if(occupancy.has(s(a.hotel_room_id)))occupancy.set(s(a.hotel_room_id),Math.max(0,(occupancy.get(s(a.hotel_room_id))||1)-1));assignmentByPassenger.delete(s(a.passenger_id))}
+ async function assignTo(room,p){const current=assignmentByPassenger.get(s(p.id));if(current&&s(current.hotel_room_id)===s(room.id))return false;if(current)await releaseAssignment(current);const old=(await rows(env,'room_assignments',`hotel_room_id=eq.${enc(room.id)}&passenger_id=eq.${enc(p.id)}&select=id,status&limit=1`))[0];let a;if(old){const got=await patchRows(env,'room_assignments',`id=eq.${enc(old.id)}`,{status:'assigned'});a=got[0]||{...old,status:'assigned',hotel_room_id:room.id,passenger_id:p.id}}else a=await insertRow(env,'room_assignments',{hotel_room_id:room.id,passenger_id:p.id,status:'assigned'});assignmentByPassenger.set(s(p.id),a);occupancy.set(s(room.id),(occupancy.get(s(room.id))||0)+1);return true}
+ let created=0,assigned=0,overflow=0;
+ if(accommodation==='shared'){
+   let sharedRooms=hotelRooms.filter(r=>s(r.room_type).toLowerCase()==='shared5'&&r.locked!==true);
+   const alreadyValid=new Set();for(const p of passengers){const a=assignmentByPassenger.get(s(p.id));if(a&&sharedRooms.some(r=>s(r.id)===s(a.hotel_room_id))){alreadyValid.add(s(p.id));}}
+   const waiting=passengers.filter(p=>!alreadyValid.has(s(p.id)));
+   let free=sharedRooms.reduce((sum,r)=>sum+Math.max(0,5-(occupancy.get(s(r.id))||0)),0),need=Math.max(0,waiting.length-free);
+   let seq=Math.max(0,...sharedRooms.map(r=>{const m=/^M-(\d+)$/i.exec(s(r.room_no));return m?Number(m[1]):0}))+1;
+   while(need>0){const room=await insertRow(env,'hotel_rooms',{trip_hotel_id:tripHotelId,room_no:`M-${seq++}`,room_type:'shared5',capacity:5,status:'available',locked:false});hotelRooms.push(room);sharedRooms.push(room);occupancy.set(s(room.id),0);created++;need-=5}
+   let i=0;for(const room of sharedRooms){while((occupancy.get(s(room.id))||0)<5&&i<waiting.length){if(await assignTo(room,waiting[i]))assigned++;i++}if(i>=waiting.length)break}
+   overflow=Math.max(0,waiting.length-i);
+ }else{
+   const snap=booking.snapshot&&typeof booking.snapshot==='object'?booking.snapshot:{};const count=Math.max(1,Number(booking.private_rooms||snap.privateRooms||1));const stored=Array.isArray(snap.privateRoomSpecs)?snap.privateRoomSpecs:[];const types=Array.isArray(booking.private_room_types)&&booking.private_room_types.length?booking.private_room_types:Array.isArray(snap.privateRoomTypes)&&snap.privateRoomTypes.length?snap.privateRoomTypes:[snap.privateRoomType||'double'];const specs=Array.from({length:count},(_,i)=>({type:s(stored[i]?.type||types[i]||types[0]||'double'),capacity:privateCapacity(stored[i]?.type||types[i]||types[0]||'double')}));
+   const usedNos=new Set(hotelRooms.map(r=>s(r.room_no)));let seq=Math.max(0,...hotelRooms.map(r=>{const m=/^P-(\d+)$/i.exec(s(r.room_no));return m?Number(m[1]):0}))+1;const nextNo=()=>{let no;do{no=`P-${String(seq++).padStart(3,'0')}`}while(usedNos.has(no));usedNos.add(no);return no};
+   const dedicated=hotelRooms.filter(r=>s(r.room_type).toLowerCase()==='private'&&passengers.some(p=>s(assignmentByPassenger.get(s(p.id))?.hotel_room_id)===s(r.id)));const used=new Set(),targets=[];
+   for(const spec of specs){let room=dedicated.find(r=>!used.has(s(r.id))&&Number(r.capacity||0)===spec.capacity);if(room)used.add(s(room.id));else{room=await insertRow(env,'hotel_rooms',{trip_hotel_id:tripHotelId,room_no:nextNo(),room_type:'private',capacity:spec.capacity,status:'available',locked:false});hotelRooms.push(room);occupancy.set(s(room.id),0);created++}targets.push(room)}
+   for(const p of passengers){const current=assignmentByPassenger.get(s(p.id));if(current&&targets.some(r=>s(r.id)===s(current.hotel_room_id)))continue;const target=targets.find(r=>(occupancy.get(s(r.id))||0)<Number(r.capacity||0));if(!target){if(current)await releaseAssignment(current);overflow++;continue}if(await assignTo(target,p))assigned++}
+ }
+ const hotel=(await rows(env,'hotels',`id=eq.${enc(tripHotel.hotel_id)}&select=id,name,city&limit=1`))[0]||null;
+ return json({ok:true,booking_number:bookingNo,trip_hotel_id:tripHotelId,hotel,accommodation_type:accommodation,created_rooms:created,assigned_passengers:assigned,kept_passengers:Math.max(0,passengers.length-assigned-overflow),overflow,operational_room_notice:'أرقام الغرف P-/M- تشغيلية مبدئية حتى تحديث رقم الغرفة الفعلي من الفندق.'});
 }
 async function guardBooking(request,env,path,body){
  const b=bookingInput(path,body);if(!b)return null;
@@ -90,8 +144,6 @@ async function guardReturnHousing(env,body){
  const p=(await rows(env,'booking_passengers',`id=eq.${enc(passengerId)}&select=id,booking_id&limit=1`))[0];if(!p)return null;
  const b=(await rows(env,'bookings',`id=eq.${enc(p.booking_id)}&select=id,trip_id,return_trip_id,journey_mode&limit=1`))[0];if(!b)return null;
  const mode=s(b.journey_mode).toLowerCase();
- // A separate return leg belongs only to return transport. Housing stays attached to the
- // outbound/primary booking. Return-only remains eligible for housing before its return.
  if(mode==='separate'&&b.return_trip_id&&s(b.return_trip_id)!==s(b.trip_id)){
    const roomId=s(row.hotel_room_id||'');if(!roomId)return null;
    const room=(await rows(env,'hotel_rooms',`id=eq.${enc(roomId)}&select=id,trip_hotel_id&limit=1`))[0];if(!room)return null;
@@ -103,6 +155,9 @@ async function guardReturnHousing(env,body){
 
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
+ if(request.method==='POST'&&u.pathname==='/api/bookings/auto-house'){
+   try{return await autoHouseBooking(request,env)}catch(e){return json({error:e?.message||'تعذر تنفيذ التسكين الفوري.',code:'AUTO_HOUSING_FAILED'},502)}
+ }
  if(request.method==='GET'&&u.pathname==='/api/return-seat-context'){
    try{return await returnSeatContext(request,env)}catch(e){return json({error:e?.message||'تعذر تحميل مقاعد رحلة العودة.',code:'RETURN_SEAT_CONTEXT_FAILED'},502)}
  }
