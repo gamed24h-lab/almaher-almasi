@@ -36,6 +36,7 @@ async function housingForPassengers(env,passengers=[]){
      actual_room_no:actual||null,
      room_no:actual||operational||'',
      room_type:room?.room_type||'',
+     room_capacity:Number(room?.capacity||0)||null,
      check_in_date:tripHotel?.check_in_date||null,
      check_out_date:tripHotel?.check_out_date||null
    };
