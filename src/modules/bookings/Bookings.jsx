@@ -10,6 +10,7 @@ import {bookingFinanceNumbers,bookingFinancialState} from '../../lib/bookingFina
 
 const num=v=>Number(v||0);
 const lower=v=>String(v??'').trim().toLowerCase();
+const activeForFinance=b=>!['cancelled','canceled','deleted','refunded'].includes(lower(b?.status));
 function eventTime(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA')}catch{return String(v)}}
 function timelineValue(v){
  if(v===null||v===undefined||v==='')return '—';
@@ -47,7 +48,7 @@ export default function Bookings({go,query=''}){
    out.sort((a,b)=>{if(sort==='oldest')return String(a.created_at||a.booking_number||'').localeCompare(String(b.created_at||b.booking_number||''));if(sort==='remaining')return bookingFinanceNumbers(b,refundedFor(b)).remaining-bookingFinanceNumbers(a,refundedFor(a)).remaining;return String(b.created_at||b.booking_number||'').localeCompare(String(a.created_at||a.booking_number||''))});
    return out;
  },[data.bookings,q,status,tripId,branchId,financial,sort,tripMap,passengerMap,refundSummary]);
- const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.paid+=f.paid;x.refunded+=f.refund;x.remaining+=f.remaining;x.credit+=f.credit;x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,paid:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
+ const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.gross+=f.gross;x.net+=f.netRaw;x.refunded+=f.refund;if(activeForFinance(b)){x.remaining+=f.remaining;x.credit+=f.credit}x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,gross:0,net:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
  function clear(){setQ('');setStatus('active');setTripId('');setBranchId('');setFinancial('all');setSort('newest')}
  async function refreshAll(){await refresh();await loadRefundSummary()}
  function wa(b,e){e.stopPropagation();const href=`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(`شركة الماهر الماسي\nرقم الحجز: ${b.booking_number}\nالعميل: ${b.customer_name||''}`)}`;window.open(href,'_blank')}
@@ -64,7 +65,7 @@ export default function Bookings({go,query=''}){
     <Select value={sort} onChange={e=>setSort(e.target.value)}><option value="newest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option><option value="remaining">الأعلى متبقيًا</option></Select>
     <Button onClick={clear}><FilterX size={16}/> مسح الفلاتر</Button>
    </div>
-   <div className="table-summary"><span>الحجوزات: <b>{rows.length}</b></span><span><UsersRound size={14}/> المسافرون: <b>{totals.passengers}</b></span><span>الإجمالي: <b>{money(totals.total)}</b></span><span>المحصل الصافي: <b>{money(totals.paid)}</b></span><span>المسترد: <b>{money(totals.refunded)}</b></span><span>المتبقي: <b>{money(totals.remaining)}</b></span>{totals.credit>0&&<span>رصيد العملاء: <b>{money(totals.credit)}</b></span>}</div>
+   <div className="table-summary"><span>الحجوزات: <b>{rows.length}</b></span><span><UsersRound size={14}/> المسافرون: <b>{totals.passengers}</b></span><span>الإجمالي: <b>{money(totals.total)}</b></span><span>التحصيل التاريخي: <b>{money(totals.gross)}</b></span><span>المحصل الصافي: <b>{money(totals.net)}</b></span><span>المسترد: <b>{money(totals.refunded)}</b></span><span>المتبقي: <b>{money(totals.remaining)}</b></span>{totals.credit>0&&<span>رصيد العملاء: <b>{money(totals.credit)}</b></span>}</div>
    <Table rows={rows} onRow={r=>go('/bookings/'+r.booking_number)} columns={[
     {key:'booking_number',label:'رقم الحجز',render:r=><strong>{r.booking_number}</strong>},
     {key:'customer_name',label:'العميل',render:r=><div><strong>{r.customer_name||'—'}</strong><div className="muted-small">{r.customer_phone||'—'} · {r.customer_nationality||'—'}</div></div>},
