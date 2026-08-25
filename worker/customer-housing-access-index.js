@@ -4,6 +4,7 @@ const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:
 const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
 const s=v=>String(v??'');
 const enc=v=>encodeURIComponent(s(v));
+const n=v=>Number(v||0);
 const headers=env=>{const key=s(env.SUPABASE_SERVICE_ROLE_KEY);return {apikey:key,Authorization:`Bearer ${key}`,Accept:'application/json','Content-Type':'application/json'}};
 async function parse(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {message:t}}}
 async function rows(env,table,query){const r=await fetch(`${base(env)}/rest/v1/${table}?${query}`,{headers:headers(env)});const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||`تعذر قراءة ${table}`);return Array.isArray(out)?out:[]}
@@ -43,19 +44,42 @@ async function housingForPassengers(env,passengers=[]){
  });
 }
 
+async function customerFinance(env,booking={}){
+ const bookingId=s(booking?.cloudBookingId||booking?.cloud_booking_id||booking?.id).trim();
+ const bookingNo=s(booking?.bookingNo||booking?.number||booking?.booking_number).trim();
+ let refunds=[];
+ if(bookingId)refunds=await rows(env,'booking_refunds',`booking_id=eq.${enc(bookingId)}&status=eq.completed&select=amount&limit=500`);
+ else if(bookingNo)refunds=await rows(env,'booking_refunds',`booking_number=eq.${enc(bookingNo)}&status=eq.completed&select=amount&limit=500`);
+ const refundedAmount=refunds.reduce((sum,x)=>sum+n(x?.amount),0);
+ const grossPaid=n(booking?.paidAmount??booking?.paid_amount);
+ const total=n(booking?.totalPrice??booking?.total_price);
+ const netPaidAmount=Math.max(0,grossPaid-refundedAmount);
+ return {
+   refundedAmount,
+   netPaidAmount,
+   remainingAmount:Math.max(0,total-netPaidAmount),
+   refundDueAmount:Math.max(0,netPaidAmount-total)
+ };
+}
+
+async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
+ const inner=await appWorker.fetch(request,env,ctx);
+ if(!inner.ok)return inner;
+ const body=await inner.json().catch(()=>null);
+ if(!body||!body.booking)return json(body||{},inner.status||200);
+ const additions={};
+ if(withHousing&&Array.isArray(body.passengers)){
+   try{additions.housing=await housingForPassengers(env,body.passengers)}
+   catch(e){additions.housing=[];additions.housing_warning=e?.message||'تعذر تحميل بيانات السكن.'}
+ }
+ try{additions.finance=await customerFinance(env,body.booking)}
+ catch(e){additions.finance_warning=e?.message||'تعذر تحميل ملخص الاستردادات.'}
+ return json({...body,...additions},inner.status||200);
+}
+
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
- if(request.method==='GET'&&u.pathname==='/api/customer/access'){
-   const inner=await appWorker.fetch(request,env,ctx);
-   if(!inner.ok)return inner;
-   const body=await inner.json().catch(()=>null);
-   if(!body||!Array.isArray(body.passengers))return json(body||{},inner.status||200);
-   try{
-     const housing=await housingForPassengers(env,body.passengers);
-     return json({...body,housing},inner.status||200);
-   }catch(e){
-     return json({...body,housing:[],housing_warning:e?.message||'تعذر تحميل بيانات السكن.'},inner.status||200);
-   }
- }
+ if(request.method==='GET'&&u.pathname==='/api/customer/access')return enrichCustomerResponse(request,env,ctx,{withHousing:true});
+ if(request.method==='GET'&&u.pathname==='/api/customer/booking')return enrichCustomerResponse(request,env,ctx,{withHousing:false});
  return appWorker.fetch(request,env,ctx);
 }};
