@@ -11,9 +11,10 @@ const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مد
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canDiscount=a=>elevated(a)||a?.permissions?.bookingDiscount===true;
 const canCollect=a=>elevated(a)||a?.permissions?.payments===true;
+const cancelled=b=>['cancelled','canceled','ملغي','ملغى'].includes(s(b?.status).trim().toLowerCase());
 async function bookingByNo(env,no){
  const url=base(env);if(!url||!env.SUPABASE_SERVICE_ROLE_KEY)return null;
- const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,total_price,paid_amount&limit=1`,{headers:headers(env)});
+ const r=await fetch(`${url}/rest/v1/bookings?booking_number=eq.${enc(no)}&select=id,booking_number,branch_id,customer_name,total_price,paid_amount,payment_method,payment_reference,status&limit=1`,{headers:headers(env)});
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الحالة المالية للحجز.');
  return Array.isArray(out)?out[0]||null:null;
 }
@@ -23,6 +24,20 @@ async function completedRefundTotal(env,booking){
  const out=await parse(r);if(!r.ok)throw new Error(out?.message||out?.details||'تعذر قراءة الاستردادات المكتملة للحجز.');
  return (Array.isArray(out)?out:[]).reduce((sum,row)=>sum+Math.max(0,n(row?.amount)),0);
 }
+function receiptNo(){const ymd=new Date().toISOString().slice(0,10).replace(/-/g,'');const tail=(globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`).replace(/-/g,'').slice(-8).toUpperCase();return `PAY-${ymd}-${tail}`}
+async function insertPayment(env,booking,amount,ref){
+ const url=base(env),h=headers(env),row={booking_id:booking.id,branch_id:booking.branch_id,amount,status:'pending',reference:ref,created_at:new Date().toISOString()};
+ let last={};for(const candidate of [row,{...row,type:'payment'}]){const r=await fetch(`${url}/rest/v1/transactions`,{method:'POST',headers:{...h,Prefer:'return=representation'},body:JSON.stringify(candidate)});const out=await parse(r);if(r.ok)return Array.isArray(out)?out[0]||candidate:out;last=out}
+ throw new Error(last?.message||last?.details||'تعذر إنشاء سند القبض.');
+}
+async function deletePayment(env,id){if(!id)return;await fetch(`${base(env)}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'DELETE',headers:headers(env)}).catch(()=>{})}
+async function markPaymentPosted(env,id){if(!id)return false;const r=await fetch(`${base(env)}/rest/v1/transactions?id=eq.${enc(id)}`,{method:'PATCH',headers:headers(env),body:JSON.stringify({status:'posted'})});return r.ok}
+async function patchGrossPaid(env,bookingId,paid){
+ const r=await fetch(`${base(env)}/rest/v1/bookings?id=eq.${enc(bookingId)}`,{method:'PATCH',headers:{...headers(env),Prefer:'return=minimal'},body:JSON.stringify({paid_amount:paid,updated_at:new Date().toISOString()})});
+ if(!r.ok){const out=await parse(r);throw new Error(out?.message||out?.details||'تعذر تثبيت إجمالي التحصيل التاريخي بعد الاسترداد.')}
+}
+async function auditPayment(env,actor,booking,meta){await fetch(`${base(env)}/rest/v1/activity_events`,{method:'POST',headers:headers(env),body:JSON.stringify({actor_id:s(actor?.id),actor_name:s(actor?.name),actor_role:s(actor?.role),branch_id:booking.branch_id,entity_type:'booking',entity_id:s(booking.id),action:'payment_collected',metadata:meta,created_at:new Date().toISOString()})}).catch(()=>{})}
+function requestWithPaid(request,body,paid){const next={...body,booking:{...(body?.booking||{}),paidAmount:paid,paid_amount:paid}};return new Request(request.url,{method:request.method,headers:request.headers,body:JSON.stringify(next)})}
 function discountAmounts(input={}){
  const total=n(input.totalPrice??input.total_price);
  const original=n(input.originalPrice??input.original_price??input?.snapshot?.suggestedPrice??input?.snapshot?.originalPrice??total);
@@ -60,6 +75,7 @@ export default {async fetch(request,env,ctx){
     let before=null;
     try{before=await bookingByNo(env,no)}catch(e){return json({error:e?.message||'تعذر التحقق من السجل المالي للحجز.',code:'BOOKING_FINANCE_GUARD_READ_FAILED'},502)}
     if(before){
+     if(cancelled(before))return json({error:'الحجز ملغي ومتاح للعرض فقط. لا يمكن تعديل الرحلة أو السكن أو الركاب أو السعر أو التحصيل قبل إعادة التفعيل بإجراء مستقل.',code:'CANCELLED_BOOKING_READ_ONLY',booking_number:no},409);
      const oldPaid=n(before.paid_amount),oldTotal=n(before.total_price);
      const nextPaid=n(input.paidAmount??input.paid_amount??oldPaid);
      const nextTotal=n(input.totalPrice??input.total_price??oldTotal);
@@ -69,12 +85,24 @@ export default {async fetch(request,env,ctx){
      if(nextPaid>oldPaid+0.001){
       const actor=await actorFrom(request,env);
       if(!actor)return json({error:'تسجيل تحصيل جديد يتطلب جلسة مستخدم صالحة.',code:'PAYMENT_AUTH_REQUIRED'},401);
-      if(!canCollect(actor))return json({error:'لا توجد لديك صلاحية التحصيل. يمكنك تعديل الحجز، لكن تسجيل مبلغ جديد يحتاج صلاحية «التحصيل».',code:'PAYMENT_PERMISSION_REQUIRED'},403);
+      if(!canCollect(actor))return json({error:'لا توجد لديك صلاحية تحصيل دفعات الحجوزات. يمكنك تعديل الحجز بدون تسجيل دفعة جديدة.',code:'PAYMENT_PERMISSION_REQUIRED'},403);
       let refunded=0;
       try{refunded=await completedRefundTotal(env,before)}catch(e){return json({error:e?.message||'تعذر التحقق من الاستردادات السابقة.',code:'BOOKING_REFUND_GUARD_READ_FAILED'},502)}
       const maxGrossPaid=Math.max(oldPaid,nextTotal+refunded);
       if(nextPaid>maxGrossPaid+0.001){
        return json({error:'التحصيل الجديد يتجاوز المبلغ المطلوب بعد احتساب الاستردادات السابقة. أدخل فقط المبلغ الذي تم تحصيله الآن.',code:'OVER_COLLECTION_BLOCKED',paid_amount:oldPaid,refunded_amount:refunded,net_paid:Math.max(0,oldPaid-refunded),total_price:nextTotal,max_gross_paid:maxGrossPaid},409);
+      }
+      if(refunded>0.001&&nextPaid>nextTotal+0.001){
+       const delta=Number((nextPaid-oldPaid).toFixed(2)),ref=receiptNo();let tx=null;
+       try{tx=await insertPayment(env,before,delta,ref)}catch(e){return json({error:e?.message||'تعذر إنشاء سند القبض.',code:'PAYMENT_LEDGER_WRITE_FAILED'},500)}
+       const downstream=await appWorker.fetch(requestWithPaid(request,body,oldPaid),env,ctx);
+       if(!downstream.ok){await deletePayment(env,tx?.id);return downstream}
+       try{await patchGrossPaid(env,before.id,nextPaid)}catch(e){await deletePayment(env,tx?.id);return json({error:e?.message||'تعذر تثبيت التحصيل بعد الاسترداد.',code:'REFUND_AWARE_GROSS_PAYMENT_PATCH_FAILED'},502)}
+       const posted=await markPaymentPosted(env,tx?.id);
+       await auditPayment(env,actor,before,{receipt_no:ref,amount:delta,previous_paid:oldPaid,new_paid:nextPaid,refunded_amount:refunded,net_paid_after:Math.max(0,nextPaid-refunded),payment_method:input.paymentMethod||input.payment_method||before.payment_method||null,payment_reference:input.paymentReference||input.payment_reference||before.payment_reference||null,transaction_id:tx?.id||null,ledger_status:posted?'posted':'pending'});
+       const out=await downstream.clone().json().catch(()=>null);const receipt={receipt_no:ref,amount:delta,previous_paid:oldPaid,new_paid:nextPaid,transaction_id:tx?.id||null,status:posted?'posted':'pending',view_url:`/api/payments/receipt/view?receipt_no=${encodeURIComponent(ref)}`,print_url:`/api/payments/receipt/print?receipt_no=${encodeURIComponent(ref)}`};
+       if(out&&typeof out==='object')return json({...out,payment_receipt:receipt,refund_aware_collection:true,gross_paid:nextPaid,refunded_amount:refunded,net_paid:Math.max(0,nextPaid-refunded)},downstream.status);
+       return downstream;
       }
      }
     }
