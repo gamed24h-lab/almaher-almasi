@@ -15,6 +15,7 @@ import './feedback.css';
 import './ticket-approved.css';
 import './ticket-polish.css';
 import './ticket-thermal-table.css';
+import './mobile-booking-ticket.css';
 
 installBookingSaveRuntimeGuard();
 
