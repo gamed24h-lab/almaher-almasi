@@ -1,0 +1,151 @@
+name: Pricing Refactor Once
+
+on:
+  push:
+    branches:
+      - modular-trip-housing-pricing
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'apply modular pricing refactor'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: modular-trip-housing-pricing
+      - name: Apply focused pricing refactor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def must_replace(path, old, new):
+              p=Path(path); s=p.read_text()
+              if old not in s:
+                  raise SystemExit(f'expected snippet not found in {path}: {old[:120]!r}')
+              p.write_text(s.replace(old,new,1))
+
+          # Booking price engine: modular transport + housing for normal modes; keep separate mode legacy-compatible.
+          must_replace('src/modules/bookings/BookingEditor.jsx', """function calcPrice({mode,type,travelers,rooms,days,roomDays,separateRoomDays,trip,returnTrip}){
+           if(!trip)return 0;
+           const count=Math.max(1,Number(travelers||1));
+           const stayDays=Math.max(1,Number(days||1));
+           const roomCount=Math.max(1,Number(rooms||1));
+           const one=n(trip.price_one_way),none=n(trip.price_no_accommodation),shared=n(trip.price_shared);
+           const roomRate=n(trip.price_private_room||trip.price_private_double||trip.price_private_single||trip.price_private_triple||trip.price_private_quad||trip.price_private_quint);
+           const privateDayUnits=separateRoomDays?normalizeRoomDays(roomCount,roomDays,stayDays).reduce((sum,x)=>sum+x,0):roomCount*stayDays;
+           const privateCost=type==='private'?roomRate*privateDayUnits:0;
+           if(mode==='oneway')return one*count+privateCost;
+           // «عودة فقط» تستخدم نفس سعر رجل «ذهاب فقط» لنفس نوع السكن.
+           // السكن المشترك لا يُجزّأ على أيام باقة الذهاب والعودة.
+           if(mode==='returnonly')return one*count+privateCost;
+           if(mode==='separate'){const outbound=type==='shared'?shared*count:none*count+privateCost;return outbound+n(returnTrip?.price_one_way)*count}
+           if(type==='none')return none*count;
+           if(type==='shared')return shared*count;
+           if(type==='private')return none*count+privateCost;
+           return 0;
+          }""", """function calcPrice({mode,type,travelers,rooms,days,roomDays,separateRoomDays,trip,returnTrip}){
+           if(!trip)return 0;
+           const count=Math.max(1,Number(travelers||1));
+           const stayDays=Math.max(1,Number(days||1));
+           const roomCount=Math.max(1,Number(rooms||1));
+           const one=n(trip.price_one_way);
+           const returnOnly=n(trip.price_return_only??trip.price_one_way);
+           const roundTrip=n(trip.price_round_trip??trip.price_no_accommodation);
+           const legacyNone=n(trip.price_no_accommodation),legacyShared=n(trip.price_shared);
+           const sharedDailyConfigured=trip.price_shared_daily!==null&&trip.price_shared_daily!==undefined&&String(trip.price_shared_daily)!=='';
+           const sharedDaily=n(trip.price_shared_daily);
+           const roomRate=n(trip.price_private_room||trip.price_private_double||trip.price_private_single||trip.price_private_triple||trip.price_private_quad||trip.price_private_quint);
+           const privateDayUnits=separateRoomDays?normalizeRoomDays(roomCount,roomDays,stayDays).reduce((sum,x)=>sum+x,0):roomCount*stayDays;
+           const privateCost=type==='private'?roomRate*privateDayUnits:0;
+           const sharedCost=type==='shared'&&sharedDailyConfigured?sharedDaily*stayDays*count:0;
+           if(mode==='oneway')return one*count+sharedCost+privateCost;
+           if(mode==='returnonly')return returnOnly*count+sharedCost+privateCost;
+           // وضع «ذهاب + عودة من رحلة أخرى» يحتفظ بمنطقه القديم للرحلات التي لديها أسعار Legacy.
+           if(mode==='separate'){
+            const returnLeg=n(returnTrip?.price_one_way)*count;
+            if(type==='shared'){
+             if(legacyShared>0)return legacyShared*count+returnLeg;
+             return roundTrip*count+sharedCost+returnLeg;
+            }
+            return legacyNone*count+privateCost+returnLeg;
+           }
+           if(mode==='roundtrip'){
+            if(type==='shared'&&!sharedDailyConfigured)return legacyShared*count;
+            return roundTrip*count+sharedCost+privateCost;
+           }
+           return 0;
+          }""")
+
+          must_replace('src/modules/bookings/BookingEditor.jsx', """{journeyMode==='returnonly'&&accommodation==='shared'&&<Field label=\"عدد أيام السكن قبل العودة\" hint=\"يستخدم لتحديد مدة السكن قبل رحلة العودة. سعر عودة فقط + مشترك يساوي سعر ذهاب فقط + مشترك.\"><Input type=\"number\" min=\"1\" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field>}""", """{journeyMode!=='separate'&&accommodation==='shared'&&<Field label={journeyMode==='returnonly'?'عدد أيام السكن قبل العودة':'عدد أيام السكن'} hint=\"السكن المشترك يُحسب للفرد في اليوم ويُضاف إلى سعر نوع الرحلة المختار.\"><Input type=\"number\" min=\"1\" value={housingDays||''} onChange={e=>setHousingDays(Number(e.target.value))} required/></Field>}""")
+
+          # Trip create/edit screen: unified pricing labels and fields.
+          must_replace('src/modules/trips/Trips.jsx', """function applySavedRoute(routeId,form){const r=activeRoutes.find(x=>String(x.id)===String(routeId));if(!r)return;const from=destinationById.get(String(r.from_destination_id)),to=destinationById.get(String(r.to_destination_id));if(from)form.elements.from_city.value=from.city||from.name||'';if(to)form.elements.to_city.value=to.city||to.name||'';form.elements.bus_capacity.value=r.default_bus_capacity||49;form.elements.price_one_way.value=r.price_one_way||0;form.elements.price_no_accommodation.value=r.price_no_accommodation||0;form.elements.price_shared.value=r.price_shared||0;form.elements.price_private_room.value=r.price_private_room||0;const bids=Array.isArray(r.branch_ids)?r.branch_ids.map(String):[];if(bids.length){setMainBranch(bids[0]);setShared(bids.slice(1));const map={};for(const [i,st] of (r.route_stops||[]).entries()){const bid=String(st.branch_id||bids[i]||'');if(!bid)continue;const b=data.branches.find(x=>String(x.id)===bid);map[bid]={branchId:bid,branchName:b?.name||'',city:st.name||st.city||b?.name||'',outboundTime:st.outbound_time||'',returnTime:st.return_time||'',order:i+1}}setStops(map)}}""", """function applySavedRoute(routeId,form){const r=activeRoutes.find(x=>String(x.id)===String(routeId));if(!r)return;const from=destinationById.get(String(r.from_destination_id)),to=destinationById.get(String(r.to_destination_id));if(from)form.elements.from_city.value=from.city||from.name||'';if(to)form.elements.to_city.value=to.city||to.name||'';form.elements.bus_capacity.value=r.default_bus_capacity||49;form.elements.price_one_way.value=r.price_one_way||0;form.elements.price_return_only.value=r.price_return_only??r.price_one_way??0;form.elements.price_round_trip.value=r.price_round_trip??r.price_no_accommodation??0;form.elements.price_shared_daily.value=r.price_shared_daily??'';form.elements.price_private_room.value=r.price_private_room||0;const bids=Array.isArray(r.branch_ids)?r.branch_ids.map(String):[];if(bids.length){setMainBranch(bids[0]);setShared(bids.slice(1));const map={};for(const [i,st] of (r.route_stops||[]).entries()){const bid=String(st.branch_id||bids[i]||'');if(!bid)continue;const b=data.branches.find(x=>String(x.id)===bid);map[bid]={branchId:bid,branchName:b?.name||'',city:st.name||st.city||b?.name||'',outboundTime:st.outbound_time||'',returnTime:st.return_time||'',order:i+1}}setStops(map)}}""")
+
+          must_replace('src/modules/trips/Trips.jsx', """const row={...(editing?.id?{id:editing.id}:{}),trip_code:editing?.trip_code||makeTripCode(f.departure_date,mainBranch),branch_id:mainBranch,from_city:String(f.from_city||'').trim(),to_city:String(f.to_city||'').trim(),departure_date:f.departure_date,departure_time:f.departure_time||null,return_date:f.return_date||null,return_time:f.return_time||null,bus_capacity:Number(f.bus_capacity||49),booking_capacity:Number(f.bus_capacity||49),status:f.status||'active',price_one_way:Number(f.price_one_way||0),price_no_accommodation:Number(f.price_no_accommodation||0),price_shared:Number(f.price_shared||0),price_private_room:Number(f.price_private_room||0),operational_notes:f.operational_notes||editing?.operational_notes||'',_shared_branch_ids:shared.filter(x=>String(x)!==String(mainBranch)),route_stops:routeStops};""", """const roundTripPrice=Number(f.price_round_trip||0),sharedDaily=f.price_shared_daily===''?null:Number(f.price_shared_daily||0);const row={...(editing?.id?{id:editing.id}:{}),trip_code:editing?.trip_code||makeTripCode(f.departure_date,mainBranch),branch_id:mainBranch,from_city:String(f.from_city||'').trim(),to_city:String(f.to_city||'').trim(),departure_date:f.departure_date,departure_time:f.departure_time||null,return_date:f.return_date||null,return_time:f.return_time||null,bus_capacity:Number(f.bus_capacity||49),booking_capacity:Number(f.bus_capacity||49),status:f.status||'active',price_one_way:Number(f.price_one_way||0),price_return_only:Number(f.price_return_only||0),price_round_trip:roundTripPrice,price_shared_daily:sharedDaily,price_no_accommodation:roundTripPrice,price_shared:editing?.price_shared??0,price_private_room:Number(f.price_private_room||0),operational_notes:f.operational_notes||editing?.operational_notes||'',_shared_branch_ids:shared.filter(x=>String(x)!==String(mainBranch)),route_stops:routeStops};""")
+
+          must_replace('src/modules/trips/Trips.jsx', """    <Field label=\"سعر ذهاب فقط\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_one_way\" defaultValue={editing?.price_one_way||0}/></Field>
+    <Field label=\"ذهاب وعودة بدون سكن\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_no_accommodation\" defaultValue={editing?.price_no_accommodation||0}/></Field>
+    <Field label=\"ذهاب وعودة + سكن مشترك\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_shared\" defaultValue={editing?.price_shared||0}/></Field>
+    <Field label=\"سعر الغرفة الخاصة / يوم\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_private_room\" defaultValue={editing?.price_private_room||0}/></Field>""", """    <Field label=\"ذهاب فقط / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_one_way\" defaultValue={editing?.price_one_way||0}/></Field>
+    <Field label=\"عودة فقط / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_return_only\" defaultValue={editing?.price_return_only??editing?.price_one_way??0}/></Field>
+    <Field label=\"ذهاب وعودة / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_round_trip\" defaultValue={editing?.price_round_trip??editing?.price_no_accommodation??0}/></Field>
+    <Field label=\"سكن مشترك / فرد / يوم\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_shared_daily\" defaultValue={editing?.price_shared_daily??''}/></Field>
+    <Field label=\"غرفة خاصة / غرفة / يوم\"><Input type=\"number\" min=\"0\" step=\"0.01\" name=\"price_private_room\" defaultValue={editing?.price_private_room||0}/></Field>""")
+
+          # Saved route screen uses the same pricing vocabulary.
+          must_replace('src/modules/destinations/Destinations.jsx', """const emptyRoute=()=>({name:'',from_destination_id:'',to_destination_id:'',branch_ids:[],route_stops:[],return_reverse_stops:true,default_bus_capacity:49,price_one_way:0,price_no_accommodation:0,price_shared:0,price_private_room:0,notes:'',active:true});""", """const emptyRoute=()=>({name:'',from_destination_id:'',to_destination_id:'',branch_ids:[],route_stops:[],return_reverse_stops:true,default_bus_capacity:49,price_one_way:0,price_return_only:0,price_round_trip:0,price_shared_daily:0,price_no_accommodation:0,price_shared:0,price_private_room:0,notes:'',active:true});""")
+
+          must_replace('src/modules/destinations/Destinations.jsx', """<Field label=\"سعر ذهاب\"><Input type=\"number\" min=\"0\" value={route.price_one_way} onChange={e=>setRoute(x=>({...x,price_one_way:Number(e.target.value||0)}))}/></Field><Field label=\"بدون سكن\"><Input type=\"number\" min=\"0\" value={route.price_no_accommodation} onChange={e=>setRoute(x=>({...x,price_no_accommodation:Number(e.target.value||0)}))}/></Field><Field label=\"سكن مشترك\"><Input type=\"number\" min=\"0\" value={route.price_shared} onChange={e=>setRoute(x=>({...x,price_shared:Number(e.target.value||0)}))}/></Field><Field label=\"غرفة خاصة\"><Input type=\"number\" min=\"0\" value={route.price_private_room} onChange={e=>setRoute(x=>({...x,price_private_room:Number(e.target.value||0)}))}/></Field>""", """<Field label=\"ذهاب فقط / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" value={route.price_one_way||0} onChange={e=>setRoute(x=>({...x,price_one_way:Number(e.target.value||0)}))}/></Field><Field label=\"عودة فقط / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" value={route.price_return_only??route.price_one_way??0} onChange={e=>setRoute(x=>({...x,price_return_only:Number(e.target.value||0)}))}/></Field><Field label=\"ذهاب وعودة / فرد\"><Input type=\"number\" min=\"0\" step=\"0.01\" value={route.price_round_trip??route.price_no_accommodation??0} onChange={e=>setRoute(x=>({...x,price_round_trip:Number(e.target.value||0),price_no_accommodation:Number(e.target.value||0)}))}/></Field><Field label=\"سكن مشترك / فرد / يوم\"><Input type=\"number\" min=\"0\" step=\"0.01\" value={route.price_shared_daily??''} onChange={e=>setRoute(x=>({...x,price_shared_daily:e.target.value===''?null:Number(e.target.value||0)}))}/></Field><Field label=\"غرفة خاصة / غرفة / يوم\"><Input type=\"number\" min=\"0\" step=\"0.01\" value={route.price_private_room||0} onChange={e=>setRoute(x=>({...x,price_private_room:Number(e.target.value||0)}))}/></Field>""")
+
+          # Insert pricing persistence layer without touching the large worker.
+          must_replace('worker/trip-destination-guard-index.js', "import bookingVerifyWorker from './booking-verify-index.js';", "import bookingVerifyWorker from './trip-pricing-persist-index.js';")
+
+          # Pricing regression tests.
+          Path('scripts/check-pricing.mjs').write_text("""import fs from 'node:fs';
+
+const source=fs.readFileSync(new URL('../src/modules/bookings/BookingEditor.jsx',import.meta.url),'utf8');
+const start=source.indexOf('function calcPrice(');
+const end=source.indexOf('\\nfunction isFemale',start);
+if(start<0||end<0)throw new Error('Unable to locate calcPrice in BookingEditor.jsx');
+const calcSource=source.slice(start,end);
+const n=v=>Number(v||0);
+const normalizeRoomDays=(count,values,fallback=1)=>Array.from({length:Math.max(1,Number(count||1))},(_,i)=>Math.max(1,Number(values?.[i]||fallback||1)));
+const calcPrice=new Function('n','normalizeRoomDays',`${calcSource}; return calcPrice;`)(n,normalizeRoomDays);
+
+const trip={price_one_way:100,price_return_only:80,price_round_trip:170,price_shared_daily:25,price_no_accommodation:170,price_shared:260,price_private_room:60};
+const returnTrip={price_one_way:90};
+const base={travelers:2,rooms:1,days:3,roomDays:[3],separateRoomDays:false,trip,returnTrip};
+const price=(mode,type,extra={})=>calcPrice({...base,mode,type,...extra});
+const eq=(a,b,label)=>{if(a!==b)throw new Error(`${label}: expected ${b}, got ${a}`)};
+
+eq(price('oneway','none'),200,'oneway transport');
+eq(price('returnonly','none'),160,'return-only transport');
+eq(price('roundtrip','none'),340,'round-trip transport');
+eq(price('oneway','shared'),350,'oneway + shared daily');
+eq(price('returnonly','shared'),310,'return-only + shared daily');
+eq(price('roundtrip','shared'),490,'round-trip + shared daily');
+eq(price('oneway','private'),380,'oneway + private room days');
+eq(price('returnonly','private'),340,'return-only + private room days');
+eq(price('roundtrip','private'),520,'round-trip + private room days');
+// Existing separate mode pricing remains based on legacy package fields when present.
+eq(price('separate','shared'),700,'separate shared legacy package + other return leg');
+eq(price('separate','private'),700,'separate private legacy outbound + other return leg');
+// Old trips without price_shared_daily keep their previous round-trip shared package behavior.
+const legacyTrip={...trip,price_shared_daily:null};
+eq(calcPrice({...base,mode:'roundtrip',type:'shared',trip:legacyTrip}),520,'legacy roundtrip shared fallback');
+console.log('Pricing invariants: PASS');
+""")
+          PY
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "almaher-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/modules/bookings/BookingEditor.jsx src/modules/trips/Trips.jsx src/modules/destinations/Destinations.jsx worker/trip-destination-guard-index.js scripts/check-pricing.mjs
+          git diff --cached --check
+          git commit -m "apply modular pricing refactor"
+          git push origin HEAD:modular-trip-housing-pricing
