@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/wallet-payments-index.js"
+main = "worker/refund-control-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
