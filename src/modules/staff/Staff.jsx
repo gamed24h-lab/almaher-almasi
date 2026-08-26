@@ -13,7 +13,7 @@ const GENERAL_PERMS=[
  ['fleet','عرض وإدارة الأسطول العامة'],['viewFleet','عرض الأسطول'],['vehicles','إدارة المركبات العامة'],['addVehicles','إضافة مركبات'],['editVehicles','تعديل المركبات'],['deleteVehicles','حذف المركبات'],
  ['viewDrivers','عرض السائقين'],['addDrivers','إضافة سائقين'],['editDrivers','تعديل السائقين'],['deleteDrivers','حذف السائقين'],['manageDrivers','إدارة السائقين كاملة'],
  ['assignFleet','ربط/تبديل المركبات والسائقين بالرحلات'],['manageMaintenance','إدارة صيانة المركبات'],['returns','محرك العودة'],
- ['finance','المالية'],['payments','تحصيل دفعات الحجوزات'],['viewPaymentReceipts','عرض سندات القبض'],['printPaymentReceipts','طباعة سندات القبض'],['reconcileFinance','فحص المطابقة المالية'],['expenses','المصروفات'],['shifts','الخزن والورديات'],['refunds','الاسترداد'],['refund_request','طلب استرداد'],['refund_approve','اعتماد استرداد'],['refund_complete','تنفيذ استرداد'],['approvals','الاعتمادات'],
+ ['finance','المالية'],['payments','تحصيل دفعات الحجوزات'],['viewPaymentReceipts','عرض سندات القبض'],['printPaymentReceipts','طباعة سندات القبض'],['reconcileFinance','فحص المطابقة المالية'],['expenses','المصروفات'],['shifts','الخزن والورديات'],['refunds','الاسترداد'],['refund_request','طلب استرداد'],['refund_approve','اعتماد استرداد'],['refund_complete','تنفيذ استرداد'],['refund_edit','تعديل استرداد قبل التنفيذ'],['refund_reverse','عكس / تراجع عن استرداد'],['wallet_refund','استرداد من محفظة العميل'],['approvals','الاعتمادات'],
  ['crm','CRM'],['customers','العملاء'],['documents','المستندات'],['notifications','الإشعارات'],['automation','الأتمتة'],['reports','التقارير'],['printReports','طباعة التقارير'],
  ['viewBranches','عرض الفروع'],['addBranches','إضافة فرع'],['editBranches','تعديل الفروع'],['manageCompanyProfile','تعديل بيانات الشركة العامة'],
  ['manageUsers','إدارة بيانات الموظفين'],['managePermissions','إدارة صلاحيات الموظفين'],['allBranches','تشغيل كل الفروع'],['allBranchesFinance','مالية كل الفروع']
@@ -22,7 +22,7 @@ const DEVELOPER_PERMS=[
  ['developer_console_access','الدخول إلى المطور والنظام'],['developer_backup','نسخ احتياطي'],['developer_restore','استعادة نسخة احتياطية'],['developer_purge','حذف نهائي للبيانات'],['developer_templates','إدارة القوالب'],['developer_labels','إدارة المسميات'],['developer_languages','إدارة اللغات'],['developer_rules','إدارة قواعد النظام']
 ];
 const SENSITIVE=new Set(DEVELOPER_PERMS.map(([k])=>k));
-const HIGH_RISK=new Set(['managePermissions','manageUsers','allBranches','allBranchesFinance','crossBranchReturn','bookingDiscount','payments','cancelBookings','reactivateBooking','addBranches','manageCompanyProfile','refund_approve','refund_complete','approvals','deleteDestinations','manageDestinations','deleteDrivers','deleteVehicles','manageDrivers','deleteHotels','manageHotels']);
+const HIGH_RISK=new Set(['managePermissions','manageUsers','allBranches','allBranchesFinance','crossBranchReturn','bookingDiscount','payments','cancelBookings','reactivateBooking','addBranches','manageCompanyProfile','refund_approve','refund_complete','refund_edit','refund_reverse','wallet_refund','approvals','deleteDestinations','manageDestinations','deleteDrivers','deleteVehicles','manageDrivers','deleteHotels','manageHotels']);
 const ROLES=['موظف حجوزات','محاسب','مشرف تشغيل','موظف تسكين','خدمة عملاء','مدير فرع','مدير عام','موظف'];
 const ROLE_RANK={'developer':100,'مدير عام':90,'مدير فرع':70,'مشرف تشغيل':60,'محاسب':50,'موظف تسكين':40,'موظف حجوزات':40,'خدمة عملاء':40,'موظف':30};
 const rankOf=role=>ROLE_RANK[String(role||'').trim()]||20;
