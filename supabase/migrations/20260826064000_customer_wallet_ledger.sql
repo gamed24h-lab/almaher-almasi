@@ -1,5 +1,6 @@
 -- Al Maher customer wallet ledger
 -- Additive only: no existing booking/payment rows are rewritten.
+-- Balance is always derived from posted ledger entries; never persist a mutable balance.
 
 create table if not exists public.customer_wallets (
   id uuid primary key default gen_random_uuid(),
