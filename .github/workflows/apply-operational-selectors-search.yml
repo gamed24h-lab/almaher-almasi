@@ -1,0 +1,27 @@
+name: Apply Operational Selectors Search
+on:
+  push:
+    branches: [operational-selectors-search-no-defaults]
+    paths:
+      - '.github/workflows/apply-operational-selectors-search.yml'
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: operational-selectors-search-no-defaults
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/apply-operational-selectors-search.py
+      - name: Commit patched operational selector files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/seats/Seats.jsx src/modules/operations/Operations.jsx src/modules/returns/Returns.jsx src/modules/scanner/Scanner.jsx src/modules/housing/Housing.jsx
+          git diff --cached --quiet && exit 0
+          git commit -m "improve operational selectors search and explicit choices"
+          git push origin HEAD:operational-selectors-search-no-defaults
