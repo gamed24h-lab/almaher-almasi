@@ -21,7 +21,15 @@ const elevated=a=>!!a&&(s(a.role).toLowerCase()==='developer'||s(a.role)==='مد
 const allBranches=a=>elevated(a)||a?.permissions?.allBranches===true;
 const canCrossBranchReturn=a=>elevated(a)||a?.permissions?.crossBranchReturn===true;
 const canHousing=a=>elevated(a)||a?.permissions?.housing===true;
-function bookingInput(path,body){if(path==='/api/customer/book')return body?.booking||{};if(path==='/api/admin'&&s(body?.action)==='update_booking')return body?.booking||{};return null}
+function isPaymentOnlyBookingUpdate(path,body){
+ if(path!=='/api/admin'||s(body?.action)!=='update_booking')return false;
+ const b=body?.booking;if(!b||typeof b!=='object'||Array.isArray(b))return false;
+ const keys=Object.keys(b);
+ const allowed=new Set(['number','booking_number','paidAmount','paid_amount','paymentMethod','payment_method','paymentReference','payment_reference']);
+ const hasPaymentField=keys.some(k=>['paidAmount','paid_amount','paymentMethod','payment_method','paymentReference','payment_reference'].includes(k));
+ return hasPaymentField&&keys.every(k=>allowed.has(k));
+}
+function bookingInput(path,body){if(path==='/api/customer/book')return body?.booking||{};if(path==='/api/admin'&&s(body?.action)==='update_booking'&&!isPaymentOnlyBookingUpdate(path,body))return body?.booking||{};return null}
 function snapOf(b={}){return b.snapshot&&typeof b.snapshot==='object'?b.snapshot:{}}
 function modeOf(b={}){const snap=snapOf(b);return s(b.journey_mode||b.journeyMode||snap.journeyMode||'oneway').toLowerCase()}
 function primaryTripId(b={}){const snap=snapOf(b);return s(b.trip_id||b.tripId||snap.tripId||'')}
