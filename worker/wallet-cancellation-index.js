@@ -44,8 +44,11 @@ export default {
    const bookingNo=String(body.booking_number||body.bookingNo||'').trim();if(!bookingNo)return json({error:'رقم الحجز مطلوب'},400);
    const quote=await cancellationQuote(request,env,bookingNo);if(quote.error)return json({error:quote.error},quote.status);
    const b=quote.booking,due=quote.settlement_due;
-   const canDirect=permitted(me,'refunds')||permitted(me,'refund_complete');
-   const canWallet=canDirect||permitted(me,'walletCredit');
+   const manager=me.role==='developer'||me.role==='مدير عام'||me.permissions?.all===true||me.permissions?.allBranchesFinance===true;
+   const canApprove=manager||me.permissions?.refund_approve===true||(me.permissions?.refunds===true&&me.permissions?.approvals===true);
+   const canComplete=manager||me.permissions?.refund_complete===true||me.permissions?.refunds===true;
+   const canDirect=canApprove&&canComplete;
+   const canWallet=canDirect;
    if(action==='cancel_quote')return json({ok:true,booking:{id:b.id,booking_number:b.booking_number,status:b.status,customer_name:b.customer_name,customer_phone:b.customer_phone,customer_identity:b.customer_identity,total_price:num(b.total_price),paid_amount:num(b.paid_amount),financial_status:b.financial_status},refunded_amount:num(quote.refund?.refunded_amount),settlement_due:due,wallet_balance:num(quote.wallet?.balance),capabilities:{cancel:true,direct_refund:canDirect,wallet_credit:canWallet}});
 
    const preset=String(body.reason||'').trim(),other=String(body.reason_other||'').trim();const reason=preset==='other'?other:preset;if(!reason)return json({error:'سبب الإلغاء إلزامي'},400);
