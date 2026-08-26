@@ -1,0 +1,27 @@
+name: Apply UX Search Collapse Placeholders
+on:
+  push:
+    branches: [ux-search-collapse-placeholders]
+    paths:
+      - '.github/workflows/apply-ux-search-collapse-placeholders.yml'
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-search-collapse-placeholders
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/apply-ux-search-collapse-placeholders.py
+      - name: Commit patched UX files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/UI.jsx src/modules/reports/Reports.jsx src/modules/housing/HousingBase.jsx src/modules/bookings/BookingEditor.jsx src/styles.css
+          git diff --cached --quiet && exit 0
+          git commit -m "improve selectors search placeholders and collapse"
+          git push origin HEAD:ux-search-collapse-placeholders
