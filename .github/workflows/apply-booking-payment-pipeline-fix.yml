@@ -1,0 +1,36 @@
+name: Apply booking payment pipeline fix
+on:
+  push:
+    branches: [booking-payment-pipeline-fix]
+    paths:
+      - 'tools/patch_payment_only_booking_guard.py'
+      - '.github/workflows/apply-booking-payment-pipeline-fix.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: booking-payment-pipeline-fix
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Patch booking cycle guard
+        run: python3 tools/patch_payment_only_booking_guard.py
+      - name: Validate worker syntax
+        run: node --check worker/booking-cycle-guard-index.js
+      - name: Build app
+        run: npm run build
+      - name: Commit clean result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker/booking-cycle-guard-index.js
+          git commit -m "allow payment-only booking updates through cycle guard" || true
+          git rm tools/patch_payment_only_booking_guard.py .github/workflows/apply-booking-payment-pipeline-fix.yml
+          git commit -m "remove temporary payment pipeline patch tooling"
+          git push origin booking-payment-pipeline-fix
