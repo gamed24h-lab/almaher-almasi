@@ -1,4 +1,4 @@
-import React from 'react';
+import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 export const Card=({children,className=''})=><section className={`card ${className}`}>{children}</section>;
 export const PageHeader=({title,subtitle,actions})=><div className="page-head"><div><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>{actions&&<div className="page-actions">{actions}</div>}</div>;
@@ -12,4 +12,12 @@ export const ErrorBox=({error})=>{if(!error)return null;const node=<div classNam
 export function Modal({open,onClose,title,children,wide=false}){if(!open)return null;return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose?.()}}><div className={`modal ${wide?'wide':''}`}><div className="modal-head"><h2>{title}</h2><button className="icon-btn" onClick={onClose}>×</button></div><div className="modal-body">{children}</div></div></div>}
 export const Field=({label,children,hint})=><label className="field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>;
 export const Input=(p)=><input {...p}/>; export const Select=(p)=><select {...p}/>; export const Textarea=(p)=><textarea {...p}/>;
+export function SearchSelect({value='',onChange,options=[],placeholder='اختر...',disabled=false,name='',className=''}){
+ const ref=useRef(null),[open,setOpen]=useState(false),[query,setQuery]=useState('');
+ useEffect(()=>{const close=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false)};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close)},[]);
+ const selected=options.find(x=>String(x.value)===String(value));
+ const filtered=useMemo(()=>{const q=String(query||'').trim().toLowerCase();if(!q)return options;return options.filter(x=>`${x.label||''} ${x.searchText||''}`.toLowerCase().includes(q))},[options,query]);
+ const choose=opt=>{if(opt?.disabled)return;onChange?.({target:{value:String(opt?.value??''),name}});setQuery('');setOpen(false)};
+ return <div className={`search-select ${className}`} ref={ref}>{name&&<input type="hidden" name={name} value={value||''}/>}<button type="button" className="search-select-trigger" disabled={disabled} onClick={()=>!disabled&&setOpen(x=>!x)} aria-expanded={open}><span className={!selected?'search-select-placeholder':''}>{selected?.label||placeholder}</span><span className={`search-select-arrow ${open?'open':''}`}>⌄</span></button>{open&&!disabled&&<div className="search-select-menu"><input className="search-select-input" value={query} onChange={e=>setQuery(e.target.value)} autoFocus placeholder={`ابحث — ${placeholder}`}/><div className="search-select-options">{filtered.length?filtered.map(opt=><button type="button" key={String(opt.value)} disabled={opt.disabled} className={`search-select-option ${String(opt.value)===String(value)?'selected':''}`} onClick={()=>choose(opt)}>{opt.label}</button>):<div className="search-select-empty">لا توجد نتائج مطابقة</div>}</div></div>}</div>
+}
 export function Table({columns,rows,onRow}){return <div className="table-wrap"><table><thead><tr>{columns.map(c=><th key={c.key}>{c.label}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={r.id||r.booking_number||r.trip_code||i} onClick={()=>onRow?.(r)} className={onRow?'clickable':''}>{columns.map(c=><td key={c.key}>{c.render?c.render(r):r[c.key]??'—'}</td>)}</tr>)}</tbody></table></div>}
