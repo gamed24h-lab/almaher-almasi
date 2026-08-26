@@ -1,0 +1,56 @@
+/* Mobile-only readability for bookings and travel tickets. Desktop and print layouts are intentionally untouched. */
+@media screen and (max-width:760px){
+  /* Bookings: turn the wide desktop table into readable stacked cards. */
+  .booking-filters~.table-summary+.table-wrap{border:0;overflow:visible;background:transparent}
+  .booking-filters~.table-summary+.table-wrap table,
+  .booking-filters~.table-summary+.table-wrap tbody,
+  .booking-filters~.table-summary+.table-wrap tr,
+  .booking-filters~.table-summary+.table-wrap td{display:block;width:100%;min-width:0}
+  .booking-filters~.table-summary+.table-wrap thead{display:none}
+  .booking-filters~.table-summary+.table-wrap tbody{display:grid;gap:12px}
+  .booking-filters~.table-summary+.table-wrap tr{border:1px solid #dfe6ed;border-radius:14px;background:#fff;box-shadow:0 8px 24px rgba(16,47,86,.07);padding:12px;overflow:hidden}
+  .booking-filters~.table-summary+.table-wrap td{border:0!important;border-bottom:1px solid #eef1f4!important;padding:8px 2px!important;display:grid;grid-template-columns:92px minmax(0,1fr);gap:10px;align-items:start;font-size:12px;overflow-wrap:anywhere}
+  .booking-filters~.table-summary+.table-wrap td:last-child{border-bottom:0!important;padding-bottom:0!important}
+  .booking-filters~.table-summary+.table-wrap td::before{font-size:10px;font-weight:800;color:#748092;line-height:1.5}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(1)::before{content:'رقم الحجز'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(2)::before{content:'العميل'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(3)::before{content:'المسافرون'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(4)::before{content:'الرحلة'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(5)::before{content:'النوع'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(6)::before{content:'الفرع'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(7)::before{content:'المالية'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(8)::before{content:'الحالة'}
+  .booking-filters~.table-summary+.table-wrap td:nth-child(9)::before{content:'الإجراءات'}
+  .booking-filters~.table-summary+.table-wrap .row-actions{display:flex;flex-wrap:wrap;gap:6px}
+  .booking-filters~.table-summary+.table-wrap .row-actions .btn{min-width:42px;min-height:38px;padding:7px 9px}
+  .table-summary{display:grid;grid-template-columns:1fr 1fr;gap:7px 10px;font-size:11px}
+
+  /* Ticket: use the actual viewport instead of visually shrinking the desktop sheet. */
+  .ticket-page{width:100%!important;max-width:100%!important;margin:0!important;padding:12px 12px 0!important;border-radius:12px!important}
+  .ticket-head{grid-template-columns:minmax(0,1fr) auto!important;gap:8px!important}
+  .ticket-brand-lockup{min-width:0!important}
+  .ticket-logo{width:54px!important;height:54px!important}
+  .ticket-meta-card{min-width:0!important;max-width:48vw!important}
+  .ticket-meta-card>b{font-size:14px!important;max-width:100%;overflow-wrap:anywhere}
+  .ticket-title-band{margin-inline:-12px!important;padding-inline:12px!important}
+  .ticket-title-band>div:nth-child(2){min-width:130px!important}
+  .ticket-title-band h2{font-size:22px!important}
+  .ticket-customer-strip{grid-template-columns:1fr 1fr!important}
+  .ticket-journeys{grid-template-columns:1fr!important}
+  .ticket-passenger-table-wrap{overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+  .ticket-passenger-table{width:680px!important;min-width:680px!important;table-layout:fixed!important}
+  .ticket-housing-grid,.ticket-finance-grid{grid-template-columns:1fr 1fr!important}
+  .ticket-bottom{grid-template-columns:1fr!important}
+  .ticket-qr-panel{justify-content:center!important;flex-wrap:wrap!important}
+  .ticket-branch-card{display:grid!important;grid-template-columns:1fr!important;gap:6px!important}
+  .ticket-footer-strip{margin-inline:-12px!important;padding-inline:12px!important;text-align:center!important}
+  .page-head .page-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .page-head .page-actions>.btn,.page-head .page-actions>label.btn{width:100%;min-width:0;padding:8px 7px;font-size:12px}
+}
+
+@media screen and (max-width:430px){
+  .booking-filters~.table-summary+.table-wrap td{grid-template-columns:78px minmax(0,1fr)}
+  .ticket-customer-strip,.ticket-housing-grid,.ticket-finance-grid{grid-template-columns:1fr!important}
+  .ticket-customer-strip>div,.ticket-housing-grid>div,.ticket-finance-grid>div{border-left:0!important;border-bottom:1px solid #e5e8ed!important}
+  .ticket-customer-strip>div:last-child,.ticket-housing-grid>div:last-child,.ticket-finance-grid>div:last-child{border-bottom:0!important}
+}
