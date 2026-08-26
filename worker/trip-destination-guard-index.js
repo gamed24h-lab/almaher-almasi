@@ -1,4 +1,4 @@
-import bookingVerifyWorker from './booking-verify-index.js';
+import bookingVerifyWorker from './trip-pricing-persist-index.js';
 
 const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
