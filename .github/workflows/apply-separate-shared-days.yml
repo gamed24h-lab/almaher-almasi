@@ -1,0 +1,26 @@
+name: Apply Separate Shared Housing Days
+on:
+  push:
+    branches: [separate-shared-housing-days]
+    paths:
+      - '.github/workflows/apply-separate-shared-days.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: separate-shared-housing-days
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/apply-separate-shared-days.mjs
+      - run: node scripts/check-pricing.mjs
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/bookings/BookingEditor.jsx scripts/check-pricing.mjs
+          git commit -m "add shared housing days to separate returns"
+          git push origin HEAD:separate-shared-housing-days
