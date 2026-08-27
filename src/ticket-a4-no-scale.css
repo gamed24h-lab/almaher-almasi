@@ -1,0 +1,33 @@
+/* A4 ticket print correction: the isolated print helper measures the screen layout before print media applies.
+   Never keep that preliminary transform in the actual A4 print. The approved A4 compact rules
+   in ticket-approved.css own the final page sizing. */
+@media print {
+  body[data-print-mode="a4"] .isolated-print-root {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 auto !important;
+  }
+
+  body[data-print-mode="a4"] .ticket-page {
+    transform: none !important;
+    transform-origin: top center !important;
+    width: 190mm !important;
+    max-width: 190mm !important;
+    min-width: 190mm !important;
+    margin: 0 auto !important;
+  }
+
+  /* The decorative clock tower was removed from the markup. Reclaim its former middle column. */
+  body[data-print-mode="a4"] .ticket-head {
+    grid-template-columns: minmax(0, 1fr) minmax(42mm, .72fr) !important;
+    gap: 4mm !important;
+  }
+
+  body[data-print-mode="a4"] .ticket-meta-card {
+    grid-column: 2 !important;
+    justify-self: end !important;
+  }
+}
