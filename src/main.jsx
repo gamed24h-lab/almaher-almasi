@@ -18,6 +18,7 @@ import './ticket-thermal-table.css';
 import './mobile-booking-ticket.css';
 import './ticket-a4-no-scale.css';
 import './ticket-a4-mobile-print-final.css';
+import './ticket-readability-final.css';
 
 installBookingSaveRuntimeGuard();
 
