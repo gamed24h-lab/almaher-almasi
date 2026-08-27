@@ -1,0 +1,150 @@
+/* AL-MAHER — final ticket readability layer
+   Isolated ticket-only overrides. Does not change booking logic or layout structure. */
+.ticket-page{
+  font-family:Tahoma,"Segoe UI",Arial,sans-serif!important;
+  color:#142033!important;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+.ticket-page span,
+.ticket-page small,
+.ticket-page td,
+.ticket-page th,
+.ticket-page li{
+  color:#334155!important;
+}
+.ticket-page strong,
+.ticket-page b,
+.ticket-page h1,
+.ticket-page h2,
+.ticket-page h3{
+  color:#102f56!important;
+}
+.ticket-page .ticket-section-heading h3,
+.ticket-page .journey-label strong,
+.ticket-page .ticket-meta-label,
+.ticket-page .ticket-customer-strip>div>span,
+.ticket-page .ticket-housing-grid>div>span,
+.ticket-page .ticket-finance-grid>div>span{
+  font-weight:800!important;
+}
+.ticket-page .ticket-customer-strip strong,
+.ticket-page .journey-details strong,
+.ticket-page .ticket-housing-grid strong,
+.ticket-page .ticket-finance-grid b,
+.ticket-page .ticket-passenger-table td,
+.ticket-page .ticket-branch-card span{
+  font-weight:700!important;
+}
+.ticket-page .ticket-passenger-table th{
+  font-weight:900!important;
+  color:#1f3552!important;
+}
+
+/* Mandatory attendance reminder — appears only when journey details exist. */
+.ticket-page .journey-details::after{
+  content:"يجب الحضور قبل الانطلاق بـ 30 دقيقة";
+  grid-column:1/-1;
+  display:block;
+  margin-top:7px;
+  padding-top:7px;
+  border-top:1px dashed #c7a54d;
+  color:#8a5b00!important;
+  font-size:12px;
+  line-height:1.55;
+  font-weight:900;
+  text-align:right;
+}
+
+/* Tell the passenger exactly what the customer-portal QR is for. */
+.ticket-page .ticket-qr-panel>div:nth-child(3)::after{
+  content:"امسح الرمز للاطلاع على الشروط والأحكام كاملة";
+  display:block;
+  max-width:150px;
+  margin:4px auto 0;
+  color:#334155!important;
+  font-size:10.5px;
+  line-height:1.45;
+  font-weight:800;
+  text-align:center;
+}
+.ticket-page .ticket-terms::after{
+  content:"إتمام الحجز واستلام التذكرة يُعد إقرارًا بالاطلاع والموافقة على الشروط والأحكام. امسح رمز بوابة العميل للاطلاع عليها كاملة.";
+  display:block;
+  margin-top:7px;
+  padding-top:7px;
+  border-top:1px dashed #d4bf79;
+  color:#25364d!important;
+  font-size:10.5px;
+  line-height:1.6;
+  font-weight:800;
+}
+
+/* Print: improve contrast without changing the approved paper geometry. */
+@media print{
+  .ticket-page{
+    color:#111827!important;
+    -webkit-print-color-adjust:exact!important;
+    print-color-adjust:exact!important;
+  }
+  .ticket-page span,
+  .ticket-page small,
+  .ticket-page td,
+  .ticket-page th,
+  .ticket-page li{
+    color:#1f2937!important;
+    opacity:1!important;
+  }
+  .ticket-page strong,
+  .ticket-page b,
+  .ticket-page h1,
+  .ticket-page h2,
+  .ticket-page h3{
+    color:#0f2f55!important;
+    opacity:1!important;
+  }
+  body[data-print-mode="a4"] .ticket-page{
+    font-size:12.5px!important;
+  }
+  body[data-print-mode="a4"] .ticket-page .ticket-customer-strip strong,
+  body[data-print-mode="a4"] .ticket-page .journey-details strong,
+  body[data-print-mode="a4"] .ticket-page .ticket-housing-grid strong,
+  body[data-print-mode="a4"] .ticket-page .ticket-passenger-table td,
+  body[data-print-mode="a4"] .ticket-page .ticket-finance-grid b{
+    font-size:12px!important;
+    line-height:1.55!important;
+  }
+  body[data-print-mode="a4"] .ticket-page .ticket-passenger-table th,
+  body[data-print-mode="a4"] .ticket-page .ticket-section-heading h3{
+    font-size:11.5px!important;
+  }
+  body[data-print-mode="a4"] .ticket-page .ticket-terms li{
+    font-size:9.8px!important;
+    line-height:1.55!important;
+  }
+  body[data-print-mode="a4"] .ticket-page .journey-details::after{
+    font-size:10.5px!important;
+    margin-top:1.5mm!important;
+    padding-top:1.5mm!important;
+  }
+  body[data-print-mode="a4"] .ticket-page .ticket-qr-panel>div:nth-child(3)::after,
+  body[data-print-mode="a4"] .ticket-page .ticket-terms::after{
+    font-size:8.8px!important;
+  }
+
+  /* Thermal: keep the same message but compact enough for 80/58mm. */
+  body[data-print-mode="80"] .ticket-page .journey-details::after,
+  body[data-print-mode="58"] .ticket-page .journey-details::after{
+    font-size:9px!important;
+    line-height:1.4!important;
+    margin-top:4px!important;
+    padding-top:4px!important;
+  }
+  body[data-print-mode="80"] .ticket-page .ticket-qr-panel>div:nth-child(3)::after,
+  body[data-print-mode="58"] .ticket-page .ticket-qr-panel>div:nth-child(3)::after,
+  body[data-print-mode="80"] .ticket-page .ticket-terms::after,
+  body[data-print-mode="58"] .ticket-page .ticket-terms::after{
+    font-size:8px!important;
+    line-height:1.35!important;
+  }
+}
