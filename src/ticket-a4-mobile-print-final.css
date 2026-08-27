@@ -127,4 +127,43 @@
   body[data-print-mode="a4"] .ticket-footer-strip {
     flex-direction: row !important;
   }
+
+  /* One/few-passenger tickets should breathe on desktop A4 instead of sitting in the top half. */
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) {
+    padding-top: 7mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-logo {
+    width: 20mm !important;
+    height: 20mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-title-band {
+    padding-top: 2.2mm !important;
+    padding-bottom: 2.2mm !important;
+    margin-bottom: 3mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-customer-strip > div {
+    padding-top: 2.2mm !important;
+    padding-bottom: 2.2mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .journey-block {
+    min-height: 25mm !important;
+    padding-top: 2.2mm !important;
+    padding-bottom: 2.2mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-section {
+    margin-top: 2.5mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-housing-grid > div,
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-finance-grid > div {
+    padding-top: 2mm !important;
+    padding-bottom: 2mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-qr-panel img {
+    width: 20mm !important;
+    height: 20mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-page:not(.dense):not(.ultra-dense) .ticket-terms ol {
+    font-size: 7.6px !important;
+    line-height: 1.42 !important;
+  }
 }
