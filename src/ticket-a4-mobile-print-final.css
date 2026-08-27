@@ -1,0 +1,130 @@
+/* Final A4 cross-browser print layer.
+   Safari/iOS evaluates the phone-width responsive rules inside the isolated print window.
+   Force the approved desktop/A4 geometry back during print, while keeping screen/mobile UI untouched. */
+@media print {
+  body[data-print-mode="a4"] .isolated-print-root {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    min-width: 190mm !important;
+    margin: 0 auto !important;
+    overflow: visible !important;
+  }
+
+  body[data-print-mode="a4"] .ticket-page {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    min-width: 190mm !important;
+    transform: none !important;
+    margin: 0 auto !important;
+    overflow: hidden !important;
+  }
+
+  /* Undo phone responsive geometry that Safari keeps active in print preview. */
+  body[data-print-mode="a4"] .ticket-head {
+    grid-template-columns: minmax(0,1fr) minmax(42mm,.72fr) !important;
+    gap: 4mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-meta-card {
+    grid-column: 2 !important;
+    min-width: 42mm !important;
+    justify-self: end !important;
+  }
+  body[data-print-mode="a4"] .ticket-logo {
+    width: 17mm !important;
+    height: 17mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-customer-strip {
+    grid-template-columns: 1.5fr 1fr 1fr 1fr !important;
+  }
+  body[data-print-mode="a4"] .ticket-customer-strip > div {
+    border-bottom: 0 !important;
+  }
+  body[data-print-mode="a4"] .ticket-customer-strip > div:not(:last-child) {
+    border-left: 1px solid #e5e8ed !important;
+  }
+  body[data-print-mode="a4"] .ticket-journeys {
+    grid-template-columns: repeat(2,minmax(0,1fr)) !important;
+  }
+  body[data-print-mode="a4"] .ticket-passenger-table-wrap {
+    overflow: hidden !important;
+    scrollbar-width: none !important;
+  }
+  body[data-print-mode="a4"] .ticket-passenger-table-wrap::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  body[data-print-mode="a4"] .ticket-passenger-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+  }
+  body[data-print-mode="a4"] .ticket-housing-grid,
+  body[data-print-mode="a4"] .ticket-finance-grid {
+    grid-template-columns: repeat(4,minmax(0,1fr)) !important;
+  }
+  body[data-print-mode="a4"] .ticket-housing-grid > div,
+  body[data-print-mode="a4"] .ticket-finance-grid > div {
+    border-bottom: 0 !important;
+  }
+
+  /* Give QR codes and terms their own full-width rows so more terms can be added safely. */
+  body[data-print-mode="a4"] .ticket-bottom {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto auto !important;
+    gap: 1.4mm !important;
+    align-items: start !important;
+    margin-top: 1.6mm !important;
+    padding-top: 1.4mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-qr-panel {
+    width: 100% !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    gap: 5mm !important;
+    overflow: visible !important;
+  }
+  body[data-print-mode="a4"] .ticket-qr-panel > div {
+    flex: 0 0 auto !important;
+  }
+  body[data-print-mode="a4"] .ticket-qr-panel img {
+    width: 17mm !important;
+    height: 17mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-qr-panel span {
+    font-size: 7px !important;
+    line-height: 1.2 !important;
+    margin-top: .5mm !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms {
+    width: 100% !important;
+    display: block !important;
+    padding: 1.2mm 2mm 1mm !important;
+    border: 1px solid #eadfbf !important;
+    border-radius: 2mm !important;
+    background: #fffdf7 !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms h3 {
+    margin: 0 0 .7mm !important;
+    font-size: 9px !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms ol {
+    columns: 2 !important;
+    column-gap: 7mm !important;
+    margin: 0 !important;
+    padding-inline-start: 4mm !important;
+    font-size: 7px !important;
+    line-height: 1.35 !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms li {
+    break-inside: avoid !important;
+    margin-bottom: .5mm !important;
+  }
+
+  body[data-print-mode="a4"] .ticket-footer-strip {
+    flex-direction: row !important;
+  }
+}
