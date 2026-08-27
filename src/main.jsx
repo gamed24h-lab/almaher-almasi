@@ -19,6 +19,7 @@ import './mobile-booking-ticket.css';
 import './ticket-a4-no-scale.css';
 import './ticket-a4-mobile-print-final.css';
 import './ticket-readability-final.css';
+import './ticket-a4-one-page-final.css';
 
 installBookingSaveRuntimeGuard();
 
