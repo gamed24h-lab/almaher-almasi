@@ -1,0 +1,80 @@
+/* Final A4 one-page refinement. Safe, isolated overrides only. */
+@media print {
+  body[data-print-mode="a4"] .ticket-page{
+    padding-top:14px !important;
+    padding-bottom:12px !important;
+  }
+  body[data-print-mode="a4"] .ticket-head{
+    padding-top:0 !important;
+    padding-bottom:7px !important;
+    min-height:0 !important;
+    align-items:start !important;
+  }
+  body[data-print-mode="a4"] .ticket-brand-lockup,
+  body[data-print-mode="a4"] .ticket-meta-card{margin-top:0 !important}
+  body[data-print-mode="a4"] .ticket-title-band{
+    margin-top:4px !important;
+    margin-bottom:5px !important;
+    padding-block:5px !important;
+  }
+  /* passenger count is already shown in the passenger heading */
+  body[data-print-mode="a4"] .ticket-finance-grid>div:last-child{display:none !important}
+
+  /* use width efficiently so the terms remain on page one */
+  body[data-print-mode="a4"] .ticket-terms{
+    padding:7px 9px !important;
+    margin-top:5px !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms h3{margin-bottom:2px !important}
+  body[data-print-mode="a4"] .ticket-terms ol{
+    column-count:2 !important;
+    column-gap:18px !important;
+    column-fill:balance !important;
+    margin:4px 0 0 !important;
+    padding-inline-start:18px !important;
+  }
+  body[data-print-mode="a4"] .ticket-terms li{
+    break-inside:avoid-column !important;
+    page-break-inside:avoid !important;
+    margin-bottom:3px !important;
+    line-height:1.35 !important;
+    font-size:8.6px !important;
+  }
+
+  /* keep the QR instruction readable and compact */
+  body[data-print-mode="a4"] .ticket-qr-panel>div:last-child span{
+    font-size:8px !important;
+    line-height:1.25 !important;
+    white-space:normal !important;
+    max-width:150px !important;
+  }
+  body[data-print-mode="a4"] .ticket-bottom::after{
+    font-size:8px !important;
+    line-height:1.3 !important;
+    margin-top:4px !important;
+  }
+  body[data-print-mode="a4"] .ticket-branch-card{margin-top:5px !important}
+  body[data-print-mode="a4"] .ticket-footer-strip{
+    margin-top:5px !important;
+    padding-block:5px !important;
+  }
+  /* external tickets carry company identity only */
+  body[data-print-mode="a4"] .ticket-developer-line{display:none !important}
+
+  /* Dynamic density: larger bookings compress only where needed. */
+  body[data-print-mode="a4"] .ticket-page.dense .ticket-terms li{
+    font-size:8px !important;
+    line-height:1.28 !important;
+    margin-bottom:2px !important;
+  }
+  body[data-print-mode="a4"] .ticket-page.dense .ticket-section,
+  body[data-print-mode="a4"] .ticket-page.dense .journey-block{margin-block:4px !important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms li{
+    font-size:7.6px !important;
+    line-height:1.22 !important;
+    margin-bottom:1px !important;
+  }
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms ol{column-gap:12px !important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-section,
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .journey-block{margin-block:3px !important}
+}
