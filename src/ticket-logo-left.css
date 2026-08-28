@@ -8,6 +8,7 @@
  .ticket-page .ticket-meta-card{grid-column:2!important;justify-self:end!important;direction:rtl!important}
 }
 
+/* Mobile screen: make the logo clearly larger while keeping the booking card readable. */
 @media screen and (max-width:760px){
  .ticket-page .ticket-brand-lockup{align-items:flex-start!important;justify-content:flex-start!important}
  .ticket-page .ticket-logo{width:180px!important;height:90px!important;max-width:52vw!important;object-fit:contain!important;object-position:left center!important;transform:none!important;transform-origin:left center!important}
