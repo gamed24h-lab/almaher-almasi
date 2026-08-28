@@ -8,6 +8,15 @@ function bookingNumberFromTicket(ticket){
   return text(ticket?.querySelector('.ticket-meta-card > b')?.textContent);
 }
 
+function removePassengerCount(ticket){
+  const financeGrid=ticket?.querySelector('.ticket-finance-grid');
+  if(!financeGrid)return;
+  for(const item of [...financeGrid.children]){
+    const label=text(item.querySelector('span')?.textContent);
+    if(label==='عدد المسافرين')item.remove();
+  }
+}
+
 function legalItem(label,value){
   const div=document.createElement('div');
   div.className='ticket-branch-legal-item';
@@ -23,6 +32,7 @@ async function syncTicketLegal(){
 
   const brandCaption=ticket.querySelector('.ticket-brand-english');
   if(brandCaption)brandCaption.remove();
+  removePassengerCount(ticket);
 
   const branchCard=ticket.querySelector('.ticket-branch-card');
   if(!branchCard)return;
