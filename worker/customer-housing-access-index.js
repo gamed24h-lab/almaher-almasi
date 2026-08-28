@@ -85,6 +85,18 @@ async function customerReturnTrip(env,body={}){
  };
 }
 
+async function customerBranchContacts(env,body={}){
+ const branchId=s(body?.booking?.branchId||body?.booking?.branch_id||body?.branch?.id).trim();
+ if(!branchId)return [];
+ const contacts=await rows(env,'branch_contacts',`branch_id=eq.${enc(branchId)}&select=label,phone,sort_order&order=sort_order.asc&limit=20`);
+ const seen=new Set();
+ return contacts.map(c=>({label:s(c?.label||'رقم التواصل').trim()||'رقم التواصل',phone:s(c?.phone).trim()})).filter(c=>{
+   const key=c.phone.replace(/\s+/g,'');
+   if(!key||seen.has(key))return false;
+   seen.add(key);return true;
+ });
+}
+
 async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
  const inner=await appWorker.fetch(request,env,ctx);
  if(!inner.ok)return inner;
@@ -101,6 +113,13 @@ async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
    try{const returnTrip=await customerReturnTrip(env,body);if(returnTrip)additions.returnTrip=returnTrip}
    catch(e){additions.return_trip_warning=e?.message||'تعذر تحميل رحلة العودة.'}
  }
+ try{
+   const contacts=await customerBranchContacts(env,body);
+   if(contacts.length){
+     const phoneDisplay=contacts.map(c=>c.phone).join(' · ');
+     additions.branch={...(body.branch||{}),contacts,whatsapp:phoneDisplay,phone:contacts[0].phone};
+   }
+ }catch(e){additions.branch_contacts_warning=e?.message||'تعذر تحميل أرقام تواصل الفرع.'}
  return json({...body,...additions},inner.status||200);
 }
 
