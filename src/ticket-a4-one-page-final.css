@@ -1,115 +1,28 @@
 /* Final A4 one-page refinement. Safe, isolated overrides only. */
 @media print {
-  body[data-print-mode="a4"] .ticket-page{
-    padding-top:12px !important;
-    padding-bottom:8px !important;
-  }
-  body[data-print-mode="a4"] .ticket-head{
-    padding-top:0 !important;
-    padding-bottom:5px !important;
-    min-height:0 !important;
-    align-items:start !important;
-  }
-  body[data-print-mode="a4"] .ticket-brand-lockup,
-  body[data-print-mode="a4"] .ticket-meta-card{margin-top:0 !important}
-  body[data-print-mode="a4"] .ticket-title-band{
-    margin-top:3px !important;
-    margin-bottom:4px !important;
-    padding-block:4px !important;
-  }
-  /* passenger count is already shown in the passenger heading */
-  body[data-print-mode="a4"] .ticket-finance-grid>div:last-child{display:none !important}
-
-  /* keep QR area compact while preserving scan size */
-  body[data-print-mode="a4"] .ticket-qr-panel{
-    margin-block:4px !important;
-    gap:14px !important;
-  }
-  body[data-print-mode="a4"] .ticket-qr-panel img{
-    width:76px !important;
-    height:76px !important;
-  }
-  body[data-print-mode="a4"] .ticket-qr-panel>div:nth-child(3)::after{
-    content:"امسح الرمز للشروط والأحكام كاملة" !important;
-    font-size:8px !important;
-    line-height:1.15 !important;
-    max-width:170px !important;
-    white-space:nowrap !important;
-    margin-top:2px !important;
-  }
-
-  /* Real two-column grid. Print engines handle this more reliably than CSS columns. */
-  body[data-print-mode="a4"] .ticket-terms{
-    padding:6px 8px 5px !important;
-    margin-top:3px !important;
-  }
-  body[data-print-mode="a4"] .ticket-terms h3{
-    margin:0 0 2px !important;
-    font-size:9.4px !important;
-  }
-  body[data-print-mode="a4"] .ticket-terms ol{
-    display:grid !important;
-    grid-template-rows:repeat(5,auto) !important;
-    grid-auto-flow:column !important;
-    grid-auto-columns:minmax(0,1fr) !important;
-    column-gap:16px !important;
-    row-gap:1px !important;
-    margin:2px 0 0 !important;
-    padding-inline-start:14px !important;
-    list-style-position:outside !important;
-  }
-  body[data-print-mode="a4"] .ticket-terms li{
-    break-inside:avoid !important;
-    page-break-inside:avoid !important;
-    margin:0 !important;
-    padding-inline-end:2px !important;
-    line-height:1.25 !important;
-    font-size:8.35px !important;
-  }
-  body[data-print-mode="a4"] .ticket-terms::after{
-    content:"استلام التذكرة يُعد إقرارًا بالموافقة على الشروط والأحكام. امسح رمز بوابة العميل للاطلاع عليها كاملة." !important;
-    margin-top:3px !important;
-    padding-top:3px !important;
-    font-size:8px !important;
-    line-height:1.2 !important;
-  }
-
-  body[data-print-mode="a4"] .ticket-branch-card{
-    margin-top:3px !important;
-    padding-block:4px !important;
-  }
-  body[data-print-mode="a4"] .ticket-footer-strip{
-    margin-top:3px !important;
-    padding-block:4px !important;
-  }
-  body[data-print-mode="a4"] .ticket-blessing strong{font-size:9px !important}
-  body[data-print-mode="a4"] .ticket-blessing span{font-size:7.6px !important}
-
-  /* external tickets carry company identity only */
-  body[data-print-mode="a4"] .ticket-developer-line{display:none !important}
-
-  /* Dynamic density: larger bookings compress only where needed. */
-  body[data-print-mode="a4"] .ticket-page.dense .ticket-terms li{
-    font-size:7.9px !important;
-    line-height:1.2 !important;
-  }
-  body[data-print-mode="a4"] .ticket-page.dense .ticket-section,
-  body[data-print-mode="a4"] .ticket-page.dense .journey-block{margin-block:3px !important}
-  body[data-print-mode="a4"] .ticket-page.dense .ticket-passenger-table th,
-  body[data-print-mode="a4"] .ticket-page.dense .ticket-passenger-table td{
-    padding-block:3px !important;
-    font-size:9.5px !important;
-  }
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms li{
-    font-size:7.4px !important;
-    line-height:1.16 !important;
-  }
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms ol{column-gap:10px !important}
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-section,
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .journey-block{margin-block:2px !important}
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-passenger-table th,
-  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-passenger-table td{
-    padding-block:2px !important;
-    font-size:9px !important;
-  }
+  body[data-print-mode="a4"] .ticket-page{padding-top:5px!important;padding-bottom:3px!important}
+  body[data-print-mode="a4"] .ticket-head{padding-top:0!important;padding-bottom:2px!important;min-height:0!important;align-items:start!important}
+  body[data-print-mode="a4"] .ticket-brand-lockup,body[data-print-mode="a4"] .ticket-meta-card{margin-top:-2px!important}
+  body[data-print-mode="a4"] .ticket-title-band{margin-top:1px!important;margin-bottom:2px!important;padding-block:3px!important}
+  body[data-print-mode="a4"] .ticket-finance-grid>div:last-child{display:none!important}
+  body[data-print-mode="a4"] .ticket-qr-panel{margin-top:1px!important;margin-bottom:2px!important;gap:12px!important}
+  body[data-print-mode="a4"] .ticket-qr-panel img{width:74px!important;height:74px!important}
+  body[data-print-mode="a4"] .ticket-qr-panel>div:nth-child(3)::after{content:"امسح الرمز للشروط والأحكام كاملة"!important;font-size:8.2px!important;font-weight:700!important;line-height:1.1!important;max-width:180px!important;white-space:nowrap!important;margin-top:1px!important}
+  body[data-print-mode="a4"] .ticket-terms{padding:4px 7px 3px!important;margin-top:1px!important}
+  body[data-print-mode="a4"] .ticket-terms h3{margin:0 0 1px!important;font-size:9.6px!important}
+  body[data-print-mode="a4"] .ticket-terms ol{display:grid!important;grid-template-rows:repeat(5,auto)!important;grid-auto-flow:column!important;grid-auto-columns:minmax(0,1fr)!important;column-gap:14px!important;row-gap:0!important;margin:1px 0 0!important;padding-inline-start:14px!important;list-style-position:outside!important}
+  body[data-print-mode="a4"] .ticket-terms li{break-inside:avoid!important;page-break-inside:avoid!important;margin:0!important;padding-inline-end:2px!important;line-height:1.18!important;font-size:8.45px!important;font-weight:600!important}
+  body[data-print-mode="a4"] .ticket-terms::after{content:"استلام التذكرة يُعد إقرارًا بالموافقة على الشروط والأحكام. امسح رمز بوابة العميل للاطلاع عليها كاملة."!important;margin-top:2px!important;padding-top:2px!important;font-size:8px!important;line-height:1.1!important}
+  body[data-print-mode="a4"] .ticket-branch-card{margin-top:1px!important;padding-block:2px!important;min-height:0!important}
+  body[data-print-mode="a4"] .ticket-footer-strip{margin-top:1px!important;padding-block:2px!important;min-height:0!important}
+  body[data-print-mode="a4"] .ticket-blessing strong{font-size:9px!important}
+  body[data-print-mode="a4"] .ticket-blessing span{font-size:7.6px!important}
+  body[data-print-mode="a4"] .ticket-developer-line{display:none!important}
+  body[data-print-mode="a4"] .ticket-page.dense .ticket-terms li{font-size:7.95px!important;line-height:1.15!important}
+  body[data-print-mode="a4"] .ticket-page.dense .ticket-section,body[data-print-mode="a4"] .ticket-page.dense .journey-block{margin-block:2px!important}
+  body[data-print-mode="a4"] .ticket-page.dense .ticket-passenger-table th,body[data-print-mode="a4"] .ticket-page.dense .ticket-passenger-table td{padding-block:2px!important;font-size:9.5px!important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms li{font-size:7.5px!important;line-height:1.12!important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-terms ol{column-gap:9px!important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-section,body[data-print-mode="a4"] .ticket-page.ultra-dense .journey-block{margin-block:1px!important}
+  body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-passenger-table th,body[data-print-mode="a4"] .ticket-page.ultra-dense .ticket-passenger-table td{padding-block:1px!important;font-size:9px!important}
 }
