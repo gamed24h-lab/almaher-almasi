@@ -5,6 +5,7 @@ import GlobalFeedback from './components/GlobalFeedback.jsx';
 import {ThemeProvider} from './core/ThemeContext.jsx';
 import {SystemBrandProvider} from './core/SystemBrandContext.jsx';
 import {installBookingSaveRuntimeGuard} from './lib/bookingSaveRuntimeGuard.js';
+import {installTicketLegalBottom} from './ticket-legal-bottom.js';
 import './styles.css';
 import './mobile-safe-area.css';
 import './themes.css';
@@ -23,5 +24,6 @@ import './ticket-a4-one-page-final.css';
 import './ticket-branch-license.css';
 
 installBookingSaveRuntimeGuard();
+installTicketLegalBottom();
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
