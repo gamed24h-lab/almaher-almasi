@@ -1,6 +1,21 @@
 .ticket-page{position:relative}
-.ticket-page .ticket-footer-license{position:absolute;top:92px;left:32px;z-index:3;margin:0!important;padding:3px 9px;border:1px solid #d8c47a;border-radius:8px;background:#fffdf8;color:#16345b;font-size:10px;line-height:1.2;font-weight:800;white-space:nowrap}
+
+/* Screen only: keep the ticket layout in normal flow and prevent the
+   license badge from floating over the header/title area. */
+@media screen and (min-width:761px){
+ .ticket-page .ticket-head{grid-template-columns:minmax(0,1fr) minmax(220px,240px)!important;gap:24px!important}
+ .ticket-page .ticket-brand-lockup{min-width:0!important}
+ .ticket-page .ticket-meta-card{min-width:220px!important;max-width:240px!important;width:100%!important}
+}
+@media screen{
+ .ticket-page .ticket-footer-license{position:static!important;inset:auto!important;z-index:auto!important;transform:none!important;margin:0 0 4px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;color:#e8eef7!important;font-size:7px!important;line-height:1.25!important;font-weight:700!important;white-space:normal!important;text-align:center!important}
+}
+
+/* Print is intentionally preserved exactly as approved. */
 @media print{
+ .ticket-page .ticket-footer-license{position:absolute;top:92px;left:32px;z-index:3;margin:0!important;padding:3px 9px;border:1px solid #d8c47a;border-radius:8px;background:#fffdf8;color:#16345b;font-size:10px;line-height:1.2;font-weight:800;white-space:nowrap}
  body[data-print-mode="a4"] .ticket-page .ticket-footer-license{top:82px;left:34px;font-size:8.6px;padding:2px 7px;border-radius:6px}
 }
-@media(max-width:700px){.ticket-page .ticket-footer-license{top:78px;left:20px;font-size:8px;padding:2px 6px}}
+@media screen and (max-width:700px){
+ .ticket-page .ticket-footer-license{font-size:7px!important}
+}
