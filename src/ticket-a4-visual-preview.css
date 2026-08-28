@@ -1,0 +1,108 @@
+/* A4 print-only visual preview — screen and thermal are intentionally untouched. */
+@media print {
+  body[data-print-mode="a4"] .ticket-head{
+    display:flex!important;
+    direction:ltr!important;
+    align-items:flex-start!important;
+    justify-content:space-between!important;
+    gap:8mm!important;
+    padding:0 0 2.5mm!important;
+  }
+  body[data-print-mode="a4"] .ticket-brand-lockup{
+    width:48mm!important;
+    min-width:48mm!important;
+    align-items:flex-start!important;
+    justify-content:flex-start!important;
+    gap:.7mm!important;
+    direction:rtl!important;
+  }
+  body[data-print-mode="a4"] .ticket-logo{
+    width:42mm!important;
+    height:26mm!important;
+    object-fit:contain!important;
+    transform:none!important;
+    transform-origin:left top!important;
+  }
+  body[data-print-mode="a4"] .ticket-brand-english{
+    width:42mm!important;
+    text-align:center!important;
+    font-size:6.6px!important;
+    letter-spacing:.42px!important;
+  }
+  body[data-print-mode="a4"] .ticket-meta-card{
+    width:52mm!important;
+    min-width:52mm!important;
+    margin-left:auto!important;
+    direction:rtl!important;
+  }
+
+  /* Keep the licence visually attached to the brand, directly below the logo. */
+  body[data-print-mode="a4"] .ticket-page .ticket-footer-license{
+    position:absolute!important;
+    top:28.8mm!important;
+    left:8.2mm!important;
+    width:36mm!important;
+    margin:0!important;
+    padding:.8mm 1.4mm!important;
+    border:1px solid #d8c47a!important;
+    border-radius:2mm!important;
+    background:#fffdf8!important;
+    color:#16345b!important;
+    font-size:6.4px!important;
+    line-height:1.2!important;
+    font-weight:800!important;
+    text-align:center!important;
+    white-space:nowrap!important;
+    z-index:5!important;
+  }
+
+  /* Outbound and return remain clearly paired on one row. */
+  body[data-print-mode="a4"] .ticket-journeys{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:2mm!important;
+  }
+  body[data-print-mode="a4"] .journey-block{
+    min-width:0!important;
+    min-height:22mm!important;
+  }
+
+  /* Make accommodation information read as one clear operational band. */
+  body[data-print-mode="a4"] .ticket-housing-grid{
+    display:grid!important;
+    grid-template-columns:1.35fr 1.15fr .8fr .8fr!important;
+    align-items:stretch!important;
+  }
+  body[data-print-mode="a4"] .ticket-housing-grid>div{
+    min-width:0!important;
+  }
+
+  /* Keep the financial summary together and visible before the branch strip. */
+  body[data-print-mode="a4"] .ticket-finance-grid{
+    display:grid!important;
+    grid-template-columns:repeat(6,minmax(0,1fr))!important;
+    align-items:stretch!important;
+  }
+  body[data-print-mode="a4"] .ticket-finance-grid>div{
+    min-width:0!important;
+  }
+
+  /* Allow all configured branch contacts to stay on the same strip without wrapping badly. */
+  body[data-print-mode="a4"] .ticket-branch-card{
+    display:flex!important;
+    align-items:center!important;
+    justify-content:space-between!important;
+    gap:2mm!important;
+    flex-wrap:wrap!important;
+  }
+  body[data-print-mode="a4"] .ticket-branch-card>div{
+    min-width:0!important;
+    white-space:nowrap!important;
+  }
+
+  /* Preserve the existing one-page A4 footprint. */
+  body[data-print-mode="a4"] .ticket-page{
+    max-height:274mm!important;
+    overflow:hidden!important;
+  }
+}
