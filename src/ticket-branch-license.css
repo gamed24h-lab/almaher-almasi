@@ -1,0 +1,6 @@
+.ticket-page{position:relative}
+.ticket-page .ticket-footer-license{position:absolute;top:92px;left:32px;z-index:3;margin:0!important;padding:3px 9px;border:1px solid #d8c47a;border-radius:8px;background:#fffdf8;color:#16345b;font-size:10px;line-height:1.2;font-weight:800;white-space:nowrap}
+@media print{
+ body[data-print-mode="a4"] .ticket-page .ticket-footer-license{top:82px;left:34px;font-size:8.6px;padding:2px 7px;border-radius:6px}
+}
+@media(max-width:700px){.ticket-page .ticket-footer-license{top:78px;left:20px;font-size:8px;padding:2px 6px}}
