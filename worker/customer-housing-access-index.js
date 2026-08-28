@@ -80,6 +80,6 @@ async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url);
  if(request.method==='GET'&&u.pathname==='/api/customer/access')return enrichCustomerResponse(request,env,ctx,{withHousing:true});
- if(request.method==='GET'&&u.pathname==='/api/customer/booking')return enrichCustomerResponse(request,env,ctx,{withHousing:false});
+ if(request.method==='GET'&&u.pathname==='/api/customer/booking')return enrichCustomerResponse(request,env,ctx,{withHousing:true});
  return appWorker.fetch(request,env,ctx);
 }};
