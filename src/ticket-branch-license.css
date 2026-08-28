@@ -1,6 +1,69 @@
-.ticket-page{position:relative}
-.ticket-page .ticket-footer-license{position:absolute;top:92px;left:32px;z-index:3;margin:0!important;padding:3px 9px;border:1px solid #d8c47a;border-radius:8px;background:#fffdf8;color:#16345b;font-size:10px;line-height:1.2;font-weight:800;white-space:nowrap}
-@media print{
- body[data-print-mode="a4"] .ticket-page .ticket-footer-license{top:82px;left:34px;font-size:8.6px;padding:2px 7px;border-radius:6px}
+/* Branch licence + desktop ticket preview.
+   Screen rules stay isolated from the approved A4/thermal print geometry. */
+.ticket-page{
+  position:relative;
 }
-@media(max-width:700px){.ticket-page .ticket-footer-license{top:78px;left:20px;font-size:8px;padding:2px 6px}}
+
+/* Present the on-screen ticket as an A4-width sheet instead of stretching it. */
+@media screen and (min-width:761px){
+  .ticket-page{
+    width:100%;
+    max-width:210mm!important;
+    margin:24px auto 48px!important;
+    box-shadow:0 24px 64px rgba(16,47,86,.16)!important;
+  }
+}
+
+/* Keep the licence visually attached to the centred branch identity. */
+.ticket-page .ticket-footer-license{
+  position:absolute;
+  top:123px;
+  left:50%;
+  z-index:3;
+  transform:translateX(-50%);
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  border-radius:0!important;
+  background:transparent!important;
+  color:#16345b!important;
+  font-size:9px;
+  line-height:1.25;
+  font-weight:800;
+  letter-spacing:.1px;
+  text-align:center;
+  white-space:nowrap;
+}
+
+@media print{
+  body[data-print-mode="a4"] .ticket-page .ticket-footer-license{
+    top:105px;
+    left:50%;
+    transform:translateX(-50%);
+    padding:0!important;
+    border:0!important;
+    background:transparent!important;
+    color:#16345b!important;
+    font-size:6.4px!important;
+  }
+
+  body[data-print-mode="80"] .ticket-page .ticket-footer-license,
+  body[data-print-mode="58"] .ticket-page .ticket-footer-license{
+    position:static!important;
+    transform:none!important;
+    display:block!important;
+    margin:.7mm 0 0!important;
+    color:#333!important;
+    font-size:6.2px!important;
+    text-align:center!important;
+  }
+}
+
+@media(max-width:700px){
+  .ticket-page .ticket-footer-license{
+    top:101px;
+    left:50%;
+    transform:translateX(-50%);
+    font-size:7.5px;
+  }
+}
