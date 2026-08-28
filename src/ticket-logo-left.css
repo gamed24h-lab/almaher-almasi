@@ -3,7 +3,7 @@
  .ticket-page .ticket-head{direction:ltr!important;grid-template-columns:minmax(0,1fr) minmax(220px,240px)!important;gap:24px!important;align-items:start!important}
  .ticket-page .ticket-brand-lockup{grid-column:1!important;justify-self:start!important;align-items:flex-start!important;justify-content:flex-start!important;width:max-content!important;max-width:100%!important;min-width:0!important}
  .ticket-page .ticket-logo{width:280px!important;height:135px!important;object-fit:contain!important;object-position:left center!important;transform:none!important;transform-origin:left center!important}
- .ticket-page .ticket-brand-english{align-self:flex-start!important;text-align:left!important}
+ .ticket-page .ticket-brand-english{display:none!important}
  .ticket-page .ticket-meta-card{grid-column:2!important;justify-self:end!important;direction:rtl!important}
 }
 
@@ -11,6 +11,6 @@
  body[data-print-mode="a4"] .ticket-page .ticket-head{direction:ltr!important;grid-template-columns:minmax(0,1fr) 51mm!important;gap:3mm!important;align-items:start!important}
  body[data-print-mode="a4"] .ticket-page .ticket-brand-lockup{grid-column:1!important;justify-self:start!important;align-items:flex-start!important;justify-content:flex-start!important;width:max-content!important;max-width:100%!important;gap:.7mm!important}
  body[data-print-mode="a4"] .ticket-page .ticket-logo{width:60mm!important;height:29mm!important;object-fit:contain!important;object-position:left center!important;transform:none!important;transform-origin:left center!important}
- body[data-print-mode="a4"] .ticket-page .ticket-brand-english{align-self:flex-start!important;text-align:left!important}
+ body[data-print-mode="a4"] .ticket-page .ticket-brand-english{display:none!important}
  body[data-print-mode="a4"] .ticket-page .ticket-meta-card{grid-column:2!important;justify-self:end!important;direction:rtl!important}
 }
