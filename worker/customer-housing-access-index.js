@@ -62,6 +62,29 @@ async function customerFinance(env,booking={}){
  };
 }
 
+async function customerReturnTrip(env,body={}){
+ const booking=body?.booking||{};
+ const mode=s(booking?.journeyMode||booking?.journey_mode).trim().toLowerCase();
+ if(!['roundtrip','separate','returnonly'].includes(mode))return null;
+ if(body?.returnTrip)return body.returnTrip;
+ if(mode==='roundtrip'&&body?.trip){
+   return {
+     ...body.trip,
+     return_date:body.trip.return_date||body.trip.departure_date||null,
+     return_time:body.trip.return_time||body.trip.departure_time||null
+   };
+ }
+ const returnTripId=s(booking?.returnTripId||booking?.return_trip_id).trim();
+ if(!returnTripId)return null;
+ const trip=(await rows(env,'trips',`id=eq.${enc(returnTripId)}&select=id,trip_code,from_city,to_city,departure_date,departure_time,return_date,return_time,status&limit=1`))[0]||null;
+ if(!trip)return null;
+ return {
+   ...trip,
+   return_date:trip.return_date||trip.departure_date||null,
+   return_time:trip.return_time||trip.departure_time||null
+ };
+}
+
 async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
  const inner=await appWorker.fetch(request,env,ctx);
  if(!inner.ok)return inner;
@@ -74,6 +97,10 @@ async function enrichCustomerResponse(request,env,ctx,{withHousing=false}={}){
  }
  try{additions.finance=await customerFinance(env,body.booking)}
  catch(e){additions.finance_warning=e?.message||'تعذر تحميل ملخص الاستردادات.'}
+ if(!body.returnTrip){
+   try{const returnTrip=await customerReturnTrip(env,body);if(returnTrip)additions.returnTrip=returnTrip}
+   catch(e){additions.return_trip_warning=e?.message||'تعذر تحميل رحلة العودة.'}
+ }
  return json({...body,...additions},inner.status||200);
 }
 
