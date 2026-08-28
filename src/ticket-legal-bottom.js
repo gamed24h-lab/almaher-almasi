@@ -20,6 +20,10 @@ function legalItem(label,value){
 async function syncTicketLegal(){
   const ticket=document.querySelector('.ticket-page');
   if(!ticket)return;
+
+  const brandCaption=ticket.querySelector('.ticket-brand-english');
+  if(brandCaption)brandCaption.remove();
+
   const branchCard=ticket.querySelector('.ticket-branch-card');
   if(!branchCard)return;
 
