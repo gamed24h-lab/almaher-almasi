@@ -1,0 +1,83 @@
+/* Screen-only ticket layout guard.
+   Keeps A4 / thermal print CSS untouched. */
+@media screen and (min-width:761px){
+  .ticket-page{
+    width:min(100%,920px);
+    max-width:920px;
+  }
+
+  .ticket-head{
+    grid-template-columns:minmax(0,1fr) 100px minmax(170px,.72fr)!important;
+    align-items:center!important;
+  }
+
+  .ticket-head>* ,
+  .ticket-brand-lockup,
+  .ticket-brand-copy,
+  .ticket-meta-card,
+  .ticket-customer-strip>div,
+  .journey-block,
+  .ticket-housing-grid>div,
+  .ticket-finance-grid>div{
+    min-width:0;
+  }
+
+  .ticket-brand-copy h1,
+  .ticket-brand-copy strong,
+  .ticket-brand-copy span,
+  .ticket-meta-card b,
+  .ticket-customer-strip strong,
+  .journey-route b,
+  .journey-details strong{
+    overflow-wrap:anywhere;
+  }
+
+  .ticket-brand-copy span{
+    white-space:normal;
+  }
+
+  .ticket-meta-card{
+    min-width:0;
+    max-width:100%;
+  }
+
+  .ticket-meta-card>b{
+    max-width:100%;
+    white-space:normal;
+  }
+
+  .ticket-customer-strip,
+  .ticket-journeys,
+  .ticket-housing-grid,
+  .ticket-finance-grid,
+  .ticket-bottom{
+    min-width:0;
+  }
+
+  .ticket-journeys{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .journey-route,
+  .journey-details{
+    min-width:0;
+  }
+
+  .journey-details>div{
+    min-width:0;
+    flex:1 1 auto;
+    justify-content:center;
+  }
+
+  .ticket-passenger-table-wrap{
+    max-width:100%;
+    overflow-x:auto;
+  }
+
+  .ticket-footer-license{
+    z-index:2;
+    max-width:190px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+}
