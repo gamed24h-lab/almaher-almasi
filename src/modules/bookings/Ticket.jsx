@@ -59,7 +59,8 @@ export default function TicketPage({bookingNo,go}){
  const localReturnTrip=data.trips.find(x=>str(x.id)===str(b?.return_trip_id));
  const returnTrip=localReturnTrip||linkedReturnTrip;
  const branch=data.branches.find(x=>str(x.id)===str(b?.branch_id));
- const branchContact=data.branchContacts.find(x=>str(x.branch_id)===str(b?.branch_id));
+ const branchContacts=(data.branchContacts||[]).filter(x=>str(x.branch_id)===str(b?.branch_id)).sort((a,z)=>Number(a?.sort_order||0)-Number(z?.sort_order||0));
+ const branchContact=branchContacts[0];
  const tripBranch=(data.tripBranches||[]).find(x=>str(x.trip_id)===str(b?.trip_id)&&str(x.branch_id)===str(b?.branch_id));
  const snap=b?.snapshot&&typeof b.snapshot==='object'?b.snapshot:{};
  const mode=lower(b?.journey_mode);
@@ -88,7 +89,8 @@ export default function TicketPage({bookingNo,go}){
  const printOptions=modeName=>({title:`تذكرة سفر — ${b.booking_number}`,pageSize:modeName==='a4'?'A4':`${modeName}mm`,orientation:'portrait',lang:printLanguage,dir,singlePage:modeName==='a4',bodyAttributes:{'data-print-mode':modeName,'data-print-language':printLanguage}});
  const ticketNode=()=>document.querySelector('.ticket-page');
  const doPrint=modeName=>{setError('');const el=ticketNode();if(!el)return setError('تعذر تجهيز التذكرة للطباعة.');try{printElement(el,printOptions(modeName))}catch(e){setError(e.message||'تعذر فتح الطباعة.')}};
- const phone=first(branchContact?.phone,branchContact?.whatsapp,branch?.whatsapp,branch?.phone);
+ const contactPhones=[...new Set(branchContacts.map(c=>str(first(c?.phone,c?.number,c?.whatsapp)).trim()).filter(Boolean))];
+ const phone=contactPhones.length?contactPhones.join(' · '):first(branch?.whatsapp,branch?.phone);
  const dense=passengers.length>12?'ultra-dense':passengers.length>6?'dense':'';
  const ticketCancelled=['cancelled','refunded'].includes(lower(b.status))||lower(trip?.status)==='cancelled';
  const showOutbound=mode!=='returnonly',showReturn=['roundtrip','separate','returnonly'].includes(mode),reverseReturn=showReturn;
