@@ -1,0 +1,16 @@
+/* Ticket logo placement — desktop screen + A4 only. Thermal print stays unchanged. */
+@media screen and (min-width:761px){
+ .ticket-page .ticket-head{direction:ltr!important;grid-template-columns:minmax(0,1fr) minmax(220px,240px)!important;gap:24px!important;align-items:start!important}
+ .ticket-page .ticket-brand-lockup{grid-column:1!important;justify-self:start!important;align-items:flex-start!important;justify-content:flex-start!important;width:max-content!important;max-width:100%!important;min-width:0!important}
+ .ticket-page .ticket-logo{width:190px!important;height:94px!important;object-fit:contain!important;object-position:left center!important;transform:none!important;transform-origin:left center!important}
+ .ticket-page .ticket-brand-english{align-self:flex-start!important;text-align:left!important}
+ .ticket-page .ticket-meta-card{grid-column:2!important;justify-self:end!important;direction:rtl!important}
+}
+
+@media print{
+ body[data-print-mode="a4"] .ticket-page .ticket-head{direction:ltr!important;grid-template-columns:minmax(0,1fr) 51mm!important;gap:3mm!important;align-items:start!important}
+ body[data-print-mode="a4"] .ticket-page .ticket-brand-lockup{grid-column:1!important;justify-self:start!important;align-items:flex-start!important;justify-content:flex-start!important;width:max-content!important;max-width:100%!important;gap:.7mm!important}
+ body[data-print-mode="a4"] .ticket-page .ticket-logo{width:45mm!important;height:22mm!important;object-fit:contain!important;object-position:left center!important;transform:none!important;transform-origin:left center!important}
+ body[data-print-mode="a4"] .ticket-page .ticket-brand-english{align-self:flex-start!important;text-align:left!important}
+ body[data-print-mode="a4"] .ticket-page .ticket-meta-card{grid-column:2!important;justify-self:end!important;direction:rtl!important}
+}
