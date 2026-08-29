@@ -34,7 +34,7 @@ function isObservedMutation(meta){
   if(meta.path==='/api/admin'){
     if(!action)return false;
     if(/quote|get|list|preview|check|search|lookup/.test(action))return false;
-    return ['update_booking','set_booking_status','refund_request','cancel_booking_settle','wallet_pay_booking'].includes(action)||/^(refund_|cancel_|wallet_)/.test(action);
+    return ['update_booking','set_booking_status','change_booking_trip','refund_request','cancel_booking_settle','wallet_pay_booking'].includes(action)||/^(refund_|cancel_|wallet_)/.test(action);
   }
   if(meta.path==='/api/module')return ['insert','update','delete','remove'].includes(action);
   if(meta.path==='/api/seats/atomic')return ['assign','assigned','release','released','move','swap','clear','delete'].includes(action);
