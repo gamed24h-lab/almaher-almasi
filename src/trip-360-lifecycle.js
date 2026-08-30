@@ -35,18 +35,56 @@ function modal(title,subtitle=''){
   const setNotice=(message,tone='')=>{notice.textContent=message||'';notice.className=`trip360-life-notice ${tone}`.trim()};
   return {body,foot,close:destroy,setNotice};
 }
+function boardingPhaseLabel(b){return b?.phase==='return'?'صعود العودة':'صعود الذهاب'}
+function boardingTone(b){if(!b?.available)return 'warn';if(Number(b.passengers_pending||0)>0||Number(b.bookings_pending||0)>0)return 'bad';return 'good'}
+function boardingPercent(b){const total=Number(b?.passengers_total||0),done=Number(b?.passengers_boarded||0);return total?Math.max(0,Math.min(100,Math.round(done*100/total))):100}
+function boardingSummaryNode(state,tripId,compact=false){
+  const b=state?.boarding;if(!b)return null;
+  const tone=boardingTone(b),wrap=el('div',`trip360-life-boarding ${tone}${compact?' compact':''}`);
+  const head=el('div','trip360-life-boarding-head'),copy=el('div');
+  copy.append(el('small','',boardingPhaseLabel(b)),el('strong','',b.available?`${Number(b.passengers_boarded||0)} / ${Number(b.passengers_total||0)} مسافر`:'بيانات QR غير متاحة'));
+  const qr=button('فتح QR',()=>window.location.assign(`/scanner?trip=${encodeURIComponent(tripId)}`));
+  head.append(copy,qr);wrap.append(head);
+  if(b.available){
+    const progress=el('div','trip360-life-progress'),bar=el('span');bar.style.width=`${boardingPercent(b)}%`;progress.append(bar);wrap.append(progress);
+    const stats=el('div','trip360-life-boarding-stats');
+    stats.append(el('span','',`الحجوزات: ${Number(b.bookings_boarded||0)}/${Number(b.bookings_total||0)}`),el('span','',`المتبقي: ${Number(b.passengers_pending||0)} مسافر`));
+    if(b.last_scan_at)stats.append(el('span','',`آخر مسح: ${timeLabel(b.last_scan_at)}`));wrap.append(stats);
+    if(Number(b.bookings_total||0)===0)wrap.append(el('div','trip360-life-boarding-msg','لا توجد حجوزات نشطة لهذه مرحلة الصعود.'));
+    else if(Number(b.passengers_pending||0)>0)wrap.append(el('div','trip360-life-boarding-msg',`يوجد ${Number(b.passengers_pending||0)} مسافر ضمن ${Number(b.bookings_pending||0)} حجز لم يسجلوا الصعود بعد.`));
+    else wrap.append(el('div','trip360-life-boarding-msg','✓ تم تسجيل صعود كل الحجوزات المطلوبة لهذه المرحلة.'));
+  }else{
+    wrap.append(el('div','trip360-life-boarding-msg',b.error||'تعذر قراءة بيانات المسح. التحرك يحتاج اعتمادًا يدويًا وملاحظة تشغيلية.'));
+  }
+  return wrap;
+}
 function openTransition(host,state,tripId){
   if(!state?.next_status)return;
   const m=modal(`تسجيل: ${state.next_label||state.next_status}`,`المرحلة الحالية: ${state.current_label||state.current_status}`);
+  const isDeparture=['departed_outbound','departed_return'].includes(state.next_status),approval=state.departure_approval||{},boarding=state.boarding||null;
   const warnKeys=new Set(['departed_outbound','departed_return','completed']);
   if(warnKeys.has(state.next_status)){
-    const w=el('div','trip360-life-warning',state.next_status==='completed'?'إكمال الرحلة يقفل دورة التشغيل ويثبتها كمكتملة. راجع حالة الوصول قبل الحفظ.':'تسجيل التحرك حدث تشغيلي مهم وسيظهر باسم الموظف ووقت التنفيذ.');
-    m.body.append(w);
+    const text=state.next_status==='completed'?'إكمال الرحلة يقفل دورة التشغيل ويثبتها كمكتملة. راجع حالة الوصول قبل الحفظ.':'تسجيل التحرك حدث تشغيلي مهم؛ سيتم حفظ اعتماد مسؤول التشغيل ولقطة من حالة الصعود.';
+    m.body.append(el('div','trip360-life-warning',text));
   }
-  const label=el('label','trip360-life-field'),span=el('span','','ملاحظة تشغيلية — اختياري'),area=el('textarea','trip360-life-input');
-  area.rows=4;area.maxLength=1000;area.placeholder='مثال: اكتمل الصعود وتم التأكد من كشف الركاب';
+  if(isDeparture){
+    const summary=boardingSummaryNode(state,tripId,true);if(summary)m.body.append(summary);
+    if(approval.supervisor_assigned&&!approval.actor_can_approve)m.body.append(el('div','trip360-life-danger','يوجد مشرف معيّن على الرحلة. اعتماد التحرك يجب أن يتم من المشرف المعيّن أو الإدارة.'));
+    else if(!approval.supervisor_assigned)m.body.append(el('div','trip360-life-warning','لا يوجد مشرف معيّن على باصات الرحلة؛ سيتم تسجيل الاعتماد باسم مسؤول التشغيل الحالي.'));
+  }
+  let confirmBox=null;
+  if(isDeparture){
+    const confirmLabel=el('label','trip360-life-confirm');confirmBox=el('input');confirmBox.type='checkbox';
+    confirmLabel.append(confirmBox,el('span','',`راجعت كشف ${boardingPhaseLabel(boarding)} وأعتمد التحرك بالحالة الحالية.`));m.body.append(confirmLabel);
+  }
+  const requiresNote=isDeparture&&(!boarding?.available||Number(boarding?.passengers_pending||0)>0||Number(boarding?.bookings_pending||0)>0);
+  const label=el('label','trip360-life-field'),span=el('span','',requiresNote?'ملاحظة تشغيلية — مطلوبة بسبب وجود حالة تحتاج اعتماد':'ملاحظة تشغيلية — اختياري'),area=el('textarea','trip360-life-input');
+  area.rows=4;area.maxLength=1000;area.placeholder=requiresNote?'اكتب سبب التحرك رغم وجود ركاب لم يسجلوا الصعود أو تعذر قراءة QR':'مثال: اكتمل الصعود وتم التأكد من كشف الركاب';
   label.append(span,area);m.body.append(label);
   const cancel=button('إلغاء',m.close),save=button(`تأكيد ${state.next_label||''}`,async()=>{
+    if(isDeparture&&approval.supervisor_assigned&&!approval.actor_can_approve)return m.setNotice('هذا الحساب غير مخول باعتماد التحرك لهذه الرحلة.','bad');
+    if(isDeparture&&!confirmBox?.checked)return m.setNotice('أكد مراجعة كشف الصعود واعتماد التحرك أولًا.','bad');
+    if(requiresNote&&!area.value.trim())return m.setNotice('اكتب ملاحظة تشغيلية قبل اعتماد التحرك بالحالة الحالية.','bad');
     save.disabled=true;cancel.disabled=true;m.setNotice('جاري تسجيل المرحلة...');
     try{
       await api.admin({
@@ -54,7 +92,8 @@ function openTransition(host,state,tripId){
         trip_id:tripId,
         status:state.next_status,
         version_no:Number(state.trip?.version_no||1),
-        note:area.value.trim()
+        note:area.value.trim(),
+        departure_confirmed:isDeparture?confirmBox?.checked===true:undefined
       });
       m.setNotice('تم تسجيل المرحلة بنجاح.','good');
       try{window.dispatchEvent(new CustomEvent('almaher-trip-stage-changed',{detail:{tripId,status:state.next_status}}))}catch{}
@@ -63,6 +102,7 @@ function openTransition(host,state,tripId){
       save.disabled=false;cancel.disabled=false;m.setNotice(e?.message||'تعذر تسجيل المرحلة.','bad');
     }
   },true);
+  if(isDeparture&&approval.supervisor_assigned&&!approval.actor_can_approve)save.disabled=true;
   m.foot.append(cancel,save);
 }
 function eventActor(ev){
@@ -89,6 +129,8 @@ function render(host,state,tripId){
   else if(!state.next_status)current.append(el('span','trip360-life-complete','✓ الدورة مكتملة'));
   host.append(current);
 
+  const boarding=boardingSummaryNode(state,tripId);if(boarding)host.append(boarding);
+
   const track=el('div','trip360-life-track');
   path.forEach((stage,i)=>{
     const ev=latestByKey.get(txt(stage.key)),item=el('div',`trip360-life-stage ${i<currentIndex?'done':i===currentIndex?'current':'pending'}`);
@@ -106,6 +148,7 @@ function render(host,state,tripId){
   flags.append(
     el('span',state.has_housing?'good':'muted',state.has_housing?'السكن ضمن الدورة':'لا يوجد سكن مطلوب حاليًا'),
     el('span',state.has_return?'good':'muted',state.has_return?'العودة ضمن الدورة':'رحلة بدون عودة على نفس السجل'),
+    el('span',state.departure_approval?.supervisor_assigned?'good':'muted',state.departure_approval?.supervisor_assigned?`مشرف معيّن (${Number(state.departure_approval.assigned_count||0)})`:'لا يوجد مشرف معيّن'),
     el('span',state.trip?.data_environment==='training'?'training':'',state.trip?.data_environment==='training'?'بيانات تدريب':'بيئة التشغيل الحالية')
   );
   host.append(flags);
