@@ -46,7 +46,7 @@ const canWriteOperations=a=>elevated(a)||a?.permissions?.operations===true||a?.p
 
 async function tripRow(env,id){
   if(!id)return null;
-  return (await rows(env,'trips',`id=eq.${enc(id)}&select=id,trip_code,branch_id,status,from_city,to_city,origin,destination,departure_date,departure_time,return_date,return_time,operations_status,version_no,operational_closed,data_environment&limit=1`))[0]||null;
+  return (await rows(env,'trips',`id=eq.${enc(id)}&select=id,trip_code,branch_id,status,from_city,to_city,departure_date,departure_time,return_date,return_time,operations_status,version_no,operational_closed,data_environment&limit=1`))[0]||null;
 }
 async function canOperateTrip(env,actor,tripId){
   if(canAllBranches(actor))return true;
