@@ -24,6 +24,7 @@ import {installBooking360Completion} from './booking-360-completion.js';
 import {installBooking360SyncGuard} from './booking-360-sync-guard.js';
 import {installTrip360LiveOperations} from './trip-360-live-operations.js';
 import {installTrip360Lifecycle} from './trip-360-lifecycle.js';
+import {installTrip360ReadinessCountBridge} from './trip-360-readiness-count-bridge.js';
 import {installTrip360ReadinessGate} from './trip-360-readiness.js';
 import './styles.css';
 import './mobile-safe-area.css';
@@ -81,6 +82,7 @@ installBooking360CustomerLink();
 installBooking360Completion();
 installTrip360LiveOperations();
 installTrip360Lifecycle();
+installTrip360ReadinessCountBridge();
 installTrip360ReadinessGate();
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
