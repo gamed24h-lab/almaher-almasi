@@ -28,6 +28,7 @@ import {installTrip360ReadinessCountBridge} from './trip-360-readiness-count-bri
 import {installTrip360ReadinessGate} from './trip-360-readiness.js';
 import {installTrip360Handoff} from './trip-360-handoff.js';
 import {installTrip360Incidents} from './trip-360-incidents.js';
+import {installTrip360Closure} from './trip-360-closure.js';
 import './styles.css';
 import './mobile-safe-area.css';
 import './themes.css';
@@ -55,6 +56,7 @@ import './trip-360-lifecycle.css';
 import './trip-360-readiness.css';
 import './trip-360-handoff.css';
 import './trip-360-incidents.css';
+import './trip-360-closure.css';
 import './ticket-approved.css';
 import './ticket-polish.css';
 import './ticket-thermal-table.css';
@@ -90,5 +92,6 @@ installTrip360ReadinessCountBridge();
 installTrip360ReadinessGate();
 installTrip360Handoff();
 installTrip360Incidents();
+installTrip360Closure();
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
