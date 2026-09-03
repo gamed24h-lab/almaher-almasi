@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/finance-close-history-index.js"
+main = "worker/finance-monthly-close-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
