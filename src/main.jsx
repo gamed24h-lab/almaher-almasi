@@ -37,6 +37,7 @@ import {installFinance360CollectionPlan} from './finance-360-collection-plan.js'
 import {installFinance360DailyCash} from './finance-360-daily-cash.js';
 import {installFinance360DailyClose} from './finance-360-daily-close.js';
 import {installFinance360CloseHistory} from './finance-360-close-history.js';
+import {installFinance360MonthlyClose} from './finance-360-monthly-close.js';
 import './styles.css';
 import './mobile-safe-area.css';
 import './themes.css';
@@ -73,6 +74,7 @@ import './finance-360-collection-plan.css';
 import './finance-360-daily-cash.css';
 import './finance-360-daily-close.css';
 import './finance-360-close-history.css';
+import './finance-360-monthly-close.css';
 import './ticket-approved.css';
 import './ticket-polish.css';
 import './ticket-thermal-table.css';
@@ -117,5 +119,6 @@ installFinance360CollectionPlan();
 installFinance360DailyCash();
 installFinance360DailyClose();
 installFinance360CloseHistory();
+installFinance360MonthlyClose();
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
