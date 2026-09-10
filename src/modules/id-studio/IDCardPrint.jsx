@@ -57,7 +57,7 @@ export function printCR80(card,{side='front',copies=1,offsetX,offsetY,scaleX,sca
   const normalizedSide=side==='full'?'front':side;
   root.dataset.side=calibration?'calibration':normalizedSide;
   applyCalibration(root,{offsetX,offsetY,scaleX,scaleY});
-  root.dataset.copies=String(Math.max(1,Number(copies)||1);
+  root.dataset.copies=String(Math.max(1,Number(copies)||1));
   window.print();return true;
 }
 
