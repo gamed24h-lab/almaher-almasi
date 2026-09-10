@@ -14,25 +14,33 @@ export function saveCR80Calibration(value={}){
   return x;
 }
 
+function MetaPill({label,value}){return <span><b>{label}</b>{value||'—'}</span>}
+
 export function IDCardFace({card,side='front',verificationBase=''}){
   const [qr,setQr]=useState('');
   const verifyUrl=useMemo(()=>card?.qr_token?`${verificationBase||(typeof window!=='undefined'?window.location.origin:'')}/verify/id/${encodeURIComponent(card.qr_token)}`:'',[card?.qr_token,verificationBase]);
   useEffect(()=>{let alive=true;if(!verifyUrl){setQr('');return}QRCode.toDataURL(verifyUrl,{width:360,margin:1,errorCorrectionLevel:'M'}).then(x=>alive&&setQr(x)).catch(()=>alive&&setQr(''));return()=>{alive=false}},[verifyUrl]);
   if(!card)return null;
   const full=card.print_mode!=='front_back';
+  const issueVersion=Number(card.metadata?.issue_version||1);
   if(side==='back'&&!full)return <div className={`idcard-cr80 idcard-${card.template_code||'makkah_luxury'} back`}>
-    <div className="idcard-brand">شركة الماهر الماسي</div>
-    <div className="idcard-back-grid"><div>{qr?<img className="idcard-qr large" src={qr} alt="QR verification"/>:<div className="idcard-qr-placeholder">QR</div>}<small>امسح للتحقق من حالة البطاقة</small></div><div className="idcard-info"><b>رقم البطاقة</b><span>{card.card_number}</span><b>القسم</b><span>{card.department_ar||'—'}</span><b>الترخيص</b><span>{card.license_number||'—'}</span><b>الموسم</b><span>{card.season_label||'—'}</span><b>الصلاحية</b><span>{card.expiry_date||'—'}</span></div></div>
-    <div className="idcard-footer">هذه البطاقة ملك للشركة، والتحقق الإلكتروني هو المرجع لحالتها الحالية.</div>
+    <div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div>
+    <div className="idcard-brand"><strong>شركة الماهر الماسي</strong><span>AL MAHER AL MASI</span></div>
+    <div className="idcard-back-grid"><div>{qr?<img className="idcard-qr large" src={qr} alt="QR verification"/>:<div className="idcard-qr-placeholder">QR</div>}<small>امسح للتحقق من حالة البطاقة</small></div><div className="idcard-info"><b>رقم البطاقة</b><span>{card.card_number}</span><b>الإصدار</b><span>V{issueVersion}</span><b>القسم</b><span>{card.department_ar||'—'}</span><b>الترخيص</b><span>{card.license_number||'—'}</span><b>الموسم</b><span>{card.season_label||'—'}</span><b>الصلاحية</b><span>{card.expiry_date||'—'}</span></div></div>
+    <div className="idcard-verify-note">الحالة الإلكترونية الحالية عبر رمز QR هي المرجع لصلاحية البطاقة.</div>
+    <div className="idcard-footer">هذه البطاقة ملك لشركة الماهر الماسي، وفي حال العثور عليها يرجى تسليمها للإدارة.</div>
   </div>;
   return <div className={`idcard-cr80 idcard-${card.template_code||'makkah_luxury'} front`}>
+    <div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div><div className="idcard-watermark-mark">M</div>
     <div className="idcard-brand"><strong>الماهر الماسي</strong><span>AL MAHER AL MASI</span></div>
+    <div className="idcard-company-line">لنقل الحجاج والمعتمرين</div>
     <div className="idcard-photo">{card.photo_url?<img src={card.photo_url} alt=""/>:<span>الصورة</span>}</div>
     <div className="idcard-person"><strong>{card.name_ar||'اسم حامل البطاقة'}</strong><span>{card.name_en||''}</span><b>{card.job_title_ar||'المسمى الوظيفي'}</b><small>{card.job_title_en||''}</small></div>
-    <div className="idcard-number">{card.card_number||'MA-000'}</div>
-    {full&&<div className="idcard-full-meta"><span>{card.department_ar||'—'}</span><span>{card.season_label||'—'}</span><span>{card.expiry_date||'—'}</span></div>}
-    {qr&&<img className="idcard-qr" src={qr} alt="QR verification"/>}
+    <div className="idcard-number"><small>ID CARD</small>{card.card_number||'MA-000'}<em>V{issueVersion}</em></div>
+    {full&&<div className="idcard-full-meta"><MetaPill label="القسم" value={card.department_ar}/><MetaPill label="الترخيص" value={card.license_number}/><MetaPill label="الموسم" value={card.season_label}/><MetaPill label="حتى" value={card.expiry_date}/></div>}
+    {qr&&<div className="idcard-qr-wrap"><img className="idcard-qr" src={qr} alt="QR verification"/><small>تحقق من البطاقة</small></div>}
     <div className={`idcard-status ${card.status||'draft'}`}>{statusAr[card.status]||card.status}</div>
+    {card.status==='active'&&<div className="idcard-approval"><b>معتمدة إلكترونيًا</b><span>Electronic Verification</span></div>}
     {card.status!=='active'&&<div className="idcard-watermark">غير معتمدة</div>}
   </div>;
 }
