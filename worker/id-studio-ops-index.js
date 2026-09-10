@@ -1,0 +1,20 @@
+import mediaWorker from './id-studio-media-index.js';
+
+const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
+const base=env=>String(env.SUPABASE_URL||'').replace(/\/+$/,'');
+const key=env=>String(env.SUPABASE_SERVICE_ROLE_KEY||'');
+const headers=env=>({apikey:key(env),Authorization:`Bearer ${key(env)}`,Accept:'application/json','Content-Type':'application/json'});
+const txt=v=>String(v??'').trim();
+const enc=v=>encodeURIComponent(String(v??''));
+const isDeveloper=u=>String(u?.role||'').toLowerCase()==='developer';
+const has=(u,p)=>!!u&&(isDeveloper(u)||u.permissions?.[p]===true);
+const actorId=u=>txt(u?.id||u?.user_id||u?.username||u?.email||'');
+async function readJson(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {error:t||`HTTP ${r.status}`}}}
+async function actor(request,env,ctx){try{const r=await mediaWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env,ctx);if(!r.ok)return null;return (await readJson(r))?.user||null}catch{return null}}
+async function rest(env,path,{method='GET',body,prefer}={}){const h=headers(env);if(prefer)h.Prefer=prefer;const r=await fetch(`${base(env)}/rest/v1/${path}`,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body)});const b=await readJson(r);if(!r.ok){const e=new Error(b?.message||b?.details||`Database request failed (${r.status})`);e.status=r.status;throw e}return b}
+function requirePerm(me,p){if(!has(me,p))throw Object.assign(new Error('لا توجد لديك صلاحية لتنفيذ هذه العملية في ID Studio.'),{status:403})}
+function branchFilter(me){if(has(me,'id_card_view_all_branches'))return '';const bid=txt(me?.branch_id||me?.home_branch_id);return bid?`&owner_branch_id=eq.${enc(bid)}`:'&owner_branch_id=is.null'}
+async function getCard(env,id,me){requirePerm(me,'id_card_view');const rows=await rest(env,`id_cards?id=eq.${enc(id)}&select=*${branchFilter(me)}&limit=1`);if(!rows?.[0])throw Object.assign(new Error('البطاقة غير موجودة أو خارج نطاق صلاحيتك.'),{status:404});return rows[0]}
+async function audit(env,cardId,action,me,beforeData,afterData,reason){await rest(env,'id_card_audit_logs',{method:'POST',body:{card_id:cardId,action,actor_id:actorId(me)||null,before_data:beforeData||null,after_data:afterData||null,reason:reason||null},prefer:'return=minimal'}).catch(()=>{})}
+
+export default {async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname!=='/api/admin'||request.method!=='POST')return mediaWorker.fetch(request,env,ctx);const body=await request.clone().json().catch(()=>({}));const action=txt(body.action);if(!['id_studio_card_resume','id_studio_printer_profiles_list'].includes(action))return mediaWorker.fetch(request,env,ctx);const me=await actor(request,env,ctx);if(!me)return json({error:'غير مصرح'},401);try{requirePerm(me,'id_studio_access');if(action==='id_studio_card_resume'){requirePerm(me,'id_card_approve');const card=await getCard(env,body.id,me);if(card.status!=='suspended')throw Object.assign(new Error('يمكن إعادة تفعيل البطاقات الموقوفة فقط.'),{status:400});if(card.expiry_date&&card.expiry_date<new Date().toISOString().slice(0,10))throw Object.assign(new Error('البطاقة منتهية الصلاحية ولا يمكن إعادة تفعيلها قبل تمديد تاريخ الانتهاء.'),{status:400});const updated=(await rest(env,`id_cards?id=eq.${enc(card.id)}`,{method:'PATCH',body:{status:'active',updated_by:actorId(me)||null},prefer:'return=representation'}))?.[0];await audit(env,card.id,'resume',me,card,updated,txt(body.reason)||'إعادة تفعيل البطاقة');return json({ok:true,card:updated})}requirePerm(me,'id_card_manage_settings');const rows=await rest(env,`id_card_printer_profiles?owner_user_id=eq.${enc(actorId(me))}&select=*&order=is_default.desc,created_at.desc`);return json({ok:true,rows})}catch(e){return json({error:e.message||'تعذر تنفيذ العملية'},e.status||500)}}};
