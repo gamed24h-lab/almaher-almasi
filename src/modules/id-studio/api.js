@@ -12,11 +12,13 @@ export const idStudioApi={
   submitForApproval:(id)=>call('id_studio_card_submit',{id}),
   approveCard:(id)=>call('id_studio_card_approve',{id}),
   suspendCard:(id,reason)=>call('id_studio_card_suspend',{id,reason}),
+  resumeCard:(id,reason)=>call('id_studio_card_resume',{id,reason}),
   markLost:(id,reason)=>call('id_studio_card_lost',{id,reason}),
   revokeCard:(id,reason)=>call('id_studio_card_revoke',{id,reason}),
   reissueCard:(id,reason)=>call('id_studio_card_reissue',{id,reason}),
   logPrint:(id,printSide,copies=1,printerProfileId=null)=>call('id_studio_print_log',{id,print_side:printSide,copies,printer_profile_id:printerProfileId}),
   listTemplates:()=>call('id_studio_templates_list'),
+  listPrinterProfiles:()=>call('id_studio_printer_profiles_list'),
   savePrinterProfile:(profile)=>call('id_studio_printer_profile_save',{profile}),
   audit:(filters={})=>call('id_studio_audit_list',{filters}),
 };
