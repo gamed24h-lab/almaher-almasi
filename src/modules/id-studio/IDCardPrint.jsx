@@ -51,13 +51,25 @@ export function BatchPrintSheet({cards=[],side='front'}){return <div id="idstudi
 
 function applyCalibration(root,{offsetX,offsetY,scaleX,scaleY}={}){const saved=getCR80Calibration();root.style.setProperty('--print-x',`${offsetX??saved.offsetX}mm`);root.style.setProperty('--print-y',`${offsetY??saved.offsetY}mm`);root.style.setProperty('--print-scale-x',String(scaleX??saved.scaleX));root.style.setProperty('--print-scale-y',String(scaleY??saved.scaleY))}
 
+function printRepeatedCopies(root,side,copies,calibration){
+  const faces=side==='both'?['front','back']:[side];
+  const temp=document.createElement('div');temp.className='idstudio-batch-print-sheet';temp.id='idstudio-single-copy-print-root';temp.dataset.side=side;
+  for(let copy=0;copy<copies;copy++)for(const face of faces){const source=root.querySelector(`.idcard-cr80.${face}`);if(!source)continue;const page=document.createElement('div');page.className='idstudio-batch-page';page.dataset.copy=String(copy+1);page.dataset.face=face;page.appendChild(source.cloneNode(true));temp.appendChild(page)}
+  if(!temp.children.length)return false;
+  document.body.appendChild(temp);applyCalibration(temp,calibration);document.body.dataset.idstudioPrintMode='batch';
+  try{window.print()}finally{temp.remove();document.body.dataset.idstudioPrintMode='single'}
+  return true;
+}
+
 export function printCR80(card,{side='front',copies=1,offsetX,offsetY,scaleX,scaleY,calibration=false}={}){
   const root=document.getElementById('idstudio-print-root');if(!root)return false;
-  document.body.dataset.idstudioPrintMode='single';
   const normalizedSide=side==='full'?'front':side;
+  const count=Math.min(50,Math.max(1,Math.trunc(Number(copies)||1)));
+  if(!calibration&&count>1)return printRepeatedCopies(root,normalizedSide,count,{offsetX,offsetY,scaleX,scaleY});
+  document.body.dataset.idstudioPrintMode='single';
   root.dataset.side=calibration?'calibration':normalizedSide;
   applyCalibration(root,{offsetX,offsetY,scaleX,scaleY});
-  root.dataset.copies=String(Math.max(1,Number(copies)||1));
+  root.dataset.copies=String(count);
   window.print();return true;
 }
 
