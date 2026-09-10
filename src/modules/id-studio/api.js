@@ -1,0 +1,20 @@
+import {api} from '../../lib/api.js';
+
+const call=(action,payload={})=>api.admin({action,...payload});
+
+export const idStudioApi={
+  dashboard:()=>call('id_studio_dashboard'),
+  listCards:(filters={})=>call('id_studio_cards_list',{filters}),
+  getCard:(id)=>call('id_studio_card_get',{id}),
+  createCard:(card)=>call('id_studio_card_create',{card}),
+  updateCard:(id,patch)=>call('id_studio_card_update',{id,patch}),
+  submitForApproval:(id)=>call('id_studio_card_submit',{id}),
+  approveCard:(id)=>call('id_studio_card_approve',{id}),
+  suspendCard:(id,reason)=>call('id_studio_card_suspend',{id,reason}),
+  revokeCard:(id,reason)=>call('id_studio_card_revoke',{id,reason}),
+  reissueCard:(id,reason)=>call('id_studio_card_reissue',{id,reason}),
+  logPrint:(id,printSide,copies=1,printerProfileId=null)=>call('id_studio_print_log',{id,print_side:printSide,copies,printer_profile_id:printerProfileId}),
+  listTemplates:()=>call('id_studio_templates_list'),
+  savePrinterProfile:(profile)=>call('id_studio_printer_profile_save',{profile}),
+  audit:(filters={})=>call('id_studio_audit_list',{filters}),
+};
