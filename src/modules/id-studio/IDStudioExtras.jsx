@@ -1,11 +1,30 @@
 import React,{useEffect,useMemo,useState} from 'react';
 import {Button,Card} from '../../components/UI.jsx';
+import {useAuth} from '../../core/AuthContext.jsx';
+import {has} from '../../lib/permissions.js';
 import {idStudioApi} from './api.js';
 import {IDCardFace} from './IDCardPrint.jsx';
 import './id-studio-extras.css';
 
 const ACTION_AR={create:'إنشاء البطاقة',update:'تعديل البيانات',photo_update:'تحديث الصورة',submit_for_approval:'إرسال للاعتماد',approve:'اعتماد البطاقة',suspend:'إيقاف البطاقة',resume:'إعادة تفعيل البطاقة',lost:'تسجيل مفقودة',reissue:'إعادة إصدار',revoke:'إلغاء البطاقة',print:'طباعة'};
+const CSV_FIELDS=['name_ar','name_en','job_title_ar','job_title_en','department_ar','department_en','phone','holder_type','license_number','season_label','issue_date','expiry_date','print_mode','template_code'];
+const HEADER_ALIASES={
+ 'الاسم':'name_ar','الاسم بالعربية':'name_ar','name_ar':'name_ar','arabic name':'name_ar',
+ 'الاسم بالانجليزية':'name_en','الاسم بالإنجليزية':'name_en','name_en':'name_en','english name':'name_en',
+ 'المسمى':'job_title_ar','المسمى الوظيفي':'job_title_ar','job_title_ar':'job_title_ar','job title ar':'job_title_ar',
+ 'job title':'job_title_en','job_title_en':'job_title_en','المسمى بالانجليزية':'job_title_en','المسمى بالإنجليزية':'job_title_en',
+ 'القسم':'department_ar','department_ar':'department_ar','department':'department_en','department_en':'department_en',
+ 'الجوال':'phone','الهاتف':'phone','phone':'phone','mobile':'phone',
+ 'النوع':'holder_type','نوع البطاقة':'holder_type','holder_type':'holder_type',
+ 'الترخيص':'license_number','license_number':'license_number','الموسم':'season_label','season_label':'season_label',
+ 'تاريخ الإصدار':'issue_date','issue_date':'issue_date','تاريخ الانتهاء':'expiry_date','expiry_date':'expiry_date',
+ 'نظام الطباعة':'print_mode','print_mode':'print_mode','القالب':'template_code','template_code':'template_code'
+};
 function fmt(v){if(!v)return '—';try{return new Intl.DateTimeFormat('ar-SA',{dateStyle:'medium',timeStyle:'short'}).format(new Date(v))}catch{return String(v)}}
+function splitCsvLine(line){const out=[];let cur='',quoted=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(quoted&&line[i+1]==='"'){cur+='"';i++}else quoted=!quoted}else if(ch===','&&!quoted){out.push(cur.trim());cur=''}else cur+=ch}out.push(cur.trim());return out}
+function normalizeHeader(v){const key=String(v||'').replace(/^\uFEFF/,'').trim().toLowerCase();return HEADER_ALIASES[key]||key}
+function parseCsv(text){const lines=String(text||'').replace(/\r/g,'').split('\n').filter(x=>x.trim());if(lines.length<2)throw new Error('ملف CSV لا يحتوي على بيانات كافية.');const headers=splitCsvLine(lines[0]).map(normalizeHeader);const rows=lines.slice(1).map((line,index)=>{const cells=splitCsvLine(line),row={};headers.forEach((h,i)=>{if(CSV_FIELDS.includes(h))row[h]=cells[i]??''});return {...row,__row:index+2}}).filter(r=>String(r.name_ar||'').trim());if(!rows.length)throw new Error('لم أجد عمود الاسم بالعربية أو أي صف صالح للاستيراد.');return rows}
+function downloadCsvTemplate(){const header=CSV_FIELDS.join(',');const example='محمد أحمد,Mohamed Ahmed,مشرف تشغيل,Operations Supervisor,التشغيل,Operations,05XXXXXXXX,employee,2015,1448هـ,2026-09-10,2027-09-10,full,makkah_luxury';const blob=new Blob([`\uFEFF${header}\n${example}\n`],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='almaher_id_import_template.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
 
 export function IDCardHistoryPanel({card,canAudit=false}){
  const [tab,setTab]=useState('versions'),[state,setState]=useState({loading:false,data:null,error:''});
@@ -20,14 +39,29 @@ export function IDCardHistoryPanel({card,canAudit=false}){
  </Card>
 }
 
+function IDBulkCreateTools({cards=[],onNotice,onError}){
+ const {user}=useAuth();const canCreate=has(user,'id_card_create'),canImport=has(user,'id_card_import');
+ const [cloneId,setCloneId]=useState(''),[rows,setRows]=useState([]),[importing,setImporting]=useState(false),[result,setResult]=useState(null);
+ const cloneSource=cards.find(c=>String(c.id)===String(cloneId));
+ async function clone(){if(!cloneSource||!canCreate)return;const name=window.prompt(`اسم حامل البطاقة الجديدة — سيتم نسخ إعدادات ${cloneSource.card_number}`,'');if(name===null)return;if(!name.trim()){onError?.('اكتب اسم حامل البطاقة الجديدة.');return}try{const out=await idStudioApi.cloneCard(cloneSource.id,{name_ar:name.trim(),name_en:''});setResult({clone:out.card});onNotice?.(`تم نسخ إعدادات ${cloneSource.card_number} وإصدار ${out.card?.card_number||'بطاقة جديدة'} كمسودة مستقلة.`)}catch(e){onError?.(e.message||'تعذر نسخ البطاقة.')}
+ }
+ async function readCsv(e){const file=e.target.files?.[0];e.target.value='';if(!file)return;try{if(!/\.csv$/i.test(file.name))throw new Error('حاليًا الاستيراد المباشر يدعم CSV UTF-8. من Excel اختر Save As → CSV UTF-8.');const parsed=parseCsv(await file.text());if(parsed.length>500)throw new Error('الحد الأقصى 500 صف في العملية الواحدة.');setRows(parsed);setResult(null)}catch(err){setRows([]);onError?.(err.message)} }
+ async function importRows(){if(!canImport||!canCreate||!rows.length)return;if(!window.confirm(`سيتم إنشاء ${rows.length} بطاقة كمسودات بأرقام وQR جديدة. متابعة؟`))return;setImporting(true);setResult(null);try{const clean=rows.map(({__row,...r})=>r);const out=await idStudioApi.bulkImport(clean);setResult(out);onNotice?.(`الاستيراد انتهى: ${out.created_count||0} بطاقة نجحت${out.error_count?`، و${out.error_count} صف بها أخطاء.`:'.'}`);if(out.cards?.length) setRows([])}catch(e){onError?.(e.message||'تعذر الاستيراد الجماعي.')}finally{setImporting(false)}}
+ if(!canCreate&&!canImport)return null;
+ return <div className="idstudio-bulk-create"><div className="idstudio-bulk-box"><div><strong>نسخ بطاقة بسرعة</strong><small>ينسخ القالب والمسمى والقسم والموسم والترخيص فقط، ويُنشئ رقمًا وQR جديدين بدون الصورة أو ربط الموظف.</small></div><div className="idstudio-bulk-row"><select value={cloneId} onChange={e=>setCloneId(e.target.value)}><option value="">اختر بطاقة كأساس</option>{cards.map(c=><option key={c.id} value={c.id}>{c.card_number} — {c.name_ar}</option>)}</select><Button onClick={clone} disabled={!canCreate||!cloneId}>نسخ وإصدار مسودة</Button></div>{result?.clone&&<div className="idstudio-import-ok">تم إنشاء {result.clone.card_number} بنجاح. اضغط «تحديث» في قائمة البطاقات لإظهارها.</div>}</div>
+  {canImport&&<div className="idstudio-bulk-box"><div><strong>استيراد جماعي من Excel / CSV</strong><small>لـExcel حاليًا احفظ الملف بصيغة CSV UTF-8 ثم ارفعه هنا. المعاينة تظهر قبل إنشاء أي بطاقة.</small></div><div className="idstudio-bulk-row"><Button onClick={downloadCsvTemplate}>تحميل نموذج CSV</Button><label className="idstudio-import-file"><input type="file" accept=".csv,text/csv" onChange={readCsv}/><span>اختيار ملف CSV</span></label>{rows.length>0&&<Button variant="primary" onClick={importRows} disabled={importing}>{importing?'جاري الاستيراد...':`إنشاء ${rows.length} بطاقة`}</Button>}</div>{rows.length>0&&<div className="idstudio-import-preview"><table><thead><tr><th>#</th><th>الاسم</th><th>المسمى</th><th>القسم</th><th>النوع</th><th>القالب</th></tr></thead><tbody>{rows.slice(0,20).map(r=><tr key={r.__row}><td>{r.__row}</td><td>{r.name_ar}</td><td>{r.job_title_ar||'—'}</td><td>{r.department_ar||'—'}</td><td>{r.holder_type||'employee'}</td><td>{r.template_code||'makkah_luxury'}</td></tr>)}</tbody></table>{rows.length>20&&<small>المعاينة تعرض أول 20 صف من أصل {rows.length}.</small>}</div>}{result?.created_count!==undefined&&<div className={result.error_count?'idstudio-import-warn':'idstudio-import-ok'}>نجح: {result.created_count||0} · أخطاء: {result.error_count||0}{result.errors?.length>0&&<ul>{result.errors.slice(0,10).map((x,i)=><li key={i}>الصف {x.row}: {x.error}</li>)}</ul>}</div>}</div>}
+ </div>
+}
+
 export function IDBatchPrintPanel({cards=[],canPrint=false,calibration={},printerProfileId=null,onNotice,onError}){
  const activeCards=useMemo(()=>cards.filter(c=>c.status==='active'),[cards]);
  const [selected,setSelected]=useState([]),[mode,setMode]=useState('front'),[printing,setPrinting]=useState(false),[printCards,setPrintCards]=useState([]);
  useEffect(()=>{setSelected(prev=>prev.filter(id=>activeCards.some(c=>c.id===id)))},[activeCards]);
  function toggle(id){setSelected(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id])}
  async function run(){if(!canPrint||!selected.length)return;const chosen=activeCards.filter(c=>selected.includes(c.id));if(!chosen.length)return;setPrinting(true);try{const printable=mode==='back'?chosen.filter(c=>c.print_mode==='front_back'):chosen;if(!printable.length)throw new Error('البطاقات المحددة لا تحتوي على وجه خلفي للطباعة.');await Promise.all(printable.map(c=>idStudioApi.logPrint(c.id,mode,1,printerProfileId||null)));setPrintCards(printable);document.body.classList.add('idstudio-batch-mode');document.documentElement.style.setProperty('--batch-print-x',`${Number(calibration.offsetX)||0}mm`);document.documentElement.style.setProperty('--batch-print-y',`${Number(calibration.offsetY)||0}mm`);document.documentElement.style.setProperty('--batch-scale-x',String(Number(calibration.scaleX)||1));document.documentElement.style.setProperty('--batch-scale-y',String(Number(calibration.scaleY)||1));setTimeout(()=>{window.print();document.body.classList.remove('idstudio-batch-mode');onNotice?.(`تم تجهيز ${printable.length} بطاقة للطباعة الجماعية وتسجيلها في سجل الطباعة.`)},350)}catch(e){document.body.classList.remove('idstudio-batch-mode');onError?.(e.message||'تعذر تنفيذ الطباعة الجماعية.')}finally{setPrinting(false)}}
- return <Card className="idstudio-batch-card"><div className="idstudio-history-head"><div><h3>الطباعة الجماعية</h3><small>اختر البطاقات الفعالة ثم اطبع الأمام أو الخلف أو الوجهين دفعة واحدة.</small></div><span className="idstudio-batch-count">{selected.length} محددة</span></div>
-  <div className="idstudio-batch-toolbar"><select value={mode} onChange={e=>setMode(e.target.value)}><option value="front">الأمام فقط</option><option value="back">الخلف فقط</option><option value="both">الوجهين</option></select><Button onClick={()=>setSelected(activeCards.map(c=>c.id))} disabled={!activeCards.length}>تحديد الكل</Button><Button onClick={()=>setSelected([])} disabled={!selected.length}>إلغاء التحديد</Button><Button variant="primary" onClick={run} disabled={!canPrint||!selected.length||printing}>{printing?'جاري التجهيز...':`طباعة ${selected.length} بطاقة`}</Button></div>
+ return <Card className="idstudio-batch-card"><div className="idstudio-history-head"><div><h3>الأدوات الجماعية</h3><small>نسخ إعداد بطاقة، استيراد مجموعة، أو طباعة البطاقات الفعالة دفعة واحدة.</small></div><span className="idstudio-batch-count">{selected.length} محددة للطباعة</span></div>
+  <IDBulkCreateTools cards={cards} onNotice={onNotice} onError={onError}/>
+  <div className="idstudio-subtitle">الطباعة الجماعية</div><div className="idstudio-batch-toolbar"><select value={mode} onChange={e=>setMode(e.target.value)}><option value="front">الأمام فقط</option><option value="back">الخلف فقط</option><option value="both">الوجهين</option></select><Button onClick={()=>setSelected(activeCards.map(c=>c.id))} disabled={!activeCards.length}>تحديد الكل</Button><Button onClick={()=>setSelected([])} disabled={!selected.length}>إلغاء التحديد</Button><Button variant="primary" onClick={run} disabled={!canPrint||!selected.length||printing}>{printing?'جاري التجهيز...':`طباعة ${selected.length} بطاقة`}</Button></div>
   <div className="idstudio-batch-list">{activeCards.length?activeCards.map(c=><label key={c.id} className={selected.includes(c.id)?'selected':''}><input type="checkbox" checked={selected.includes(c.id)} onChange={()=>toggle(c.id)}/><span><strong>{c.card_number}</strong>{c.name_ar}</span><small>{c.print_mode==='front_back'?'وجهين':'وجه واحد'}</small></label>):<div className="idstudio-history-empty">لا توجد بطاقات فعالة متاحة للطباعة.</div>}</div>
   <div id="idstudio-batch-print-root" data-mode={mode}>{printCards.map(c=><React.Fragment key={c.id}><IDCardFace card={c} side="front"/>{mode!=='front'&&c.print_mode==='front_back'&&<IDCardFace card={c} side="back"/>}</React.Fragment>)}</div>
  </Card>
