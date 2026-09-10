@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/finance-month-compare-index.js"
+main = "worker/id-studio-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
