@@ -1,0 +1,73 @@
+/* Orientation layer. Landscape remains defined in id-card-print.css. */
+.idcard-cr80.portrait{width:53.98mm;height:85.6mm;padding:4mm}
+.idcard-calibration-sheet.portrait{width:53.98mm;height:85.6mm}
+
+/* Portrait foundation shared by all templates. */
+.idcard-cr80.portrait .idcard-brand{justify-content:center;text-align:center;display:grid;gap:.5mm}
+.idcard-cr80.portrait .idcard-brand strong{font-size:3mm}
+.idcard-cr80.portrait .idcard-brand span{font-size:1.6mm}
+.idcard-cr80.portrait .idcard-company-line{text-align:center;font-size:1.55mm}
+.idcard-cr80.portrait .idcard-photo{top:17mm;right:50%;transform:translateX(50%);width:22mm;height:22mm;border-radius:50%}
+.idcard-cr80.portrait .idcard-person{top:41.5mm;right:4mm;left:4mm;text-align:center;display:grid;gap:.7mm}
+.idcard-cr80.portrait .idcard-person strong{font-size:3.2mm}
+.idcard-cr80.portrait .idcard-person span,.idcard-cr80.portrait .idcard-person small{text-align:center;font-size:1.55mm}
+.idcard-cr80.portrait .idcard-person b{font-size:2.3mm}
+.idcard-cr80.portrait .idcard-number{right:50%;transform:translateX(50%);bottom:19.2mm;font-size:2.6mm;white-space:nowrap}
+.idcard-cr80.portrait .idcard-full-meta{right:4mm;left:4mm;bottom:10.5mm;grid-template-columns:1fr 1fr;text-align:center;gap:1.1mm 2mm}
+.idcard-cr80.portrait .idcard-full-meta span{border-bottom:.18mm solid rgba(40,65,90,.18);padding-bottom:.7mm}
+.idcard-cr80.portrait .idcard-qr-wrap{left:50%;transform:translateX(-50%);bottom:1.8mm;width:14mm}
+.idcard-cr80.portrait .idcard-qr{width:10mm;height:10mm}
+.idcard-cr80.portrait .idcard-qr-wrap small{font-size:1.05mm}
+.idcard-cr80.portrait .idcard-status{left:3mm;top:3mm}
+.idcard-cr80.portrait .idcard-approval{right:3mm;bottom:2.1mm;text-align:right}
+.idcard-cr80.portrait .idcard-watermark-mark{font-size:30mm;left:12mm;top:27mm}
+
+/* Approved reference 1: Makkah Luxury portrait — blue/gold waves, centered portrait and lower navy field. */
+.idcard-makkah_luxury.portrait{background:linear-gradient(180deg,#fff 0 69%,#0a4f93 69% 100%);border:.28mm solid #e4e9ef}
+.idcard-makkah_luxury.portrait .idcard-decor-a{width:70mm;height:20mm;left:-8mm;top:-10mm;bottom:auto;border-radius:0 0 50% 50%;background:linear-gradient(135deg,#0a4f93,#073566);transform:rotate(-4deg)}
+.idcard-makkah_luxury.portrait .idcard-decor-b{width:65mm;height:5mm;left:-7mm;top:3.5mm;bottom:auto;border-radius:50%;background:linear-gradient(90deg,#d3a746,#f3d77f);transform:rotate(-4deg)}
+.idcard-makkah_luxury.portrait .idcard-brand{margin-top:4.7mm;color:#fff}
+.idcard-makkah_luxury.portrait .idcard-brand strong{color:#fff}
+.idcard-makkah_luxury.portrait .idcard-brand span,.idcard-makkah_luxury.portrait .idcard-company-line{color:#fff}
+.idcard-makkah_luxury.portrait .idcard-photo{top:18mm;width:24mm;height:24mm;border:1mm solid #d3a746;box-shadow:0 1.5mm 4mm rgba(0,0,0,.2)}
+.idcard-makkah_luxury.portrait .idcard-person{top:44mm}
+.idcard-makkah_luxury.portrait .idcard-number{bottom:22mm;color:#fff}
+.idcard-makkah_luxury.portrait .idcard-full-meta{bottom:11.5mm;color:#fff}
+.idcard-makkah_luxury.portrait .idcard-full-meta span{border-bottom-color:rgba(255,255,255,.25)}
+.idcard-makkah_luxury.portrait .idcard-qr-wrap{color:#fff}
+.idcard-makkah_luxury.portrait .idcard-approval{color:#fff}
+.idcard-makkah_luxury.portrait .idcard-approval b{color:#f4d984}
+
+/* Approved reference 2: Executive Side portrait — permanent navy side rail with gold accent. */
+.idcard-executive_side.portrait{background:#fff;border:.28mm solid #dfe5ed;padding-left:17mm}
+.idcard-executive_side.portrait .idcard-decor-a{left:0;top:0;bottom:0;width:13.5mm;height:auto;border-radius:0;background:linear-gradient(180deg,#061f42,#0a3d78);transform:none}
+.idcard-executive_side.portrait .idcard-decor-b{left:11mm;top:0;bottom:0;width:2.5mm;height:auto;border-radius:0;background:linear-gradient(180deg,#d3a746,#f0c85e);transform:none}
+.idcard-executive_side.portrait .idcard-brand{margin-top:1.5mm;color:#0b3c72}
+.idcard-executive_side.portrait .idcard-company-line{color:#4c6077}
+.idcard-executive_side.portrait .idcard-photo{top:17mm;right:calc(50% - 6mm);width:23mm;height:23mm;border-radius:2.3mm}
+.idcard-executive_side.portrait .idcard-person{right:15.5mm;left:2.5mm;top:42mm;text-align:center}
+.idcard-executive_side.portrait .idcard-number{right:calc(50% + 6mm);bottom:20mm;color:#0a4f93}
+.idcard-executive_side.portrait .idcard-full-meta{right:15.5mm;left:2.5mm;bottom:9.5mm}
+.idcard-executive_side.portrait .idcard-qr-wrap{left:6.8mm;bottom:4mm;color:#fff;transform:translateX(-50%)}
+.idcard-executive_side.portrait .idcard-status{left:2mm;color:#fff;background:rgba(255,255,255,.15)}
+.idcard-executive_side.portrait .idcard-status.active{color:#fff;background:rgba(255,255,255,.18)}
+.idcard-executive_side.portrait .idcard-approval{right:15.5mm;bottom:2.2mm}
+
+/* Back face portrait. */
+.idcard-cr80.portrait.back .idcard-brand{margin-top:3mm}
+.idcard-cr80.portrait.back .idcard-back-grid{display:grid;grid-template-columns:1fr;margin-top:8mm;gap:4mm;justify-items:center}
+.idcard-cr80.portrait.back .idcard-qr.large{width:23mm;height:23mm}
+.idcard-cr80.portrait.back .idcard-info{width:100%;grid-template-columns:18mm 1fr;gap:1.2mm;font-size:1.8mm}
+.idcard-cr80.portrait.back .idcard-verify-note{right:4mm;left:4mm;bottom:8mm;text-align:center}
+
+/* Chromium supports named pages; this keeps mixed portrait/landscape batch jobs physically correct. */
+@page idcard-landscape{size:85.6mm 53.98mm;margin:0}
+@page idcard-portrait{size:53.98mm 85.6mm;margin:0}
+@media print{
+ .idcard-cr80.landscape,.idstudio-batch-page.landscape{page:idcard-landscape}
+ .idcard-cr80.portrait,.idstudio-batch-page.portrait{page:idcard-portrait}
+ .idstudio-print-sheet[data-orientation="portrait"]{width:53.98mm;height:85.6mm}
+ .idstudio-print-sheet[data-orientation="landscape"]{width:85.6mm;height:53.98mm}
+ body[data-idstudio-print-mode="batch"] .idstudio-batch-page.portrait{width:53.98mm;height:85.6mm}
+ body[data-idstudio-print-mode="batch"] .idstudio-batch-page.landscape{width:85.6mm;height:53.98mm}
+}
