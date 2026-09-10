@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/id-studio-public-index.js"
+main = "worker/id-studio-stable-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
