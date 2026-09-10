@@ -3,7 +3,7 @@ import {Badge,Button,Card,PageHeader} from '../../components/UI.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {has} from '../../lib/permissions.js';
 import {idStudioApi} from './api.js';
-import {IDCardFace,printCR80} from './IDCardPrint.jsx';
+import {CR80CalibrationSheet,IDCardFace,printCR80} from './IDCardPrint.jsx';
 import './id-studio.css';
 
 const FALLBACK_TEMPLATES=[
@@ -29,7 +29,7 @@ export default function IDStudio(){
   const [form,setForm]=useState(initialForm()),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [q,setQ]=useState(''),[status,setStatus]=useState(''),[selectedCard,setSelectedCard]=useState(null),[previewSide,setPreviewSide]=useState('front');
   const canCreate=has(user,'id_card_create'),canEdit=has(user,'id_card_edit'),canApprove=has(user,'id_card_approve'),canPrint=has(user,'id_card_print');
-  const canLink=has(user,'id_card_link_employee'),canManageTemplates=has(user,'id_card_manage_templates');
+  const canLink=has(user,'id_card_link_employee'),canManageTemplates=has(user,'id_card_manage_templates'),canManageSettings=has(user,'id_card_manage_settings');
   const selected=useMemo(()=>templates.find(x=>x.code===form.template_code)||FALLBACK_TEMPLATES[0],[templates,form.template_code]);
   const selectedKind=TEMPLATE_KIND[selected?.code]||'luxury';
 
@@ -39,7 +39,8 @@ export default function IDStudio(){
   function setField(key,value){setForm(prev=>{const next={...prev,[key]:value};if(prev.translation_auto){if(key==='name_ar')next.name_en=transliterateArabic(value);if(key==='job_title_ar')next.job_title_en=JOBS[value]||prev.job_title_en;if(key==='department_ar')next.department_en=DEPTS[value]||prev.department_en}return next})}
   async function createCard(e){e.preventDefault();if(!canCreate)return;setBusy(true);setError('');setNotice('');try{const payload={...form,linked_employee_id:form.source_type==='linked_employee'?form.linked_employee_id||null:null,expiry_date:form.expiry_date||null};const out=await idStudioApi.createCard(payload);setNotice(`تم إنشاء البطاقة ${out?.card?.card_number||''} كمسودة بنجاح.`);setSelectedCard(out?.card||null);setForm(initialForm());await load({q,status})}catch(e){setError(e.message)}finally{setBusy(false)}}
   async function action(fn,success){setBusy(true);setError('');try{const out=await fn();setNotice(success);if(out?.card)setSelectedCard(out.card);await load({q,status});return out}catch(e){setError(e.message)}finally{setBusy(false)}}
-  async function doPrint(card,side){if(!canPrint||card.status!=='active')return;setBusy(true);setError('');try{await idStudioApi.logPrint(card.id,side,1);setSelectedCard(card);setPreviewSide(side==='back'?'back':'front');setTimeout(()=>printCR80(card,{side}),60);setNotice('تم تسجيل أمر الطباعة وفتح معاينة CR80.') }catch(e){setError(e.message)}finally{setBusy(false)}}
+  async function doPrint(card,side){if(!canPrint||card.status!=='active')return;setBusy(true);setError('');try{await idStudioApi.logPrint(card.id,side,1);setSelectedCard(card);setPreviewSide(side==='back'?'back':'front');setTimeout(()=>printCR80(card,{side}),60);setNotice('تم تسجيل أمر الطباعة وفتح معاينة CR80.')}catch(e){setError(e.message)}finally{setBusy(false)}}
+  function printCalibration(){printCR80(null,{calibration:true});setNotice('تم فتح ورقة اختبار CR80. اطبعها بنسبة 100% بدون Fit to page ثم قِس الإزاحة.')}
 
   const previewCard=selectedCard||{...form,card_number:'MA-###',status:'draft',qr_token:null};
   return <div className="idstudio-page">
@@ -57,7 +58,7 @@ export default function IDStudio(){
         <div className="idstudio-form-2"><label>القسم<input value={form.department_ar} onChange={e=>setField('department_ar',e.target.value)}/></label><label>Department<input dir="ltr" value={form.department_en} onChange={e=>setField('department_en',e.target.value)}/></label></div>
         <div className="idstudio-form-3"><label>الجوال<input dir="ltr" value={form.phone} onChange={e=>setField('phone',e.target.value)}/></label><label>الترخيص<input value={form.license_number} onChange={e=>setField('license_number',e.target.value)}/></label><label>الموسم<input value={form.season_label} onChange={e=>setField('season_label',e.target.value)}/></label></div>
         <div className="idstudio-form-3"><label>تاريخ الإصدار<input type="date" value={form.issue_date} onChange={e=>setField('issue_date',e.target.value)}/></label><label>تاريخ الانتهاء<input type="date" value={form.expiry_date} onChange={e=>setField('expiry_date',e.target.value)}/></label><label>الطباعة<select value={form.print_mode} onChange={e=>setField('print_mode',e.target.value)}><option value="full">وجه واحد كامل</option><option value="front_back">أمامي + خلفي</option></select></label></div>
-        <label className="idstudio-check"><input type="checkbox" checked={form.translation_auto} onChange={e=>setField('translation_auto',e.target.checked)}/> ترجمة/تحويل تلقائي للإنجليزية</label><div className="idstudio-actions"><Button type="submit" variant="primary" disabled={!canCreate||busy}>{busy?'جاري الحفظ...':'إنشاء كمسودة'}</Button><Button type="button" onClick={()=>setForm(initialForm())}>مسح الحقول</Button></div>
+        <label className="idstudio-check"><input type="checkbox" checked={form.translation_auto} onChange={e=>setField('translation_auto',e.target.checked)}/> ترجمة/تحويل تلقائي للإنجليزية</label><div className="idstudio-actions"><Button type="submit" variant="primary" disabled={!canCreate||busy}>{busy?'جاري الحفظ...':'إنشاء كمسودة'}</Button><Button type="button" onClick={()=>setForm(initialForm())}>مسح الحقول</Button>{canManageSettings&&<Button type="button" onClick={printCalibration}>اختبار طابعة CR80</Button>}</div>
       </form></Card>
 
       <Card className="idstudio-preview-card"><div className="idstudio-section-title"><div><h3>المعاينة الحقيقية</h3><small>{selectedCard?`${selectedCard.card_number} · ${statusAr(selectedCard.status)}`:`${selected?.name_ar||'القالب'} · معاينة قبل الحفظ`}</small></div><Badge>CR80</Badge></div>
@@ -72,6 +73,6 @@ export default function IDStudio(){
     <Card><div className="idstudio-section-title"><div><h3>البطاقات</h3><small>{loading?'جاري التحميل...':`${cards.length} بطاقة ظاهرة ضمن نطاق صلاحيتك`}</small></div><Button onClick={()=>load({q,status})}>تحديث</Button></div><div className="idstudio-filters"><input value={q} onChange={e=>setQ(e.target.value)} placeholder="بحث بالاسم أو رقم البطاقة"/><select value={status} onChange={e=>setStatus(e.target.value)}><option value="">كل الحالات</option><option value="draft">مسودة</option><option value="pending_approval">بانتظار الاعتماد</option><option value="active">فعالة</option><option value="suspended">موقوفة</option><option value="expired">منتهية</option><option value="lost">مفقودة</option><option value="revoked">ملغاة</option><option value="reissued">معاد إصدارها</option></select></div>
       <div className="idstudio-table-wrap"><table className="idstudio-table"><thead><tr><th>رقم البطاقة</th><th>الاسم</th><th>المسمى</th><th>الحالة</th><th>القالب</th><th>الانتهاء</th><th>إجراءات</th></tr></thead><tbody>{cards.length?cards.map(card=><tr key={card.id} className={selectedCard?.id===card.id?'selected-row':''}><td dir="ltr"><button className="idstudio-card-link" onClick={()=>{setSelectedCard(card);setPreviewSide('front')}}>{card.card_number}</button></td><td>{card.name_ar}<small>{card.name_en}</small></td><td>{card.job_title_ar||'—'}</td><td><span className={`idstudio-status ${card.status}`}>{statusAr(card.status)}</span></td><td>{card.template_code} · v{card.template_version||1}</td><td>{fmtDate(card.expiry_date)}</td><td><div className="idstudio-row-actions"><button onClick={()=>{setSelectedCard(card);setPreviewSide('front')}}>معاينة</button>{canEdit&&card.status==='draft'&&<button disabled={busy} onClick={()=>action(()=>idStudioApi.submitForApproval(card.id),'تم إرسال البطاقة للاعتماد.')}>إرسال للاعتماد</button>}{canApprove&&['draft','pending_approval'].includes(card.status)&&<button disabled={busy} onClick={()=>action(()=>idStudioApi.approveCard(card.id),'تم اعتماد البطاقة وتفعيل QR.')}>اعتماد</button>}{canPrint&&card.status==='active'&&<button disabled={busy} onClick={()=>doPrint(card,card.print_mode==='front_back'?'both':'full')}>طباعة</button>}</div></td></tr>):<tr><td colSpan="7" className="idstudio-empty">لا توجد بطاقات مطابقة.</td></tr>}</tbody></table></div>
     </Card>
-    <div id="idstudio-print-root" className="idstudio-print-sheet" data-side="front"><IDCardFace card={selectedCard} side="front"/>{selectedCard?.print_mode==='front_back'&&<IDCardFace card={selectedCard} side="back"/>}</div>
+    <div id="idstudio-print-root" className="idstudio-print-sheet" data-side="front"><IDCardFace card={selectedCard} side="front"/>{selectedCard?.print_mode==='front_back'&&<IDCardFace card={selectedCard} side="back"/>}<CR80CalibrationSheet/></div>
   </div>
 }
