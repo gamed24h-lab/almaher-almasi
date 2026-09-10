@@ -47,15 +47,24 @@ export function IDCardFace({card,side='front',verificationBase=''}){
 
 export function CR80CalibrationSheet(){return <div className="idcard-calibration-sheet"><div className="calibration-border"></div><div className="calibration-center-x"></div><div className="calibration-center-y"></div><div className="calibration-label">CR80 · 85.60 × 53.98 mm</div><div className="calibration-mm x">10 mm</div><div className="calibration-mm y">10 mm</div></div>}
 
+export function BatchPrintSheet({cards=[],side='front'}){return <div id="idstudio-batch-print-root" className="idstudio-batch-print-sheet" data-side={side}>{cards.flatMap(card=>{const faces=side==='both'&&card.print_mode==='front_back'?['front','back']:[side==='back'?'back':'front'];return faces.map(face=><div className="idstudio-batch-page" key={`${card.id}-${face}`}><IDCardFace card={card} side={face}/></div>)})}</div>}
+
+function applyCalibration(root,{offsetX,offsetY,scaleX,scaleY}={}){const saved=getCR80Calibration();root.style.setProperty('--print-x',`${offsetX??saved.offsetX}mm`);root.style.setProperty('--print-y',`${offsetY??saved.offsetY}mm`);root.style.setProperty('--print-scale-x',String(scaleX??saved.scaleX));root.style.setProperty('--print-scale-y',String(scaleY??saved.scaleY))}
+
 export function printCR80(card,{side='front',copies=1,offsetX,offsetY,scaleX,scaleY,calibration=false}={}){
   const root=document.getElementById('idstudio-print-root');if(!root)return false;
-  const saved=getCR80Calibration();
+  document.body.dataset.idstudioPrintMode='single';
   const normalizedSide=side==='full'?'front':side;
   root.dataset.side=calibration?'calibration':normalizedSide;
-  root.style.setProperty('--print-x',`${offsetX??saved.offsetX}mm`);
-  root.style.setProperty('--print-y',`${offsetY??saved.offsetY}mm`);
-  root.style.setProperty('--print-scale-x',String(scaleX??saved.scaleX));
-  root.style.setProperty('--print-scale-y',String(scaleY??saved.scaleY));
-  root.dataset.copies=String(Math.max(1,Number(copies)||1));
+  applyCalibration(root,{offsetX,offsetY,scaleX,scaleY});
+  root.dataset.copies=String(Math.max(1,Number(copies)||1);
+  window.print();return true;
+}
+
+export function printCR80Batch({side='front',offsetX,offsetY,scaleX,scaleY}={}){
+  const root=document.getElementById('idstudio-batch-print-root');if(!root||!root.children.length)return false;
+  document.body.dataset.idstudioPrintMode='batch';
+  root.dataset.side=side;
+  applyCalibration(root,{offsetX,offsetY,scaleX,scaleY});
   window.print();return true;
 }
