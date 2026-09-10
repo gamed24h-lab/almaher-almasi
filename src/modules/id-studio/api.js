@@ -6,6 +6,7 @@ export const idStudioApi={
   dashboard:()=>call('id_studio_dashboard'),
   listCards:(filters={})=>call('id_studio_cards_list',{filters}),
   getCard:(id)=>call('id_studio_card_get',{id}),
+  getCardHistory:(id)=>call('id_studio_card_history',{id}),
   createCard:(card)=>call('id_studio_card_create',{card}),
   updateCard:(id,patch)=>call('id_studio_card_update',{id,patch}),
   uploadPhoto:(id,dataUrl)=>call('id_studio_photo_upload',{id,data_url:dataUrl}),
