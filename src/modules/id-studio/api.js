@@ -21,6 +21,8 @@ export const idStudioApi={
   reissueCard:(id,reason)=>call('id_studio_card_reissue',{id,reason}),
   logPrint:(id,printSide,copies=1,printerProfileId=null)=>call('id_studio_print_log',{id,print_side:printSide,copies,printer_profile_id:printerProfileId}),
   listTemplates:()=>call('id_studio_templates_list'),
+  saveTemplate:(code,config,defaultOrientation)=>call('id_studio_template_save',{code,config,default_orientation:defaultOrientation}),
+  restoreTemplate:(code)=>call('id_studio_template_restore',{code}),
   listPrinterProfiles:()=>call('id_studio_printer_profiles_list'),
   savePrinterProfile:(profile)=>call('id_studio_printer_profile_save',{profile}),
   audit:(filters={})=>call('id_studio_audit_list',{filters}),
