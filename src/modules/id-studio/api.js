@@ -12,6 +12,7 @@ export const idStudioApi={
   bulkImport:(rows=[])=>call('id_studio_bulk_import',{rows}),
   updateCard:(id,patch)=>call('id_studio_card_update',{id,patch}),
   uploadPhoto:(id,dataUrl)=>call('id_studio_photo_upload',{id,data_url:dataUrl}),
+  uploadTemplateAsset:(code,asset,dataUrl)=>call('id_studio_template_asset_upload',{code,asset,data_url:dataUrl}),
   submitForApproval:(id)=>call('id_studio_card_submit',{id}),
   approveCard:(id)=>call('id_studio_card_approve',{id}),
   suspendCard:(id,reason)=>call('id_studio_card_suspend',{id,reason}),
