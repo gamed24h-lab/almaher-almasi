@@ -11,45 +11,40 @@ const DEFAULT_BRAND={companyNameAr:'الماهر الماسي',companyNameEn:'AL
 const DEFAULT_VIS={logo:true,companyName:true,serviceLine:true,slogan:true,holderPhoto:true,holderName:true,jobTitle:true,department:true,employeeId:true,licenseNumber:true,season:true,qr:true,approval:true,bus:true,makkah:true,footer:true};
 const DEFAULT_THEME={primary:'#0a4f93',secondary:'#073566',accent:'#d3a746',surface:'#ffffff',text:'#0b2f5d'};
 
-export function getCR80Calibration(){
-  try{const x=JSON.parse(localStorage.getItem(CALIBRATION_KEY)||'{}');return {offsetX:Number(x.offsetX)||0,offsetY:Number(x.offsetY)||0,scaleX:Number(x.scaleX)||1,scaleY:Number(x.scaleY)||1}}catch{return {offsetX:0,offsetY:0,scaleX:1,scaleY:1}}
-}
-export function saveCR80Calibration(value={}){
-  const x={offsetX:Number(value.offsetX)||0,offsetY:Number(value.offsetY)||0,scaleX:Number(value.scaleX)||1,scaleY:Number(value.scaleY)||1};
-  try{localStorage.setItem(CALIBRATION_KEY,JSON.stringify(x))}catch{}
-  return x;
-}
+export function getCR80Calibration(){try{const x=JSON.parse(localStorage.getItem(CALIBRATION_KEY)||'{}');return {offsetX:Number(x.offsetX)||0,offsetY:Number(x.offsetY)||0,scaleX:Number(x.scaleX)||1,scaleY:Number(x.scaleY)||1}}catch{return {offsetX:0,offsetY:0,scaleX:1,scaleY:1}}}
+export function saveCR80Calibration(value={}){const x={offsetX:Number(value.offsetX)||0,offsetY:Number(value.offsetY)||0,scaleX:Number(value.scaleX)||1,scaleY:Number(value.scaleY)||1};try{localStorage.setItem(CALIBRATION_KEY,JSON.stringify(x))}catch{}return x}
 function MetaPill({label,value}){return <span><b>{label}</b>{value||'—'}</span>}
 function getDesigner(card={}){const cfg=card.template_config||card.published_config||{};const d=cfg?.designer||{};return {brand:{...DEFAULT_BRAND,...(d.brand||{})},assets:{logoUrl:'',backgroundUrl:'',makkahUrl:'',busUrl:'',signatureUrl:'',...(d.assets||{})},visibility:{...DEFAULT_VIS,...(d.visibility||{})},theme:{...DEFAULT_THEME,...(d.theme||{})}}}
 function cardStyle(designer){const t=designer.theme,a=designer.assets;return {'--id-primary':t.primary,'--id-secondary':t.secondary,'--id-accent':t.accent,'--id-surface':t.surface,'--id-text':t.text,'--id-bg-image':a.backgroundUrl?`url("${String(a.backgroundUrl).replace(/"/g,'')}")`:'none'}}
 
 export function IDCardFace({card,side='front',verificationBase=''}){
-  const [qr,setQr]=useState('');
-  const verifyUrl=useMemo(()=>card?.qr_token?`${verificationBase||(typeof window!=='undefined'?window.location.origin:'')}/verify/id/${encodeURIComponent(card.qr_token)}`:'',[card?.qr_token,verificationBase]);
-  useEffect(()=>{let alive=true;if(!verifyUrl){setQr('');return}QRCode.toDataURL(verifyUrl,{width:360,margin:1,errorCorrectionLevel:'M'}).then(x=>alive&&setQr(x)).catch(()=>alive&&setQr(''));return()=>{alive=false}},[verifyUrl]);
-  if(!card)return null;
-  const full=card.print_mode!=='front_back',issueVersion=Number(card.metadata?.issue_version||1),orientation=normalizeOrientation(card.orientation),designer=getDesigner(card),{brand,assets,visibility}=designer;
-  const cls=`idcard-cr80 idcard-${card.template_code||'makkah_luxury'} ${orientation}`;
-  const Brand=()=> <>{visibility.logo&&assets.logoUrl&&<img className="idcard-template-logo" src={assets.logoUrl} alt=""/>}{visibility.companyName&&<div className="idcard-brand"><strong>{brand.companyNameAr}</strong><span>{brand.companyNameEn}</span></div>}{visibility.serviceLine&&<div className="idcard-company-line">{brand.serviceLineAr}</div>}</>;
-  if(side==='back'&&!full)return <div className={`${cls} back`} data-orientation={orientation} style={cardStyle(designer)}>
-    <div className="idcard-custom-bg"></div><div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div><Brand/>
-    <div className="idcard-back-grid"><div>{visibility.qr?(qr?<img className="idcard-qr large" src={qr} alt="QR verification"/>:<div className="idcard-qr-placeholder">QR</div>):null}<small>{visibility.qr?'امسح للتحقق من حالة البطاقة':''}</small></div><div className="idcard-info">{visibility.employeeId&&<><b>رقم البطاقة</b><span>{card.card_number}</span></>}<b>الإصدار</b><span>V{issueVersion}</span>{visibility.department&&<><b>القسم</b><span>{card.department_ar||'—'}</span></>}{visibility.licenseNumber&&<><b>الترخيص</b><span>{card.license_number||'—'}</span></>}{visibility.season&&<><b>الموسم</b><span>{card.season_label||'—'}</span></>}<b>الصلاحية</b><span>{card.expiry_date||'—'}</span></div></div>
-    <div className="idcard-verify-note">الحالة الإلكترونية الحالية عبر رمز QR هي المرجع لصلاحية البطاقة.</div>
-    {visibility.footer&&<div className="idcard-footer">{brand.honorAr} · {brand.honorEn}</div>}
-  </div>;
-  return <div className={`${cls} front`} data-orientation={orientation} style={cardStyle(designer)}>
-    <div className="idcard-custom-bg"></div><div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div><div className="idcard-watermark-mark">M</div>
-    {visibility.makkah&&assets.makkahUrl&&<img className="idcard-template-makkah" src={assets.makkahUrl} alt=""/>}{visibility.bus&&assets.busUrl&&<img className="idcard-template-bus" src={assets.busUrl} alt=""/>}<Brand/>
-    {visibility.holderPhoto&&<div className="idcard-photo">{card.photo_url?<img src={card.photo_url} alt=""/>:<span>الصورة</span>}</div>}
-    <div className="idcard-person">{visibility.holderName&&<><strong>{card.name_ar||'اسم حامل البطاقة'}</strong><span>{card.name_en||''}</span></>}{visibility.jobTitle&&<><b>{card.job_title_ar||'المسمى الوظيفي'}</b><small>{card.job_title_en||''}</small></>}</div>
-    {visibility.employeeId&&<div className="idcard-number"><small>ID CARD</small>{card.card_number||'MA-000'}<em>V{issueVersion}</em></div>}
-    {full&&<div className="idcard-full-meta">{visibility.department&&<MetaPill label="القسم" value={card.department_ar}/>} {visibility.licenseNumber&&<MetaPill label="الترخيص" value={card.license_number}/>} {visibility.season&&<MetaPill label="الموسم" value={card.season_label}/>}<MetaPill label="حتى" value={card.expiry_date}/></div>}
-    {visibility.qr&&qr&&<div className="idcard-qr-wrap"><img className="idcard-qr" src={qr} alt="QR verification"/><small>تحقق من البطاقة</small></div>}
-    <div className={`idcard-status ${card.status||'draft'}`}>{statusAr[card.status]||card.status}</div>
-    {visibility.slogan&&<div className="idcard-template-slogan">{brand.sloganAr}</div>}
-    {card.status==='active'&&visibility.approval&&<div className="idcard-approval">{assets.signatureUrl&&<img className="idcard-template-signature" src={assets.signatureUrl} alt=""/>}<b>معتمدة إلكترونيًا</b><span>Electronic Verification</span></div>}
-    {card.status!=='active'&&<div className="idcard-watermark">غير معتمدة</div>}
-  </div>;
+ const [qr,setQr]=useState('');
+ const verifyUrl=useMemo(()=>card?.qr_token?`${verificationBase||(typeof window!=='undefined'?window.location.origin:'')}/verify/id/${encodeURIComponent(card.qr_token)}`:'',[card?.qr_token,verificationBase]);
+ useEffect(()=>{let alive=true;if(!verifyUrl){setQr('');return}QRCode.toDataURL(verifyUrl,{width:360,margin:1,errorCorrectionLevel:'M'}).then(x=>alive&&setQr(x)).catch(()=>alive&&setQr(''));return()=>{alive=false}},[verifyUrl]);
+ if(!card)return null;
+ const full=card.print_mode!=='front_back',issueVersion=Number(card.metadata?.issue_version||1),orientation=normalizeOrientation(card.orientation),designer=getDesigner(card),{brand,assets,visibility}=designer;
+ const cls=`idcard-cr80 idcard-${card.template_code||'makkah_luxury'} ${orientation}`;
+ const Brand=()=> <>{visibility.logo&&assets.logoUrl&&<img className="idcard-template-logo" src={assets.logoUrl} alt=""/>}{visibility.companyName&&<div className="idcard-brand"><strong>{brand.companyNameAr}</strong><span>{brand.companyNameEn}</span></div>}{visibility.serviceLine&&<div className="idcard-company-line">{brand.serviceLineAr}</div>}</>;
+ if(side==='back'&&!full)return <div className={`${cls} back`} data-orientation={orientation} style={cardStyle(designer)}>
+  <div className="idcard-custom-bg"></div><div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div><div className="idcard-lanyard-slot"></div><Brand/>
+  <div className="idcard-back-grid"><div>{visibility.qr?(qr?<img className="idcard-qr large" src={qr} alt="QR verification"/>:<div className="idcard-qr-placeholder">QR</div>):null}<small>{visibility.qr?'امسح للتحقق من حالة البطاقة':''}</small></div><div className="idcard-info">{visibility.employeeId&&<><b>رقم البطاقة</b><span>{card.card_number}</span></>}<b>الإصدار</b><span>V{issueVersion}</span>{visibility.department&&<><b>القسم</b><span>{card.department_ar||'—'}</span></>}{visibility.licenseNumber&&<><b>الترخيص</b><span>{card.license_number||'—'}</span></>}{visibility.season&&<><b>الموسم</b><span>{card.season_label||'—'}</span></>}<b>الصلاحية</b><span>{card.expiry_date||'—'}</span></div></div>
+  <div className="idcard-verify-note">الحالة الإلكترونية الحالية عبر رمز QR هي المرجع لصلاحية البطاقة.</div>
+  {visibility.footer&&<div className="idcard-footer">{brand.honorAr} · {brand.honorEn}</div>}
+ </div>;
+ return <div className={`${cls} front`} data-orientation={orientation} style={cardStyle(designer)}>
+  <div className="idcard-custom-bg"></div><div className="idcard-decor idcard-decor-a"></div><div className="idcard-decor idcard-decor-b"></div><div className="idcard-watermark-mark">M</div><div className="idcard-lanyard-slot"></div>
+  {visibility.makkah&&assets.makkahUrl&&<img className="idcard-template-makkah" src={assets.makkahUrl} alt=""/>}{visibility.bus&&assets.busUrl&&<img className="idcard-template-bus" src={assets.busUrl} alt=""/>}<Brand/>
+  {visibility.holderPhoto&&<div className="idcard-photo">{card.photo_url?<img src={card.photo_url} alt=""/>:<span>الصورة</span>}</div>}
+  <div className="idcard-person">{visibility.holderName&&<><strong>{card.name_ar||'اسم حامل البطاقة'}</strong><span>{card.name_en||''}</span></>}{visibility.jobTitle&&<><b>{card.job_title_ar||'المسمى الوظيفي'}</b><small>{card.job_title_en||''}</small></>}</div>
+  {visibility.employeeId&&<div className="idcard-number"><small>ID CARD</small>{card.card_number||'MA-000'}<em>V{issueVersion}</em></div>}
+  {full&&<div className="idcard-full-meta">{visibility.department&&<MetaPill label="القسم" value={card.department_ar}/>} {visibility.licenseNumber&&<MetaPill label="الترخيص" value={card.license_number}/>} {visibility.season&&<MetaPill label="الموسم" value={card.season_label}/>}<MetaPill label="حتى" value={card.expiry_date}/></div>}
+  {visibility.qr&&qr&&<div className="idcard-qr-wrap"><img className="idcard-qr" src={qr} alt="QR verification"/><small>تحقق من البطاقة</small></div>}
+  <div className={`idcard-status ${card.status||'draft'}`}>{statusAr[card.status]||card.status}</div>
+  {visibility.slogan&&<div className="idcard-template-slogan">{brand.sloganAr}</div>}
+  {visibility.footer&&<div className="idcard-reference-footer"><strong>{brand.honorAr}</strong><span>{brand.honorEn}</span></div>}
+  {card.status==='active'&&visibility.approval&&<div className="idcard-approval">{assets.signatureUrl&&<img className="idcard-template-signature" src={assets.signatureUrl} alt=""/>}<small className="idcard-approval-label">اعتماد الإدارة</small><b>معتمدة إلكترونيًا</b><span>Electronic Verification</span></div>}
+  {card.status!=='active'&&<div className="idcard-watermark">غير معتمدة</div>}
+ </div>;
 }
 
 export function CR80CalibrationSheet({orientation='landscape'}){const o=normalizeOrientation(orientation);return <div className={`idcard-calibration-sheet ${o}`} data-orientation={o}><div className="calibration-border"></div><div className="calibration-center-x"></div><div className="calibration-center-y"></div><div className="calibration-label">CR80 · {o==='portrait'?'53.98 × 85.60':'85.60 × 53.98'} mm</div><div className="calibration-mm x">10 mm</div><div className="calibration-mm y">10 mm</div></div>}
