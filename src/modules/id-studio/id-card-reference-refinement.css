@@ -1,0 +1,40 @@
+/* Final reference-specific layer. Keeps generic/landscape cards untouched. */
+.idcard-reference-meta,.idcard-reference-values{display:none}
+
+/* Reference A — portrait with lanyard slot, Makkah image, centered portrait and navy/gold footer. */
+.idcard-makkah_luxury.portrait .idcard-full-meta{display:none}
+.idcard-makkah_luxury.portrait .idcard-reference-meta{display:grid;position:absolute;top:63.2mm;left:4.2mm;right:4.2mm;grid-template-columns:1fr 1fr;gap:.65mm 1.4mm;font-size:1.08mm;color:#fff;z-index:3}
+.idcard-makkah_luxury.portrait .idcard-reference-meta>div{display:grid;grid-template-columns:8mm 1fr;gap:.5mm;align-items:center;border-bottom:.16mm solid rgba(255,255,255,.24);padding:.28mm .2mm}
+.idcard-makkah_luxury.portrait .idcard-reference-meta b{color:#f1d47b;font-weight:900}.idcard-makkah_luxury.portrait .idcard-reference-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idcard-makkah_luxury.portrait .idcard-number{display:none}
+.idcard-makkah_luxury.portrait .idcard-qr-wrap{left:3.4mm;bottom:4.8mm;width:11.8mm}
+.idcard-makkah_luxury.portrait .idcard-approval{right:18.6mm;left:auto;bottom:7.3mm;width:13.5mm;text-align:center}
+.idcard-makkah_luxury.portrait .idcard-template-slogan{left:31mm;right:18mm;bottom:7mm;transform:none;max-width:none;text-align:center;font-size:1.12mm;color:#fff}
+.idcard-makkah_luxury.portrait .idcard-reference-footer{left:15.5mm;right:18mm;bottom:2.3mm}
+.idcard-makkah_luxury.portrait .idcard-reference-values{display:flex;position:absolute;right:2.8mm;bottom:1.2mm;width:14.2mm;justify-content:space-between;color:#fff;font-size:.72mm;font-weight:900;z-index:3}
+.idcard-makkah_luxury.portrait .idcard-reference-values span{display:grid;place-items:center;width:4mm;height:4mm;border:.32mm solid rgba(255,255,255,.72);border-radius:50%;background:rgba(255,255,255,.07)}
+.idcard-makkah_luxury.portrait .idcard-template-bus{right:1.8mm;bottom:6.1mm;width:14.5mm;height:6.8mm}
+.idcard-makkah_luxury.portrait .idcard-status{top:18.2mm;left:3mm;padding:.8mm 1.4mm}
+
+/* Reference B — portrait with permanent navy rail and QR inside the rail. */
+.idcard-executive_side.portrait .idcard-full-meta{display:none}
+.idcard-executive_side.portrait .idcard-number{display:none}
+.idcard-executive_side.portrait .idcard-reference-meta{display:grid;position:absolute;top:59.5mm;left:4mm;right:18mm;gap:.45mm;font-size:1.12mm;color:#41536a;z-index:3}
+.idcard-executive_side.portrait .idcard-reference-meta>div{display:grid;grid-template-columns:9mm 1fr;gap:.6mm;align-items:center;min-height:3.6mm;border:1px solid #e7ebf1;border-radius:1.2mm;padding:.25mm .8mm;background:rgba(249,251,253,.94)}
+.idcard-executive_side.portrait .idcard-reference-meta b{color:var(--id-primary);font-weight:900}.idcard-executive_side.portrait .idcard-reference-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idcard-executive_side.portrait .idcard-qr-wrap{right:1.45mm;bottom:13.3mm;width:11.7mm}
+.idcard-executive_side.portrait .idcard-template-bus{right:1.35mm;bottom:4.1mm;width:12.4mm;height:6.2mm}
+.idcard-executive_side.portrait .idcard-template-slogan{left:4mm;right:18mm;bottom:4.4mm;font-size:1.14mm}
+.idcard-executive_side.portrait .idcard-reference-footer{left:4mm;right:18mm;bottom:1.2mm}
+.idcard-executive_side.portrait .idcard-approval{left:4mm;right:auto;bottom:8.7mm;width:14.5mm;text-align:center}
+.idcard-executive_side.portrait .idcard-reference-values{display:flex;position:absolute;right:1.6mm;bottom:1mm;width:11.8mm;justify-content:space-between;color:#fff;font-size:.62mm;font-weight:900;z-index:4}
+.idcard-executive_side.portrait .idcard-reference-values span{display:grid;place-items:center;width:3.25mm;height:3.25mm;border:.26mm solid rgba(255,255,255,.62);border-radius:50%}
+
+/* Fine typography / image behavior for both approved portrait references. */
+.idcard-makkah_luxury.portrait .idcard-photo img,.idcard-executive_side.portrait .idcard-photo img{width:100%;height:100%;object-fit:cover;object-position:center top}
+.idcard-makkah_luxury.portrait .idcard-template-logo,.idcard-executive_side.portrait .idcard-template-logo{object-fit:contain}
+.idcard-makkah_luxury.portrait .idcard-watermark,.idcard-executive_side.portrait .idcard-watermark{font-size:5.5mm;transform:rotate(-27deg);opacity:.12}
+
+@media print{
+ .idcard-reference-meta,.idcard-reference-values{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
