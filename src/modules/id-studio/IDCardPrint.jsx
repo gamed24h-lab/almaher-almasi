@@ -38,10 +38,12 @@ export function IDCardFace({card,side='front',verificationBase=''}){
   <div className="idcard-person">{visibility.holderName&&<><strong>{card.name_ar||'اسم حامل البطاقة'}</strong><span>{card.name_en||''}</span></>}{visibility.jobTitle&&<><b>{card.job_title_ar||'المسمى الوظيفي'}</b><small>{card.job_title_en||''}</small></>}</div>
   {visibility.employeeId&&<div className="idcard-number"><small>ID CARD</small>{card.card_number||'MA-000'}<em>V{issueVersion}</em></div>}
   {full&&<div className="idcard-full-meta">{visibility.department&&<MetaPill label="القسم" value={card.department_ar}/>} {visibility.licenseNumber&&<MetaPill label="الترخيص" value={card.license_number}/>} {visibility.season&&<MetaPill label="الموسم" value={card.season_label}/>}<MetaPill label="حتى" value={card.expiry_date}/></div>}
+  {full&&<div className="idcard-reference-meta"><div><b>الشركة</b><span>{brand.companyNameAr}</span></div>{visibility.licenseNumber&&<div><b>الترخيص</b><span>{card.license_number||'—'}</span></div>}{visibility.season&&<div><b>الموسم</b><span>{card.season_label||'—'}</span></div>}{visibility.employeeId&&<div><b>رقم الموظف</b><span>{card.card_number||'MA-000'}</span></div>}</div>}
   {visibility.qr&&qr&&<div className="idcard-qr-wrap"><img className="idcard-qr" src={qr} alt="QR verification"/><small>تحقق من البطاقة</small></div>}
   <div className={`idcard-status ${card.status||'draft'}`}>{statusAr[card.status]||card.status}</div>
   {visibility.slogan&&<div className="idcard-template-slogan">{brand.sloganAr}</div>}
   {visibility.footer&&<div className="idcard-reference-footer"><strong>{brand.honorAr}</strong><span>{brand.honorEn}</span></div>}
+  <div className="idcard-reference-values"><span>أمان</span><span>راحة</span><span>ثقة</span></div>
   {card.status==='active'&&visibility.approval&&<div className="idcard-approval">{assets.signatureUrl&&<img className="idcard-template-signature" src={assets.signatureUrl} alt=""/>}<small className="idcard-approval-label">اعتماد الإدارة</small><b>معتمدة إلكترونيًا</b><span>Electronic Verification</span></div>}
   {card.status!=='active'&&<div className="idcard-watermark">غير معتمدة</div>}
  </div>;
