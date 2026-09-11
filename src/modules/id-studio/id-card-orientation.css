@@ -1,3 +1,4 @@
+@import './id-card-reference-refinement.css';
 /* Orientation layer. Landscape remains defined in id-card-print.css. */
 .idcard-cr80.portrait{width:53.98mm;height:85.6mm;padding:4mm}
 .idcard-calibration-sheet.portrait{width:53.98mm;height:85.6mm}
