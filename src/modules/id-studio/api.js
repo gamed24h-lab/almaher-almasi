@@ -11,6 +11,7 @@ export const idStudioApi={
   cloneCard:(id,override={})=>call('id_studio_card_clone',{id,override}),
   bulkImport:(rows=[])=>call('id_studio_bulk_import',{rows}),
   updateCard:(id,patch)=>call('id_studio_card_update',{id,patch}),
+  updateIssuedCard:(id,patch,{mode='reissue',reason=''}={})=>call('id_studio_card_issued_update',{id,patch,mode,reason}),
   uploadPhoto:(id,dataUrl)=>call('id_studio_photo_upload',{id,data_url:dataUrl}),
   uploadTemplateAsset:(code,asset,dataUrl)=>call('id_studio_template_asset_upload',{code,asset,data_url:dataUrl}),
   submitForApproval:(id)=>call('id_studio_card_submit',{id}),
