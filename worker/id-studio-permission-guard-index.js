@@ -1,4 +1,4 @@
-import opsWorker from './id-studio-issued-edit-index.js';
+import opsWorker from './id-studio-photo-version-index.js';
 
 const ID_KEYS=new Set([
   'id_studio_access','id_card_view','id_card_create','id_card_edit','id_card_approve',
