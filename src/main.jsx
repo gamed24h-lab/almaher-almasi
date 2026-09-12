@@ -39,6 +39,8 @@ import {installFinance360DailyClose} from './finance-360-daily-close.js';
 import {installFinance360CloseHistory} from './finance-360-close-history.js';
 import {installFinance360MonthlyClose} from './finance-360-monthly-close.js';
 import {installFinance360MonthlySummary} from './finance-360-monthly-summary.js';
+import {installFinance360MonthCompare} from './finance-360-month-compare.js';
+import {installFinance360BudgetManagement} from './finance-360-budget-management.js';
 import './styles.css';
 import './mobile-safe-area.css';
 import './themes.css';
@@ -123,5 +125,7 @@ installFinance360DailyClose();
 installFinance360CloseHistory();
 installFinance360MonthlyClose();
 installFinance360MonthlySummary();
+installFinance360MonthCompare();
+installFinance360BudgetManagement();
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><ThemeProvider><SystemBrandProvider><App/><GlobalFeedback/></SystemBrandProvider></ThemeProvider></React.StrictMode>);
