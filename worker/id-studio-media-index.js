@@ -10,7 +10,7 @@ const isDeveloper=u=>String(u?.role||'').toLowerCase()==='developer';
 const has=(u,key)=>!!u&&(isDeveloper(u)||u.permissions?.[key]===true);
 const actorId=u=>txt(u?.id||u?.user_id||u?.username||u?.email||'');
 const TEMPLATE_CODES=new Set(['makkah_luxury','executive_side','clean_formal','royal_dark','minimal_corporate']);
-const TEMPLATE_ASSETS=new Set(['logoUrl','backgroundUrl','makkahUrl','busUrl','signatureUrl']);
+const TEMPLATE_ASSETS=new Set(['logoUrl','backgroundUrl','backBackgroundUrl','makkahUrl','busUrl','signatureUrl']);
 async function readJson(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {error:t||`HTTP ${r.status}`}}}
 async function actor(request,env,ctx){try{const r=await idStudioWorker.fetch(new Request(new URL('/api/auth/me',request.url),{method:'GET',headers:request.headers}),env,ctx);if(!r.ok)return null;return (await readJson(r))?.user||null}catch{return null}}
 function requirePerm(me,key){if(!has(me,key)){const e=new Error('لا توجد لديك صلاحية لتنفيذ هذه العملية في ID Studio.');e.status=403;throw e}}
