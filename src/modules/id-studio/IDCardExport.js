@@ -1,5 +1,6 @@
 const MM_PER_INCH=25.4;
 const CSS_DPI=96;
+const PT_PER_MM=72/25.4;
 const SIZE={landscape:{w:85.6,h:53.98},portrait:{w:53.98,h:85.6}};
 
 function safeName(value='id-card'){
@@ -17,8 +18,11 @@ function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new F
 async function inlineImages(root){const images=[...root.querySelectorAll('img')];await Promise.all(images.map(async img=>{const src=img.getAttribute('src')||'';if(!src||src.startsWith('data:'))return;try{const r=await fetch(src,{credentials:'include',cache:'no-store'});if(!r.ok)return;img.setAttribute('src',await blobToDataUrl(await r.blob()))}catch{}}))}
 function copyComputedStyles(source,clone){const sourceNodes=[source,...source.querySelectorAll('*')],cloneNodes=[clone,...clone.querySelectorAll('*')];sourceNodes.forEach((node,index)=>{const target=cloneNodes[index];if(!target)return;const cs=getComputedStyle(node);let css='';for(const prop of cs)css+=`${prop}:${cs.getPropertyValue(prop)};`;target.setAttribute('style',`${target.getAttribute('style')||''};${css}`)})}
 function waitForImages(root){return Promise.all([...root.querySelectorAll('img')].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.addEventListener('load',resolve,{once:true});img.addEventListener('error',resolve,{once:true})})))}
+function ascii(value){return new TextEncoder().encode(String(value))}
+function concatBytes(parts){const total=parts.reduce((n,p)=>n+p.length,0),out=new Uint8Array(total);let offset=0;for(const p of parts){out.set(p,offset);offset+=p.length}return out}
+function dataUrlBytes(dataUrl){const base64=String(dataUrl).split(',')[1]||'',raw=atob(base64),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out}
 
-export async function exportCardElementToPng(element,{filename='id-card.png',dpi=300,orientation}={}){
+async function renderCardCanvas(element,{dpi=300,orientation}={}){
   if(!element)throw new Error('تعذر العثور على وجه البطاقة المطلوب للتصدير.');
   await waitForImages(element);
   const o=orientationOf(element,orientation),size=SIZE[o];
@@ -30,7 +34,41 @@ export async function exportCardElementToPng(element,{filename='id-card.png',dpi
   const serialized=new XMLSerializer().serializeToString(clone);
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${logicalW}" height="${logicalH}" viewBox="0 0 ${logicalW} ${logicalH}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${size.w}mm;height:${size.h}mm;margin:0;padding:0;overflow:hidden">${serialized}</div></foreignObject></svg>`;
   const svgUrl=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}));
-  try{const image=new Image();await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('تعذر تحويل تصميم البطاقة إلى PNG.'));image.src=svgUrl});ctx.setTransform(scale,0,0,scale,0,0);ctx.drawImage(image,0,0,logicalW,logicalH);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png',1));if(!blob)throw new Error('تعذر إنشاء ملف PNG.');downloadBlob(blob,filename.toLowerCase().endsWith('.png')?filename:`${safeName(filename)}.png`);return {width:canvas.width,height:canvas.height,dpi:Number(dpi)||300,orientation:o,width_mm:size.w,height_mm:size.h}}finally{URL.revokeObjectURL(svgUrl)}
+  try{const image=new Image();await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('تعذر تحويل تصميم البطاقة إلى صورة.'));image.src=svgUrl});ctx.setTransform(scale,0,0,scale,0,0);ctx.drawImage(image,0,0,logicalW,logicalH);return {canvas,orientation:o,size}}finally{URL.revokeObjectURL(svgUrl)}
+}
+
+function buildPdf(pages){
+  const objects=[];
+  const pageIds=[],imageIds=[],contentIds=[];
+  let nextId=3;
+  for(let i=0;i<pages.length;i++){pageIds.push(nextId++);imageIds.push(nextId++);contentIds.push(nextId++)}
+  objects[1]=ascii('<< /Type /Catalog /Pages 2 0 R >>');
+  objects[2]=ascii(`<< /Type /Pages /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
+  pages.forEach((p,i)=>{
+    const w=(p.size.w*PT_PER_MM).toFixed(4),h=(p.size.h*PT_PER_MM).toFixed(4),pageId=pageIds[i],imageId=imageIds[i],contentId=contentIds[i];
+    const command=`q\n${w} 0 0 ${h} 0 0 cm\n/Im0 Do\nQ\n`,commandBytes=ascii(command);
+    objects[pageId]=ascii(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objects[imageId]=concatBytes([ascii(`<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpeg.length} >>\nstream\n`),p.jpeg,ascii('\nendstream')]);
+    objects[contentId]=concatBytes([ascii(`<< /Length ${commandBytes.length} >>\nstream\n`),commandBytes,ascii('endstream')]);
+  });
+  const parts=[ascii('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')],offsets=[0];let length=parts[0].length;
+  for(let id=1;id<objects.length;id++){offsets[id]=length;const obj=concatBytes([ascii(`${id} 0 obj\n`),objects[id],ascii('\nendobj\n')]);parts.push(obj);length+=obj.length}
+  const xrefOffset=length;let xref=`xref\n0 ${objects.length}\n0000000000 65535 f \n`;for(let id=1;id<objects.length;id++)xref+=`${String(offsets[id]).padStart(10,'0')} 00000 n \n`;
+  parts.push(ascii(xref));parts.push(ascii(`trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`));
+  return new Blob(parts,{type:'application/pdf'});
+}
+
+export async function exportCardElementToPng(element,{filename='id-card.png',dpi=300,orientation}={}){
+  const {canvas,orientation:o,size}=await renderCardCanvas(element,{dpi,orientation});
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png',1));if(!blob)throw new Error('تعذر إنشاء ملف PNG.');
+  downloadBlob(blob,filename.toLowerCase().endsWith('.png')?filename:`${safeName(filename)}.png`);return {width:canvas.width,height:canvas.height,dpi:Number(dpi)||300,orientation:o,width_mm:size.w,height_mm:size.h};
+}
+
+export async function exportCardElementsToPdf(elements,{filename='id-card.pdf',dpi=300,quality=.96}={}){
+  const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)throw new Error('تعذر العثور على البطاقة المطلوبة لتصدير PDF.');
+  const pages=[];
+  for(const element of list){const {canvas,size}=await renderCardCanvas(element,{dpi});const dataUrl=canvas.toDataURL('image/jpeg',Math.max(.8,Math.min(1,Number(quality)||.96)));pages.push({size,width:canvas.width,height:canvas.height,jpeg:dataUrlBytes(dataUrl)})}
+  const blob=buildPdf(pages);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h])};
 }
 
 export function exportCardToPngBySelector(selector,{cardNumber='id-card',side='front',dpi=300,orientation}={}){const element=document.querySelector(selector);return exportCardElementToPng(element,{filename:`${safeName(cardNumber)}-${side}.png`,dpi,orientation})}
