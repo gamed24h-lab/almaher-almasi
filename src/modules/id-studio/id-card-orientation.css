@@ -76,4 +76,14 @@
  .idstudio-print-sheet[data-orientation="landscape"]{width:85.6mm!important;height:53.98mm!important}
  body[data-idstudio-print-mode="batch"] .idstudio-batch-page.portrait{width:53.98mm;height:85.6mm}
  body[data-idstudio-print-mode="batch"] .idstudio-batch-page.landscape{width:85.6mm;height:53.98mm}
+
+ /* Safari/iOS still paginates visibility:hidden content. Remove the whole ID Studio UI from print layout and leave only the dedicated CR80 root. */
+ body[data-idstudio-print-mode="single"] .idstudio-page{margin:0!important;padding:0!important;border:0!important;background:#fff!important;box-shadow:none!important;min-height:0!important}
+ body[data-idstudio-print-mode="single"] .idstudio-page>*:not(#idstudio-print-root){display:none!important}
+ body[data-idstudio-print-mode="single"] #idstudio-print-root{display:block!important;visibility:visible!important;margin:0!important;padding:0!important;border:0!important;box-shadow:none!important}
+ body[data-idstudio-print-mode="single"] #idstudio-print-root>*{visibility:visible!important}
+ body[data-idstudio-print-mode="single"] #idstudio-print-root[data-side="front"] .idcard-cr80.back,
+ body[data-idstudio-print-mode="single"] #idstudio-print-root[data-side="back"] .idcard-cr80.front{display:none!important}
+ body[data-idstudio-print-mode="single"] #idstudio-print-root[data-side="both"] .idcard-cr80{display:block!important;break-after:page;page-break-after:always}
+ body[data-idstudio-print-mode="single"] #idstudio-print-root[data-side="both"] .idcard-cr80:last-of-type{break-after:auto;page-break-after:auto}
 }
