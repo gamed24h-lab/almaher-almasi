@@ -61,14 +61,19 @@
 .idcard-cr80.portrait.back .idcard-info{width:100%;grid-template-columns:18mm 1fr;gap:1.2mm;font-size:1.8mm}
 .idcard-cr80.portrait.back .idcard-verify-note{right:4mm;left:4mm;bottom:8mm;text-align:center}
 
-/* Chromium supports named pages; this keeps mixed portrait/landscape batch jobs physically correct. */
+/* Single-card printing must use a real CR80 physical page, not an A4 sheet. */
 @page idcard-landscape{size:85.6mm 53.98mm;margin:0}
 @page idcard-portrait{size:53.98mm 85.6mm;margin:0}
 @media print{
+ html,body{margin:0!important;padding:0!important}
+ body[data-idstudio-print-mode="single"]{width:var(--idstudio-page-w,85.6mm)!important;height:var(--idstudio-page-h,53.98mm)!important;min-width:0!important;min-height:0!important;overflow:hidden!important}
+ body[data-idstudio-print-mode="single"] .idstudio-print-sheet{page:idcard-landscape}
+ body[data-idstudio-print-mode="single"] .idstudio-print-sheet[data-orientation="portrait"]{page:idcard-portrait}
+ body[data-idstudio-print-mode="single"] .idstudio-print-sheet[data-orientation="landscape"]{page:idcard-landscape}
  .idcard-cr80.landscape,.idstudio-batch-page.landscape{page:idcard-landscape}
  .idcard-cr80.portrait,.idstudio-batch-page.portrait{page:idcard-portrait}
- .idstudio-print-sheet[data-orientation="portrait"]{width:53.98mm;height:85.6mm}
- .idstudio-print-sheet[data-orientation="landscape"]{width:85.6mm;height:53.98mm}
+ .idstudio-print-sheet[data-orientation="portrait"]{width:53.98mm!important;height:85.6mm!important}
+ .idstudio-print-sheet[data-orientation="landscape"]{width:85.6mm!important;height:53.98mm!important}
  body[data-idstudio-print-mode="batch"] .idstudio-batch-page.portrait{width:53.98mm;height:85.6mm}
  body[data-idstudio-print-mode="batch"] .idstudio-batch-page.landscape{width:85.6mm;height:53.98mm}
 }
