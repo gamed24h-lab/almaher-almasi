@@ -20,11 +20,12 @@ function copyComputedStyles(source,clone){const sourceNodes=[source,...source.qu
 function waitForImages(root){return Promise.all([...root.querySelectorAll('img')].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.addEventListener('load',resolve,{once:true});img.addEventListener('error',resolve,{once:true})})))}
 function nextPaint(){return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
 function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+function qrStillRendering(el){return !!el.querySelector('.idcard-qr-placeholder')||!!(el.querySelector('.idcard-status.active')&&!el.querySelector('.idcard-qr'))}
 async function waitForDynamicCardContent(elements){
   const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)return;
   await nextPaint();
   const started=Date.now();
-  while(list.some(el=>el.querySelector('.idcard-qr-placeholder'))&&Date.now()-started<1200){await sleep(40);await nextPaint()}
+  while(list.some(qrStillRendering)&&Date.now()-started<1200){await sleep(40);await nextPaint()}
   await sleep(140);await nextPaint();
   await Promise.all(list.map(waitForImages));
 }
