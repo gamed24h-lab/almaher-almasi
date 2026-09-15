@@ -18,6 +18,16 @@ function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new F
 async function inlineImages(root){const images=[...root.querySelectorAll('img')];await Promise.all(images.map(async img=>{const src=img.getAttribute('src')||'';if(!src||src.startsWith('data:'))return;try{const r=await fetch(src,{credentials:'include',cache:'no-store'});if(!r.ok)return;img.setAttribute('src',await blobToDataUrl(await r.blob()))}catch{}}))}
 function copyComputedStyles(source,clone){const sourceNodes=[source,...source.querySelectorAll('*')],cloneNodes=[clone,...clone.querySelectorAll('*')];sourceNodes.forEach((node,index)=>{const target=cloneNodes[index];if(!target)return;const cs=getComputedStyle(node);let css='';for(const prop of cs)css+=`${prop}:${cs.getPropertyValue(prop)};`;target.setAttribute('style',`${target.getAttribute('style')||''};${css}`)})}
 function waitForImages(root){return Promise.all([...root.querySelectorAll('img')].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.addEventListener('load',resolve,{once:true});img.addEventListener('error',resolve,{once:true})})))}
+function nextPaint(){return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+async function waitForDynamicCardContent(elements){
+  const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)return;
+  await nextPaint();
+  const started=Date.now();
+  while(list.some(el=>el.querySelector('.idcard-qr-placeholder'))&&Date.now()-started<1200){await sleep(40);await nextPaint()}
+  await sleep(140);await nextPaint();
+  await Promise.all(list.map(waitForImages));
+}
 function ascii(value){return new TextEncoder().encode(String(value))}
 function concatBytes(parts){const total=parts.reduce((n,p)=>n+p.length,0),out=new Uint8Array(total);let offset=0;for(const p of parts){out.set(p,offset);offset+=p.length}return out}
 function dataUrlBytes(dataUrl){const base64=String(dataUrl).split(',')[1]||'',raw=atob(base64),out=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);return out}
@@ -59,6 +69,7 @@ function buildPdf(pages){
 }
 
 export async function exportCardElementToPng(element,{filename='id-card.png',dpi=300,orientation}={}){
+  await waitForDynamicCardContent([element]);
   const {canvas,orientation:o,size}=await renderCardCanvas(element,{dpi,orientation});
   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png',1));if(!blob)throw new Error('تعذر إنشاء ملف PNG.');
   downloadBlob(blob,filename.toLowerCase().endsWith('.png')?filename:`${safeName(filename)}.png`);return {width:canvas.width,height:canvas.height,dpi:Number(dpi)||300,orientation:o,width_mm:size.w,height_mm:size.h};
@@ -66,6 +77,7 @@ export async function exportCardElementToPng(element,{filename='id-card.png',dpi
 
 export async function exportCardElementsToPdf(elements,{filename='id-card.pdf',dpi=300,quality=.96}={}){
   const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)throw new Error('تعذر العثور على البطاقة المطلوبة لتصدير PDF.');
+  await waitForDynamicCardContent(list);
   const pages=[];
   for(const element of list){const {canvas,size}=await renderCardCanvas(element,{dpi});const dataUrl=canvas.toDataURL('image/jpeg',Math.max(.8,Math.min(1,Number(quality)||.96)));pages.push({size,width:canvas.width,height:canvas.height,jpeg:dataUrlBytes(dataUrl)})}
   const blob=buildPdf(pages);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h])};
