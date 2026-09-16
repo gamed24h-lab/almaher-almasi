@@ -12,6 +12,7 @@ function orientationOf(element,explicit){
 }
 function clamp(value,min,max,fallback){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback}
 function normalizeCalibration(value={}){return {offsetX:clamp(value.offsetX,-20,20,0),offsetY:clamp(value.offsetY,-20,20,0),scaleX:clamp(value.scaleX,.9,1.1,1),scaleY:clamp(value.scaleY,.9,1.1,1)}}
+function isAppleMobile(){if(typeof navigator==='undefined')return false;const ua=String(navigator.userAgent||'');return /iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&Number(navigator.maxTouchPoints)>1)}
 function downloadBlob(blob,filename){
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
   a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
@@ -30,6 +31,18 @@ async function waitForDynamicCardContent(elements){
   while(list.some(qrStillRendering)&&Date.now()-started<1200){await sleep(40);await nextPaint()}
   await sleep(140);await nextPaint();
   await Promise.all(list.map(waitForImages));
+}
+function inheritedStyles(){return [...document.head.querySelectorAll('link[rel="stylesheet"],style')].map(node=>node.tagName==='LINK'?`<link rel="stylesheet" href="${node.href}">`:node.outerHTML).join('')}
+async function waitForStyleSheets(doc){const links=[...doc.querySelectorAll('link[rel="stylesheet"]')];await Promise.all(links.map(link=>link.sheet?Promise.resolve():new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;resolve()};link.addEventListener('load',finish,{once:true});link.addEventListener('error',finish,{once:true});setTimeout(finish,1800)})))}
+async function printElementsAsCr80(elements,{calibration={}}={}){
+  const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)throw new Error('تعذر العثور على البطاقة المطلوبة للطباعة.');
+  await waitForDynamicCardContent(list);const o=orientationOf(list[0]),size=SIZE[o],cal=normalizeCalibration(calibration),pages=[];
+  for(const element of list){const clone=element.cloneNode(true);copyComputedStyles(element,clone);clone.style.margin='0';clone.style.borderRadius='0';clone.style.boxShadow='none';pages.push(`<div class="idstudio-ios-cr80-page">${clone.outerHTML}</div>`)}
+  const iframe=document.createElement('iframe');iframe.setAttribute('aria-hidden','true');iframe.style.position='fixed';iframe.style.left='-10000px';iframe.style.top='0';iframe.style.width='1000px';iframe.style.height='1000px';iframe.style.border='0';document.body.appendChild(iframe);
+  const doc=iframe.contentDocument,win=iframe.contentWindow;if(!doc||!win){iframe.remove();throw new Error('تعذر فتح معاينة الطباعة على هذا الجهاز.')}
+  const css=`<style>html,body{margin:0!important;padding:0!important;background:#fff!important;width:${size.w}mm!important;min-width:0!important}.idstudio-ios-cr80-page{display:block!important;position:relative!important;width:${size.w}mm!important;height:${size.h}mm!important;margin:0!important;padding:0!important;overflow:hidden!important;break-after:page;page-break-after:always;page:ios-cr80}.idstudio-ios-cr80-page:last-child{break-after:auto;page-break-after:auto}.idstudio-ios-cr80-page>.idcard-cr80{display:block!important;visibility:visible!important;margin:0!important;border-radius:0!important;box-shadow:none!important;transform:translate(${cal.offsetX}mm,${cal.offsetY}mm) scale(${cal.scaleX},${cal.scaleY})!important;transform-origin:top left!important}@page ios-cr80{size:${size.w}mm ${size.h}mm;margin:0}@media print{html,body{margin:0!important;padding:0!important;width:${size.w}mm!important;height:auto!important;overflow:visible!important}.idstudio-ios-cr80-page{display:block!important}.idstudio-ios-cr80-page>.idcard-cr80{display:block!important}}</style>`;
+  doc.open();doc.write(`<!doctype html><html><head><meta charset="utf-8">${inheritedStyles()}${css}</head><body>${pages.join('')}</body></html>`);doc.close();
+  try{await waitForStyleSheets(doc);if(doc.fonts?.ready)await doc.fonts.ready;await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve})));await sleep(120);let removed=false;const cleanup=()=>{if(removed)return;removed=true;iframe.remove()};win.addEventListener('afterprint',()=>setTimeout(cleanup,300),{once:true});win.focus();win.print();setTimeout(cleanup,60000);return {pages:list.length,dpi:null,page_sizes_mm:list.map(()=>[size.w,size.h]),calibration:cal,mode:'ios-native-print-preview'}}catch(err){iframe.remove();throw err}
 }
 function ascii(value){return new TextEncoder().encode(String(value))}
 function concatBytes(parts){const total=parts.reduce((n,p)=>n+p.length,0),out=new Uint8Array(total);let offset=0;for(const p of parts){out.set(p,offset);offset+=p.length}return out}
@@ -73,6 +86,7 @@ function buildPdf(pages,calibration={}){
 }
 
 export async function exportCardElementToPng(element,{filename='id-card.png',dpi=300,orientation}={}){
+  if(isAppleMobile())throw new Error('Safari على iPhone/iPad لا يسمح بتصدير تصميم البطاقة مباشرة إلى PNG. استخدم PDF CR80 أو الطباعة.');
   await waitForDynamicCardContent([element]);
   const {canvas,orientation:o,size}=await renderCardCanvas(element,{dpi,orientation});
   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png',1));if(!blob)throw new Error('تعذر إنشاء ملف PNG.');
@@ -81,10 +95,11 @@ export async function exportCardElementToPng(element,{filename='id-card.png',dpi
 
 export async function exportCardElementsToPdf(elements,{filename='id-card.pdf',dpi=300,quality=.96,calibration={}}={}){
   const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)throw new Error('تعذر العثور على البطاقة المطلوبة لتصدير PDF.');
-  await waitForDynamicCardContent(list);
+  await waitForDynamicCardContent(list);const normalizedCalibration=normalizeCalibration(calibration);
+  if(isAppleMobile())return printElementsAsCr80(list,{calibration:normalizedCalibration});
   const pages=[];
   for(const element of list){const {canvas,size}=await renderCardCanvas(element,{dpi});const dataUrl=canvas.toDataURL('image/jpeg',Math.max(.8,Math.min(1,Number(quality)||.96)));pages.push({size,width:canvas.width,height:canvas.height,jpeg:dataUrlBytes(dataUrl)})}
-  const normalizedCalibration=normalizeCalibration(calibration),blob=buildPdf(pages,normalizedCalibration);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h]),calibration:normalizedCalibration};
+  const blob=buildPdf(pages,normalizedCalibration);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h]),calibration:normalizedCalibration};
 }
 
 export function exportCardToPngBySelector(selector,{cardNumber='id-card',side='front',dpi=300,orientation}={}){const element=document.querySelector(selector);return exportCardElementToPng(element,{filename:`${safeName(cardNumber)}-${side}.png`,dpi,orientation})}
