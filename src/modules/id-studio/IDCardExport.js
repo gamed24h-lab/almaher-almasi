@@ -10,6 +10,8 @@ function orientationOf(element,explicit){
   const raw=explicit||element?.dataset?.orientation||(element?.classList?.contains('portrait')?'portrait':'landscape');
   return raw==='portrait'?'portrait':'landscape';
 }
+function clamp(value,min,max,fallback){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback}
+function normalizeCalibration(value={}){return {offsetX:clamp(value.offsetX,-20,20,0),offsetY:clamp(value.offsetY,-20,20,0),scaleX:clamp(value.scaleX,.9,1.1,1),scaleY:clamp(value.scaleY,.9,1.1,1)}}
 function downloadBlob(blob,filename){
   const url=URL.createObjectURL(blob);const a=document.createElement('a');
   a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
@@ -48,16 +50,17 @@ async function renderCardCanvas(element,{dpi=300,orientation}={}){
   try{const image=new Image();await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('تعذر تحويل تصميم البطاقة إلى صورة.'));image.src=svgUrl});ctx.setTransform(scale,0,0,scale,0,0);ctx.drawImage(image,0,0,logicalW,logicalH);return {canvas,orientation:o,size}}finally{URL.revokeObjectURL(svgUrl)}
 }
 
-function buildPdf(pages){
-  const objects=[];
+function buildPdf(pages,calibration={}){
+  const cal=normalizeCalibration(calibration),objects=[];
   const pageIds=[],imageIds=[],contentIds=[];
   let nextId=3;
   for(let i=0;i<pages.length;i++){pageIds.push(nextId++);imageIds.push(nextId++);contentIds.push(nextId++)}
   objects[1]=ascii('<< /Type /Catalog /Pages 2 0 R >>');
   objects[2]=ascii(`<< /Type /Pages /Kids [${pageIds.map(id=>`${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
   pages.forEach((p,i)=>{
-    const w=(p.size.w*PT_PER_MM).toFixed(4),h=(p.size.h*PT_PER_MM).toFixed(4),pageId=pageIds[i],imageId=imageIds[i],contentId=contentIds[i];
-    const command=`q\n${w} 0 0 ${h} 0 0 cm\n/Im0 Do\nQ\n`,commandBytes=ascii(command);
+    const pageW=p.size.w*PT_PER_MM,pageH=p.size.h*PT_PER_MM,drawW=pageW*cal.scaleX,drawH=pageH*cal.scaleY,x=cal.offsetX*PT_PER_MM,y=pageH-(cal.offsetY*PT_PER_MM)-drawH;
+    const w=pageW.toFixed(4),h=pageH.toFixed(4),dw=drawW.toFixed(4),dh=drawH.toFixed(4),dx=x.toFixed(4),dy=y.toFixed(4),pageId=pageIds[i],imageId=imageIds[i],contentId=contentIds[i];
+    const command=`q\n${dw} 0 0 ${dh} ${dx} ${dy} cm\n/Im0 Do\nQ\n`,commandBytes=ascii(command);
     objects[pageId]=ascii(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
     objects[imageId]=concatBytes([ascii(`<< /Type /XObject /Subtype /Image /Width ${p.width} /Height ${p.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.jpeg.length} >>\nstream\n`),p.jpeg,ascii('\nendstream')]);
     objects[contentId]=concatBytes([ascii(`<< /Length ${commandBytes.length} >>\nstream\n`),commandBytes,ascii('endstream')]);
@@ -76,12 +79,12 @@ export async function exportCardElementToPng(element,{filename='id-card.png',dpi
   downloadBlob(blob,filename.toLowerCase().endsWith('.png')?filename:`${safeName(filename)}.png`);return {width:canvas.width,height:canvas.height,dpi:Number(dpi)||300,orientation:o,width_mm:size.w,height_mm:size.h};
 }
 
-export async function exportCardElementsToPdf(elements,{filename='id-card.pdf',dpi=300,quality=.96}={}){
+export async function exportCardElementsToPdf(elements,{filename='id-card.pdf',dpi=300,quality=.96,calibration={}}={}){
   const list=(Array.isArray(elements)?elements:[elements]).filter(Boolean);if(!list.length)throw new Error('تعذر العثور على البطاقة المطلوبة لتصدير PDF.');
   await waitForDynamicCardContent(list);
   const pages=[];
   for(const element of list){const {canvas,size}=await renderCardCanvas(element,{dpi});const dataUrl=canvas.toDataURL('image/jpeg',Math.max(.8,Math.min(1,Number(quality)||.96)));pages.push({size,width:canvas.width,height:canvas.height,jpeg:dataUrlBytes(dataUrl)})}
-  const blob=buildPdf(pages);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h])};
+  const normalizedCalibration=normalizeCalibration(calibration),blob=buildPdf(pages,normalizedCalibration);downloadBlob(blob,filename.toLowerCase().endsWith('.pdf')?filename:`${safeName(filename)}.pdf`);return {pages:pages.length,dpi:Number(dpi)||300,page_sizes_mm:pages.map(p=>[p.size.w,p.size.h]),calibration:normalizedCalibration};
 }
 
 export function exportCardToPngBySelector(selector,{cardNumber='id-card',side='front',dpi=300,orientation}={}){const element=document.querySelector(selector);return exportCardElementToPng(element,{filename:`${safeName(cardNumber)}-${side}.png`,dpi,orientation})}
