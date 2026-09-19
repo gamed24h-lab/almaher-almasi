@@ -424,6 +424,53 @@ async function importHistoricalAttendance(env,me,body){
  return {ok:true,queued,linked_pins:linkedPins,message:queued?'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.':'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
 }
 
+async function saveEmployeeCalendarRule(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const id=txt(body.id),type=txt(body.rule_type),allowed=new Set(['leave','permission','overtime','work_override','off']);
+ if(!allowed.has(type))throw Object.assign(new Error('نوع الاستثناء غير صحيح.'),{status:400});
+ const startDate=txt(body.start_date),endDate=txt(body.end_date||body.start_date);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||endDate<startDate)throw Object.assign(new Error('حدد تاريخ بداية ونهاية صحيحين.'),{status:400});
+ const startTime=cleanTime(body.start_time),endTime=cleanTime(body.end_time);
+ if(['permission','overtime','work_override'].includes(type)&&(!startTime||!endTime))throw Object.assign(new Error('وقت البداية والنهاية مطلوب لهذا النوع.'),{status:400});
+ let before=null;
+ if(id){
+  const rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&attendance_employee_id=eq.'+enc(employee.id)+'&select=*&limit=1');
+  before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
+ }
+ const now=new Date().toISOString(),payload={
+  attendance_employee_id:employee.id,
+  branch_id:employee.branch_id||null,
+  rule_type:type,
+  label:txt(body.label)||null,
+  start_date:startDate,
+  end_date:endDate,
+  start_time:startTime,
+  end_time:endTime,
+  grace_minutes:type==='work_override'?Math.max(0,Math.min(240,Number(body.grace_minutes??employee.grace_minutes??10))):null,
+  status:'active',
+  data_environment:employee.data_environment||'training',
+  notes:txt(body.notes)||null,
+  updated_by:actorId(me)||actorName(me)||null,
+  updated_at:now
+ };
+ let after;
+ if(id)after=(await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ else after=(await rest(env,'attendance_employee_calendar_rules',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null,created_at:now},prefer:'return=representation'}))?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ الاستثناء.'),{status:500});
+ await audit(env,me,id?'attendance_calendar_rule_update':'attendance_calendar_rule_create','attendance_employee_calendar_rule',after.id,employee.branch_id,before,after,txt(body.reason)||'إدارة جدول حضور الموظف');
+ return {ok:true,rule:after};
+}
+async function deleteEmployeeCalendarRule(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ const id=txt(body.id),rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;
+ if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
+ const employee=await scopedEmployee(env,me,before.attendance_employee_id);if(!employee)throw Object.assign(new Error('الاستثناء خارج نطاق الفرع.'),{status:403});
+ await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});
+ await audit(env,me,'attendance_calendar_rule_delete','attendance_employee_calendar_rule',id,employee.branch_id,before,null,txt(body.reason)||'حذف استثناء جدول حضور');
+ return {ok:true};
+}
+
 async function attendanceState(env,me,url){
  const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
  const [devices,links,logs,employees,users,branches,shiftPeriods,deleteRequests]=await Promise.all([
