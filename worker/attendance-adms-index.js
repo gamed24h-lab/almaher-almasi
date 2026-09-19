@@ -54,7 +54,7 @@ async function touchDevice(env,device,request,url,extra={}){
  patch.metadata=meta;
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'});
 }
-function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
+function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','OpStamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
 
 async function upsertDeviceUsers(env,device,serial,userRows,sourceTable){
  if(!userRows?.length)return 0;
@@ -117,17 +117,17 @@ async function admsRequest(request,env){
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);return plain('OK: '+n)}
+   if(table==='ATTLOG'){await storeAttendanceLogs(env,device,serial,request,body);return plain('OK')}
    if(table==='USERINFO'||table==='OPERLOG'){
      const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);
      return plain('OK: '+Math.max(n,String(body).split(/\r?\n/).filter(Boolean).length));
    }
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
-     return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
+     return plain('OK');
    }
    const users=parseUserLines(body);
-   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK: '+n)}
-   return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
+   if(users.length){await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK')}
+   return plain('OK');
  }
  return plain('OK');
 }
