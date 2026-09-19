@@ -506,7 +506,12 @@ async function attendanceReport(env,me,body){
  if(txt(body.device_id))path+='&device_id=eq.'+enc(body.device_id);
  path+='&order=occurred_at.asc&limit=10000';
  const logs=await rest(env,path);
- return {ok:true,logs,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
+ let rulePath='attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(txt(body.to_date||body.from_date))+'&end_date=gte.'+enc(txt(body.from_date));
+ if(branchId)rulePath+='&branch_id=eq.'+enc(branchId);
+ if(txt(body.attendance_employee_id))rulePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
+ rulePath+='&order=start_date.asc,created_at.asc&limit=5000';
+ const calendarRules=await rest(env,rulePath);
+ return {ok:true,logs,calendar_rules:calendarRules,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
 }
 
 async function saveDevice(env,me,body){
@@ -570,6 +575,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
+  if(action==='save_calendar_rule')return json(await saveEmployeeCalendarRule(env,me,body));
+  if(action==='delete_calendar_rule')return json(await deleteEmployeeCalendarRule(env,me,body));
   if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
