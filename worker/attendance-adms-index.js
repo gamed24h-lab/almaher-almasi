@@ -437,6 +437,7 @@ async function saveEmployeeCalendarRule(env,me,body){
  if(!allowed.has(type))throw Object.assign(new Error('نوع الاستثناء غير صحيح.'),{status:400});
  const startDate=txt(body.start_date),endDate=txt(body.end_date||body.start_date);
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||endDate<startDate)throw Object.assign(new Error('حدد تاريخ بداية ونهاية صحيحين.'),{status:400});
+ await assertAttendanceMonthOpen(env,employee.branch_id,startDate,endDate,employee.data_environment==='production'?'production':'training');
  const startTime=cleanTime(body.start_time),endTime=cleanTime(body.end_time);
  if(['permission','overtime','work_override'].includes(type)&&(!startTime||!endTime))throw Object.assign(new Error('وقت البداية والنهاية مطلوب لهذا النوع.'),{status:400});
  let before=null;
@@ -472,6 +473,7 @@ async function deleteEmployeeCalendarRule(env,me,body){
  const id=txt(body.id),rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;
  if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
  const employee=await scopedEmployee(env,me,before.attendance_employee_id);if(!employee)throw Object.assign(new Error('الاستثناء خارج نطاق الفرع.'),{status:403});
+ await assertAttendanceMonthOpen(env,employee.branch_id,before.start_date,before.end_date,employee.data_environment==='production'?'production':'training');
  await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});
  await audit(env,me,'attendance_calendar_rule_delete','attendance_employee_calendar_rule',id,employee.branch_id,before,null,txt(body.reason)||'حذف استثناء جدول حضور');
  return {ok:true};
@@ -574,6 +576,7 @@ async function saveAttendanceViolationDecision(env,me,body){
  const systemPenalty=clamp(body.system_penalty_minutes);
  const approvedPenalty=status==='waived'?0:status==='approved'?systemPenalty:clamp(body.approved_penalty_minutes);
  const mode=employee.data_environment==='production'?'production':'training';
+ await assertAttendanceMonthOpen(env,employee.branch_id,workDate,workDate,mode);
  const before=(await rest(env,'attendance_violation_decisions?attendance_employee_id=eq.'+enc(employee.id)+'&work_date=eq.'+enc(workDate)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  const snapshot=body.violation_snapshot&&typeof body.violation_snapshot==='object'&&!Array.isArray(body.violation_snapshot)?body.violation_snapshot:{};
  const now=new Date().toISOString(),payload={
@@ -600,6 +603,7 @@ async function resetAttendanceViolationDecision(env,me,body){
  const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));
  if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
  const workDate=txt(body.work_date),mode=employee.data_environment==='production'?'production':'training';
+ await assertAttendanceMonthOpen(env,employee.branch_id,workDate,workDate,mode);
  const rows=await rest(env,'attendance_violation_decisions?attendance_employee_id=eq.'+enc(employee.id)+'&work_date=eq.'+enc(workDate)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'),before=rows?.[0]||null;
  if(!before)return {ok:true,deleted:false};
  await rest(env,'attendance_violation_decisions?id=eq.'+enc(before.id),{method:'DELETE',prefer:'return=minimal'});
@@ -628,7 +632,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -653,7 +657,12 @@ async function attendanceReport(env,me,body){
  if(txt(body.attendance_employee_id))decisionPath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
  decisionPath+='&order=work_date.asc,updated_at.asc&limit=5000';
  const violationDecisions=await rest(env,decisionPath);
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
+ let monthClosure=null;
+ const fromKey=txt(body.from_date),toKey=txt(body.to_date||body.from_date),period=monthStartKey(fromKey);
+ if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
+  monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ }
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
 }
 
 async function saveDevice(env,me,body){
@@ -718,6 +727,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
   if(action==='save_attendance_policy')return json(await saveAttendancePolicy(env,me,body));
+  if(action==='close_attendance_month')return json(await closeAttendanceMonth(env,me,body));
+  if(action==='reopen_attendance_month')return json(await reopenAttendanceMonth(env,me,body));
   if(action==='save_violation_decision')return json(await saveAttendanceViolationDecision(env,me,body));
   if(action==='reset_violation_decision')return json(await resetAttendanceViolationDecision(env,me,body));
   if(action==='save_calendar_rule')return json(await saveEmployeeCalendarRule(env,me,body));
