@@ -1,8 +1,18 @@
 import React,{useMemo,useState} from 'react';
-import {FileText,Printer} from 'lucide-react';
+import {AlertTriangle,FileText,Printer} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Select,Table} from '../../components/UI.jsx';
 
+const DEFAULT_POLICY={
+ early_leave_grace_minutes:10,
+ shortage_grace_minutes:15,
+ partial_absence_threshold_minutes:60,
+ late_penalty_minutes:0,
+ early_leave_penalty_minutes:0,
+ missing_punch_penalty_minutes:0,
+ partial_absence_penalty_minutes:0,
+ absence_penalty_minutes:0
+};
 const text=v=>String(v??'').trim();
 function fmtDate(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return ''}}
@@ -18,7 +28,7 @@ function printTable(title,subtitle,columns,rows){
  const th=columns.map(c=>'<th>'+esc(c.label)+'</th>').join('');
  const body=rows.map(r=>'<tr>'+columns.map(c=>'<td>'+esc(typeof c.value==='function'?c.value(r):r[c.key])+'</td>').join('')+'</tr>').join('');
  const empty='<tr><td colspan="'+columns.length+'">لا توجد بيانات</td></tr>';
- const html='<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#111;margin:0}.head{text-align:center;margin-bottom:14px}.head h1{font-size:19px;margin:0 0 5px}.head p{font-size:11px;margin:0;color:#555}table{width:100%;border-collapse:collapse;font-size:9px}th,td{border:1px solid #bbb;padding:5px;text-align:center;vertical-align:middle}th{background:#f2f4f7}.meta{display:flex;justify-content:space-between;font-size:9px;margin:7px 0 10px}.foot{font-size:8px;color:#666;margin-top:8px;text-align:center}</style></head><body><div class="head"><h1>'+esc(title)+'</h1><p>'+esc(subtitle||'')+'</p></div><div class="meta"><span>نظام الماهر الماسي — الحضور والبصمة</span><span>'+esc(new Date().toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'}))+'</span></div><table><thead><tr>'+th+'</tr></thead><tbody>'+(body||empty)+'</tbody></table><div class="foot">الحساب يعتمد على جدول الموظف والاستثناءات المعتمدة وسجلات أجهزة البصمة.</div><script>window.onload=function(){window.print()}</script></body></html>';
+ const html='<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#111;margin:0}.head{text-align:center;margin-bottom:14px}.head h1{font-size:19px;margin:0 0 5px}.head p{font-size:11px;margin:0;color:#555}table{width:100%;border-collapse:collapse;font-size:8.5px}th,td{border:1px solid #bbb;padding:4px;text-align:center;vertical-align:middle}th{background:#f2f4f7}.meta{display:flex;justify-content:space-between;font-size:9px;margin:7px 0 10px}.foot{font-size:8px;color:#666;margin-top:8px;text-align:center}</style></head><body><div class="head"><h1>'+esc(title)+'</h1><p>'+esc(subtitle||'')+'</p></div><div class="meta"><span>نظام الماهر الماسي — الحضور والبصمة</span><span>'+esc(new Date().toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'}))+'</span></div><table><thead><tr>'+th+'</tr></thead><tbody>'+(body||empty)+'</tbody></table><div class="foot">الجزاءات المعروضة إدارية مقترحة بالدقائق حسب سياسة الفرع، ولا تُخصم ماليًا تلقائيًا.</div><script>window.onload=function(){window.print()}</script></body></html>';
  win.document.open();win.document.write(html);win.document.close();
 }
 function logClock(log){return timeOnly(log.device_time_raw||log.occurred_at)}
@@ -28,7 +38,8 @@ function intervalOverlap(a1,a2,b1,b2){return Math.max(0,Math.min(a2,b2)-Math.max
 function distanceToPeriod(m,start,end){const x=adjustedMinute(m,start,end),finish=end<start?end+1440:end,center=(start+finish)/2;return Math.abs(x-center)}
 function ruleOnDay(rule,day){return rule.start_date<=day&&rule.end_date>=day}
 function ruleMinutes(rule){const s=minutesFromClock(rule.start_time),e=minutesFromClock(rule.end_time);return periodDuration(s,e)}
-function statusTone(v){return v==='حضور'?'green':v==='غياب'?'red':v==='إجازة'?'blue':v==='راحة'?'blue':v==='حضور خارج الجدول'?'orange':'gray'}
+function statusTone(v){return v==='حضور'?'green':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
+function policyFor(employee,policyMap){return {...DEFAULT_POLICY,...(policyMap.get(String(employee?.branch_id))||{})}}
 
 function expectedPeriods(employee,day,periodsMap,rules){
  const dayNo=dayOfWeek(day),dayRules=(rules||[]).filter(r=>ruleOnDay(r,day)),leave=dayRules.find(r=>r.rule_type==='leave'),off=dayRules.find(r=>r.rule_type==='off'),overrides=dayRules.filter(r=>r.rule_type==='work_override');
@@ -41,8 +52,18 @@ function expectedPeriods(employee,day,periodsMap,rules){
  if(!periods.length&&employee.shift_start&&employee.shift_end)periods=[{sequence_no:1,label:'الفترة الأولى',start_time:employee.shift_start,end_time:employee.shift_end,grace_minutes:employee.grace_minutes??10,weekdays:[dayNo]}];
  return {periods:[...periods].sort((a,b)=>Number(a.sequence_no)-Number(b.sequence_no)),dayRules,state:periods.length?'work':'off'};
 }
+function permissionOverlap(permissions,start,finish,from,to){
+ let total=0;
+ for(const pr of permissions){
+  const psRaw=minutesFromClock(pr.start_time),peRaw=minutesFromClock(pr.end_time);if(psRaw==null||peRaw==null)continue;
+  let ps=psRaw,pe=peRaw<psRaw?peRaw+1440:peRaw;
+  if(finish>1440&&ps<start){ps+=1440;pe+=1440}
+  total+=intervalOverlap(from,to,ps,pe);
+ }
+ return total;
+}
 
-function buildDaily(logs,employees,periodsMap,rules,fromDate,toDate,filterEmployeeId,filterDeviceId,links){
+function buildDaily(logs,employees,periodsMap,rules,policyMap,fromDate,toDate,filterEmployeeId,filterDeviceId,links){
  const grouped=new Map();
  for(const log of logs||[]){
   const day=dayKey(log.occurred_at),emp=log.attendance_employee_id?String(log.attendance_employee_id):'',key=(emp||('orphan:'+String(log.employee_name||log.device_pin||'unknown')+':'+String(log.device_id||'')))+'|'+day,arr=grouped.get(key)||[];
@@ -53,7 +74,7 @@ function buildDaily(logs,employees,periodsMap,rules,fromDate,toDate,filterEmploy
  const days=dateRange(fromDate,toDate),rows=[],used=new Set();
 
  for(const employee of selected){
-  const employeeRules=(rules||[]).filter(r=>String(r.attendance_employee_id)===String(employee.id));
+  const employeeRules=(rules||[]).filter(r=>String(r.attendance_employee_id)===String(employee.id)),policy=policyFor(employee,policyMap);
   for(const day of days){
    const key=String(employee.id)+'|'+day,arr=(grouped.get(key)||[]).sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));used.add(key);
    const schedule=expectedPeriods(employee,day,periodsMap,employeeRules),periods=schedule.periods,dayRules=schedule.dayRules;
@@ -65,28 +86,39 @@ function buildDaily(logs,employees,periodsMap,rules,fromDate,toDate,filterEmploy
     periods.forEach((p,i)=>{const start=minutesFromClock(p.start_time),end=minutesFromClock(p.end_time);if(start==null||end==null)return;const score=distanceToPeriod(m,start,end);if(score<bestScore){bestScore=score;best=i}});
     buckets[best].logs.push(log);
    }
-   let totalWork=0,totalLate=0,scheduledMinutes=0,firstIn=arr.length?logClock(arr[0]):'—',lastOut=arr.length>1?logClock(arr[arr.length-1]):'—';
-   const summaries=[];
+
+   let totalWork=0,totalLate=0,totalEarly=0,scheduledMinutes=0,permissionScheduledMinutes=0,lateViolations=0,earlyViolations=0,missingPunches=0,missedPeriods=0;
+   const firstIn=arr.length?logClock(arr[0]):'—',lastOut=arr.length>1?logClock(arr[arr.length-1]):'—',summaries=[];
    for(const b of buckets){
     const p=b.period,start=minutesFromClock(p.start_time),end=minutesFromClock(p.end_time),finish=end<start?end+1440:end,grace=Number(p.grace_minutes||0),ls=b.logs.sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
-    scheduledMinutes+=periodDuration(start,end);
-    if(!ls.length){summaries.push((p.label||('الفترة '+p.sequence_no))+': غياب');continue}
+    const duration=periodDuration(start,end);scheduledMinutes+=duration;
+    permissionScheduledMinutes+=Math.min(duration,permissionOverlap(permissions,start,finish,start,finish));
+    if(!ls.length){missedPeriods+=1;summaries.push((p.label||('الفترة '+p.sequence_no))+': غياب عن الفترة');continue}
     const a=ls[0],z=ls[ls.length-1],aClock=logClock(a),zClock=ls.length>1?logClock(z):'—',aM=adjustedMinute(minutesFromClock(aClock),start,end);
     let late=start!=null&&aM!=null?Math.max(0,aM-(start+grace)):0;
-    if(late>0){
-      let allowed=0;
-      for(const pr of permissions){
-       const ps=minutesFromClock(pr.start_time),pe=minutesFromClock(pr.end_time);if(ps==null||pe==null)continue;
-       const px=pe<ps?pe+1440:pe,psAdj=ps<start&&finish>1440?ps+1440:ps;
-       allowed+=intervalOverlap(start+grace,aM,psAdj,px);
-      }
-      late=Math.max(0,late-allowed);
+    if(late>0)late=Math.max(0,late-permissionOverlap(permissions,start,finish,start+grace,aM));
+    if(late>0){lateViolations+=1;totalLate+=late}
+
+    if(ls.length===1){
+      missingPunches+=1;
+      summaries.push((p.label||('الفترة '+p.sequence_no))+': '+aClock+' — بصمة خروج مفقودة');
+      continue;
     }
-    totalLate+=late;
-    if(ls.length>1)totalWork+=Math.max(0,(new Date(z.occurred_at)-new Date(a.occurred_at))/60000);
+
+    const zM=adjustedMinute(minutesFromClock(zClock),start,end);
+    let early=end!=null&&zM!=null?Math.max(0,finish-zM-Number(policy.early_leave_grace_minutes||0)):0;
+    if(early>0)early=Math.max(0,early-permissionOverlap(permissions,start,finish,zM,finish));
+    if(early>0){earlyViolations+=1;totalEarly+=early}
+    totalWork+=Math.max(0,(new Date(z.occurred_at)-new Date(a.occurred_at))/60000);
     summaries.push((p.label||('الفترة '+p.sequence_no))+': '+aClock+' — '+zClock);
    }
+
    if(!periods.length&&arr.length>1)totalWork=Math.max(0,(new Date(arr[arr.length-1].occurred_at)-new Date(arr[0].occurred_at))/60000);
+   const approvedPermissionMinutes=Math.min(scheduledMinutes,permissionScheduledMinutes);
+   const adjustedScheduledMinutes=Math.max(0,scheduledMinutes-approvedPermissionMinutes);
+   const shortageRaw=Math.max(0,adjustedScheduledMinutes-totalWork);
+   const shortageMinutes=Math.max(0,shortageRaw-Number(policy.shortage_grace_minutes||0));
+
    let overtimeMinutes=0;
    if(arr.length>1){
     const presenceStart=minutesFromClock(logClock(arr[0])),presenceEndRaw=minutesFromClock(logClock(arr[arr.length-1]));
@@ -100,13 +132,39 @@ function buildDaily(logs,employees,periodsMap,rules,fromDate,toDate,filterEmploy
     }
    }
    const permissionMinutes=permissions.reduce((n,r)=>n+ruleMinutes(r),0);
+
    let status='راحة';
-   if(leave)status='إجازة';else if(off&&!arr.length)status='راحة';else if(periods.length&&!arr.length)status='غياب';else if(arr.length&&periods.length)status='حضور';else if(arr.length)status='حضور خارج الجدول';
+   if(leave)status='إجازة';
+   else if(off&&!arr.length)status='راحة';
+   else if(periods.length&&!arr.length)status='غياب';
+   else if(arr.length&&periods.length&&(missedPeriods>0||missingPunches>0||shortageMinutes>=Number(policy.partial_absence_threshold_minutes||60)))status='حضور جزئي';
+   else if(arr.length&&periods.length)status='حضور';
+   else if(arr.length)status='حضور خارج الجدول';
+
+   let penaltyMinutes=0;
+   if(status==='غياب')penaltyMinutes+=Number(policy.absence_penalty_minutes||0);
+   else{
+    if(status==='حضور جزئي')penaltyMinutes+=Number(policy.partial_absence_penalty_minutes||0);
+    penaltyMinutes+=lateViolations*Number(policy.late_penalty_minutes||0);
+    penaltyMinutes+=earlyViolations*Number(policy.early_leave_penalty_minutes||0);
+    penaltyMinutes+=missingPunches*Number(policy.missing_punch_penalty_minutes||0);
+   }
+
+   const violations=[];
+   if(status==='غياب')violations.push('غياب كامل');
+   if(status==='حضور جزئي')violations.push('حضور جزئي');
+   if(lateViolations)violations.push('تأخير ×'+lateViolations);
+   if(earlyViolations)violations.push('انصراف مبكر ×'+earlyViolations);
+   if(missingPunches)violations.push('بصمة ناقصة ×'+missingPunches);
+   if(shortageMinutes>0)violations.push('نقص '+humanMinutes(shortageMinutes));
+
    rows.push({
-    id:String(employee.id)+'-'+day,day,employee_id:employee.id,employee_code:employee.employee_code||'—',name:employee.name,
+    id:String(employee.id)+'-'+day,day,employee_id:employee.id,employee_code:employee.employee_code||'—',name:employee.name,branch_id:employee.branch_id,
     status,first_in:firstIn,last_out:lastOut,periods_summary:leave?(leave.label||'إجازة'):off?(off.label||'راحة'):(summaries.join(' | ')||'لا يوجد دوام'),
-    punches:arr.length,work_minutes:totalWork,scheduled_minutes:scheduledMinutes,late_minutes:totalLate,overtime_minutes:overtimeMinutes,permission_minutes:permissionMinutes,
-    leave_label:leave?.label||'',off_label:off?.label||'',expected:periods.length>0
+    punches:arr.length,work_minutes:totalWork,scheduled_minutes:scheduledMinutes,adjusted_scheduled_minutes:adjustedScheduledMinutes,
+    late_minutes:totalLate,early_leave_minutes:totalEarly,shortage_minutes:shortageMinutes,overtime_minutes:overtimeMinutes,permission_minutes:permissionMinutes,
+    late_violations:lateViolations,early_leave_violations:earlyViolations,missing_punches:missingPunches,missed_periods:missedPeriods,
+    penalty_minutes:penaltyMinutes,violations_summary:violations.join(' · ')||'—',expected:periods.length>0
    });
   }
  }
@@ -115,35 +173,48 @@ function buildDaily(logs,employees,periodsMap,rules,fromDate,toDate,filterEmploy
   if(used.has(key))continue;
   const arr=[...arrRaw].sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at)),first=arr[0],day=dayKey(first.occurred_at),name=first.employee_name||('PIN '+first.device_pin);
   const work=arr.length>1?Math.max(0,(new Date(arr[arr.length-1].occurred_at)-new Date(arr[0].occurred_at))/60000):0;
-  rows.push({id:'orphan-'+key,day,employee_id:null,employee_code:'—',name,status:'حضور خارج الجدول',first_in:logClock(first),last_out:arr.length>1?logClock(arr[arr.length-1]):'—',periods_summary:'سجل غير مربوط بموظف حالي',punches:arr.length,work_minutes:work,scheduled_minutes:0,late_minutes:0,overtime_minutes:0,permission_minutes:0,expected:false});
+  rows.push({id:'orphan-'+key,day,employee_id:null,employee_code:'—',name,branch_id:first.branch_id,status:'حضور خارج الجدول',first_in:logClock(first),last_out:arr.length>1?logClock(arr[arr.length-1]):'—',periods_summary:'سجل غير مربوط بموظف حالي',punches:arr.length,work_minutes:work,scheduled_minutes:0,adjusted_scheduled_minutes:0,late_minutes:0,early_leave_minutes:0,shortage_minutes:0,overtime_minutes:0,permission_minutes:0,late_violations:0,early_leave_violations:0,missing_punches:0,missed_periods:0,penalty_minutes:0,violations_summary:'سجل خارج الجدول',expected:false});
  }
  return rows.sort((a,b)=>String(a.day).localeCompare(String(b.day))||String(a.name).localeCompare(String(b.name),'ar'));
 }
 function buildMonthly(daily){
  const map=new Map();
  for(const r of daily){
-  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,absent_days:0,leave_days:0,off_days:0,late_days:0,total_minutes:0,scheduled_minutes:0,overtime_minutes:0,permission_minutes:0,punches:0};
+  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,partial_days:0,absent_days:0,leave_days:0,off_days:0,late_days:0,early_days:0,missing_punch_days:0,total_minutes:0,scheduled_minutes:0,shortage_minutes:0,early_leave_minutes:0,overtime_minutes:0,permission_minutes:0,penalty_minutes:0,punches:0};
   if(r.expected)x.working_days+=1;
   if(r.punches>0)x.present_days+=1;
+  if(r.status==='حضور جزئي')x.partial_days+=1;
   if(r.status==='غياب')x.absent_days+=1;
   if(r.status==='إجازة')x.leave_days+=1;
   if(r.status==='راحة')x.off_days+=1;
   if(r.late_minutes>0)x.late_days+=1;
-  x.total_minutes+=r.work_minutes;x.scheduled_minutes+=r.scheduled_minutes;x.overtime_minutes+=r.overtime_minutes;x.permission_minutes+=r.permission_minutes;x.punches+=r.punches;
+  if(r.early_leave_minutes>0)x.early_days+=1;
+  if(r.missing_punches>0)x.missing_punch_days+=1;
+  x.total_minutes+=r.work_minutes;x.scheduled_minutes+=r.adjusted_scheduled_minutes;x.shortage_minutes+=r.shortage_minutes;x.early_leave_minutes+=r.early_leave_minutes;x.overtime_minutes+=r.overtime_minutes;x.permission_minutes+=r.permission_minutes;x.penalty_minutes+=r.penalty_minutes;x.punches+=r.punches;
   map.set(key,x);
  }
  return [...map.values()].sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
 }
 
 export default function AttendanceReports({state,onError,onNotice}){
- const employees=state.employees||[],devices=state.devices||[],branches=state.branches||[],shiftPeriods=state.shiftPeriods||[],links=state.links||[];
+ const employees=state.employees||[],devices=state.devices||[],branches=state.branches||[],shiftPeriods=state.shiftPeriods||[],links=state.links||[],policies=state.policies||[];
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const periodsMap=useMemo(()=>{const m=new Map();for(const p of shiftPeriods){const k=String(p.attendance_employee_id),a=m.get(k)||[];a.push(p);m.set(k,a)}return m},[shiftPeriods]);
+ const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
- const daily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
+ const daily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
  const monthly=useMemo(()=>buildMonthly(daily),[daily]);
+ const violations=useMemo(()=>daily.filter(r=>r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0),[daily]);
+ const totals=useMemo(()=>({
+  absence:daily.filter(r=>r.status==='غياب').length,
+  partial:daily.filter(r=>r.status==='حضور جزئي').length,
+  late:daily.filter(r=>r.late_minutes>0).length,
+  early:daily.filter(r=>r.early_leave_minutes>0).length,
+  missing:daily.filter(r=>r.missing_punches>0).length,
+  penalty:daily.reduce((n,r)=>n+Number(r.penalty_minutes||0),0)
+ }),[daily]);
 
  async function loadReport(){
   setBusy(true);onError?.('');
@@ -156,24 +227,35 @@ export default function AttendanceReports({state,onError,onNotice}){
  function printCurrent(){
   const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(state.scope?.branch_id))||'كل الفروع');
   if(filters.report_type==='raw')return printTable('سجل البصمات الخام',subtitle,[{label:'الموظف',value:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{label:'PIN',value:r=>r.device_pin},{label:'الجهاز',value:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{label:'التاريخ والوقت',value:r=>fmtDate(r.occurred_at)},{label:'الحالة',value:r=>r.status_code??'—'},{label:'التحقق',value:r=>r.verify_code??'—'}],logs);
-  if(filters.report_type==='monthly')return printTable('التقرير الشهري النهائي للحضور',subtitle,[{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'أيام العمل',key:'working_days'},{label:'حضور',key:'present_days'},{label:'غياب',key:'absent_days'},{label:'إجازات',key:'leave_days'},{label:'تأخير',key:'late_days'},{label:'ساعات فعلية',value:r=>humanMinutes(r.total_minutes)},{label:'ساعات مجدولة',value:r=>humanMinutes(r.scheduled_minutes)},{label:'إضافي',value:r=>humanMinutes(r.overtime_minutes)},{label:'استئذان',value:r=>humanMinutes(r.permission_minutes)}],monthly);
-  return printTable('كشف الحضور اليومي',subtitle,[{label:'التاريخ',key:'day'},{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'الحالة',key:'status'},{label:'تفصيل الفترات',key:'periods_summary'},{label:'أول دخول',key:'first_in'},{label:'آخر خروج',key:'last_out'},{label:'العمل الفعلي',value:r=>humanMinutes(r.work_minutes)},{label:'التأخير',value:r=>r.late_minutes?humanMinutes(r.late_minutes):'—'},{label:'إضافي',value:r=>r.overtime_minutes?humanMinutes(r.overtime_minutes):'—'},{label:'استئذان',value:r=>r.permission_minutes?humanMinutes(r.permission_minutes):'—'}],daily);
+  if(filters.report_type==='monthly')return printTable('التقرير الشهري النهائي للحضور',subtitle,[{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'أيام العمل',key:'working_days'},{label:'حضور',key:'present_days'},{label:'جزئي',key:'partial_days'},{label:'غياب',key:'absent_days'},{label:'تأخير',key:'late_days'},{label:'مبكر',key:'early_days'},{label:'بصمة ناقصة',key:'missing_punch_days'},{label:'ساعات فعلية',value:r=>humanMinutes(r.total_minutes)},{label:'نقص',value:r=>humanMinutes(r.shortage_minutes)},{label:'إضافي',value:r=>humanMinutes(r.overtime_minutes)},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)}],monthly);
+  if(filters.report_type==='violations')return printTable('كشف مخالفات الحضور',subtitle,[{label:'التاريخ',key:'day'},{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'الحالة',key:'status'},{label:'المخالفات',key:'violations_summary'},{label:'تأخير',value:r=>humanMinutes(r.late_minutes)},{label:'انصراف مبكر',value:r=>humanMinutes(r.early_leave_minutes)},{label:'نقص ساعات',value:r=>humanMinutes(r.shortage_minutes)},{label:'بصمات ناقصة',key:'missing_punches'},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)}],violations);
+  return printTable('كشف الحضور اليومي',subtitle,[{label:'التاريخ',key:'day'},{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'الحالة',key:'status'},{label:'تفصيل الفترات',key:'periods_summary'},{label:'أول دخول',key:'first_in'},{label:'آخر خروج',key:'last_out'},{label:'عمل فعلي',value:r=>humanMinutes(r.work_minutes)},{label:'تأخير',value:r=>humanMinutes(r.late_minutes)},{label:'انصراف مبكر',value:r=>humanMinutes(r.early_leave_minutes)},{label:'نقص',value:r=>humanMinutes(r.shortage_minutes)},{label:'إضافي',value:r=>humanMinutes(r.overtime_minutes)},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)}],daily);
  }
 
  const rawCols=[{key:'employee',label:'الموظف',render:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{key:'pin',label:'PIN',render:r=>r.device_pin},{key:'device',label:'الجهاز',render:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{key:'time',label:'الوقت',render:r=>fmtDate(r.occurred_at)},{key:'status',label:'الحالة',render:r=>r.status_code??'—'},{key:'verify',label:'التحقق',render:r=>r.verify_code??'—'}];
- const dailyCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'periods_summary',label:'الفترات / الاستثناء'},{key:'first_in',label:'أول دخول'},{key:'last_out',label:'آخر خروج'},{key:'work',label:'العمل الفعلي',render:r=>humanMinutes(r.work_minutes)},{key:'late',label:'التأخير',render:r=>r.late_minutes?<Badge tone="orange">{humanMinutes(r.late_minutes)}</Badge>:'—'},{key:'ot',label:'الإضافي',render:r=>r.overtime_minutes?<Badge tone="green">{humanMinutes(r.overtime_minutes)}</Badge>:'—'},{key:'permission',label:'الاستئذان',render:r=>r.permission_minutes?humanMinutes(r.permission_minutes):'—'},{key:'punches',label:'البصمات'}];
- const monthlyCols=[{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'working_days',label:'أيام العمل'},{key:'present_days',label:'حضور'},{key:'absent_days',label:'غياب',render:r=>r.absent_days?<Badge tone="red">{r.absent_days}</Badge>:0},{key:'leave_days',label:'إجازات'},{key:'late_days',label:'أيام التأخير',render:r=>r.late_days?<Badge tone="orange">{r.late_days}</Badge>:0},{key:'hours',label:'ساعات فعلية',render:r=>humanMinutes(r.total_minutes)},{key:'scheduled',label:'ساعات مجدولة',render:r=>humanMinutes(r.scheduled_minutes)},{key:'ot',label:'إضافي',render:r=>humanMinutes(r.overtime_minutes)},{key:'permission',label:'استئذان',render:r=>humanMinutes(r.permission_minutes)}];
+ const dailyCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'periods_summary',label:'الفترات / الاستثناء'},{key:'first_in',label:'أول دخول'},{key:'last_out',label:'آخر خروج'},{key:'work',label:'عمل فعلي',render:r=>humanMinutes(r.work_minutes)},{key:'late',label:'التأخير',render:r=>r.late_minutes?<Badge tone="orange">{humanMinutes(r.late_minutes)}</Badge>:'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?<Badge tone="orange">{humanMinutes(r.early_leave_minutes)}</Badge>:'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?<Badge tone="red">{humanMinutes(r.shortage_minutes)}</Badge>:'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches?<Badge tone="red">{r.missing_punches}</Badge>:'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'}];
+ const monthlyCols=[{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'working_days',label:'أيام العمل'},{key:'present_days',label:'حضور'},{key:'partial_days',label:'حضور جزئي',render:r=>r.partial_days?<Badge tone="orange">{r.partial_days}</Badge>:0},{key:'absent_days',label:'غياب',render:r=>r.absent_days?<Badge tone="red">{r.absent_days}</Badge>:0},{key:'leave_days',label:'إجازات'},{key:'late_days',label:'تأخير',render:r=>r.late_days?<Badge tone="orange">{r.late_days}</Badge>:0},{key:'early_days',label:'انصراف مبكر',render:r=>r.early_days?<Badge tone="orange">{r.early_days}</Badge>:0},{key:'missing_punch_days',label:'بصمة ناقصة',render:r=>r.missing_punch_days?<Badge tone="red">{r.missing_punch_days}</Badge>:0},{key:'hours',label:'ساعات فعلية',render:r=>humanMinutes(r.total_minutes)},{key:'shortage',label:'إجمالي النقص',render:r=>humanMinutes(r.shortage_minutes)},{key:'ot',label:'إضافي',render:r=>humanMinutes(r.overtime_minutes)},{key:'permission',label:'استئذان',render:r=>humanMinutes(r.permission_minutes)},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'}];
+ const violationCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'violations_summary',label:'المخالفات'},{key:'late',label:'تأخير',render:r=>r.late_minutes?humanMinutes(r.late_minutes):'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?humanMinutes(r.early_leave_minutes):'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?humanMinutes(r.shortage_minutes):'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches||'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'}];
 
- const rows=filters.report_type==='raw'?logs:filters.report_type==='monthly'?monthly:daily;
- return <Card><div className="card-title"><div><h3><FileText size={19}/> الكشوفات والطباعة</h3><small>الحساب يعتمد على أيام كل فترة، الإجازات الأسبوعية، الدوام المؤقت، الإجازات، الاستئذان والعمل الإضافي.</small></div><div className="finance-actions"><Button onClick={loadReport} disabled={busy}>{busy?'جاري التجهيز...':'عرض الكشف'}</Button><Button variant="primary" onClick={printCurrent} disabled={!loaded||!rows.length}><Printer size={16}/> طباعة / PDF</Button></div></div>
+ const rows=filters.report_type==='raw'?logs:filters.report_type==='monthly'?monthly:filters.report_type==='violations'?violations:daily;
+ return <Card><div className="card-title"><div><h3><FileText size={19}/> الكشوفات والطباعة</h3><small>الحساب يجمع الجدول الأسبوعي والاستثناءات وسياسة الفرع لاكتشاف الغياب الجزئي والانصراف المبكر ونقص الساعات والبصمات الناقصة.</small></div><div className="finance-actions"><Button onClick={loadReport} disabled={busy}>{busy?'جاري التجهيز...':'عرض الكشف'}</Button><Button variant="primary" onClick={printCurrent} disabled={!loaded||!rows.length}><Printer size={16}/> طباعة / PDF</Button></div></div>
  <div className="form-grid">
-  <Field label="نوع الكشف"><Select value={filters.report_type} onChange={e=>setFilters(x=>({...x,report_type:e.target.value}))}><option value="daily">كشف حضور يومي تفصيلي</option><option value="monthly">التقرير الشهري النهائي</option><option value="raw">سجل البصمات الخام</option></Select></Field>
+  <Field label="نوع الكشف"><Select value={filters.report_type} onChange={e=>setFilters(x=>({...x,report_type:e.target.value}))}><option value="daily">كشف حضور يومي تفصيلي</option><option value="monthly">التقرير الشهري النهائي</option><option value="violations">كشف المخالفات</option><option value="raw">سجل البصمات الخام</option></Select></Field>
   <Field label="من تاريخ"><Input type="date" value={filters.from_date} onChange={e=>setFilters(x=>({...x,from_date:e.target.value,to_date:x.to_date&&x.to_date>=e.target.value?x.to_date:e.target.value}))}/></Field>
   <Field label="إلى تاريخ"><Input type="date" min={filters.from_date} value={filters.to_date} onChange={e=>setFilters(x=>({...x,to_date:e.target.value}))}/></Field>
   <Field label="الموظف"><Select value={filters.attendance_employee_id} onChange={e=>setFilters(x=>({...x,attendance_employee_id:e.target.value}))}><option value="">كل الموظفين</option>{employees.map(x=><option key={x.id} value={x.id}>{x.employee_code} — {x.name}</option>)}</Select></Field>
   <Field label="الجهاز"><Select value={filters.device_id} onChange={e=>setFilters(x=>({...x,device_id:e.target.value}))}><option value="">كل الأجهزة</option>{devices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
  </div>
+ {loaded&&filters.report_type!=='raw'&&<div className="stats-grid" style={{marginTop:12}}>
+  <Card><div className="stat-card"><div><span>غياب كامل</span><strong>{totals.absence}</strong></div></div></Card>
+  <Card><div className="stat-card"><div><span>حضور جزئي</span><strong>{totals.partial}</strong></div></div></Card>
+  <Card><div className="stat-card"><div><span>أيام تأخير</span><strong>{totals.late}</strong></div></div></Card>
+  <Card><div className="stat-card"><div><span>انصراف مبكر</span><strong>{totals.early}</strong></div></div></Card>
+  <Card><div className="stat-card"><div><span>بصمة ناقصة</span><strong>{totals.missing}</strong></div></div></Card>
+  <Card><div className="stat-card"><div><span>جزاء مقترح</span><strong>{humanMinutes(totals.penalty)}</strong></div></div></Card>
+ </div>}
+ {loaded&&filters.report_type==='violations'&&<div className="success-note"><AlertTriangle size={16}/> كشف المخالفات يعتمد على السياسة المحفوظة لكل فرع. قيمة «الجزاء المقترح» بالدقائق للمراجعة الإدارية فقط ولا تُرسل للرواتب تلقائيًا.</div>}
  {truncated&&<div className="error-box">الكشف وصل للحد الأقصى 10,000 حركة. قلّل الفترة للحصول على كشف كامل.</div>}
- {filters.report_type==='raw'?<Table rows={logs} columns={rawCols}/>:filters.report_type==='monthly'?<Table rows={monthly} columns={monthlyCols}/>:<Table rows={daily} columns={dailyCols}/>}
+ {filters.report_type==='raw'?<Table rows={logs} columns={rawCols}/>:filters.report_type==='monthly'?<Table rows={monthly} columns={monthlyCols}/>:filters.report_type==='violations'?<Table rows={violations} columns={violationCols}/>:<Table rows={daily} columns={dailyCols}/>}
  </Card>;
 }

@@ -5,6 +5,7 @@ import {Badge,Button,Card,ErrorBox,Field,Input,Modal,PageHeader,Select,Table} fr
 import AttendanceEmployees from './AttendanceEmployees.jsx';
 import AttendanceReports from './AttendanceReports.jsx';
 import AttendanceDeviceData from './AttendanceDeviceData.jsx';
+import AttendancePolicies from './AttendancePolicies.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
 const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
@@ -14,7 +15,7 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance(){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],links:[],logs:[],employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
@@ -62,6 +63,7 @@ export default function Attendance(){
  <ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
  <Card><div className="card-title"><div><h3><Fingerprint size={19}/> إعداد ADMS المركزي</h3><small>الإعداد المعتمد بعد نشر هذه المرحلة على Stable</small></div><Badge tone="green">ZKTeco Push</Badge></div><div className="stats-grid"><Card><div className="stat-card"><div><span>Domain</span><strong dir="ltr">{state.adms?.host||'system.almaheralmasi.sa'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Port</span><strong>{state.adms?.port||443}</strong></div></div></Card><Card><div className="stat-card"><div><span>HTTPS</span><strong>{state.adms?.https===false?'OFF':'ON'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Proxy</span><strong>OFF</strong></div></div></Card></div><div className="success-note"><ShieldCheck size={16}/> النظام يستقبل سجلات ATTLOG فقط. قوالب البصمة وبيانات FP/الوجه لا يتم حفظها في قاعدة بيانات الماهر.</div></Card>
  <div className="stats-grid"><Card><div className="stat-card"><div><span>الأجهزة</span><strong>{devices.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>متصل الآن</span><strong>{onlineCount}</strong></div></div></Card><Card><div className="stat-card"><div><span>بصمات اليوم</span><strong>{todayLogs.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>غير مرتبطة بموظف</span><strong>{unlinked}</strong></div></div></Card></div>
+ {state.permissions?.manage_employees&&<AttendancePolicies state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
  {state.permissions?.reports&&<AttendanceReports state={state} onError={setError} onNotice={setNotice}/>}<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>
  <AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice}/>
  <Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><Table rows={devices} columns={deviceCols}/></Card>
