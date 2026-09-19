@@ -125,14 +125,14 @@ async function admsRequest(request,env){
    await touchDevice(env,device,request,url,info).catch(()=>{});
    if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);if(n)await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');return plain('OK')}
    if(table==='USERINFO'||table==='OPERLOG'){
-     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n)await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');
+     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}
      return plain('OK')
    }
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
      return plain('OK');
    }
    const users=parseUserLines(body);
-   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');if(n)await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');return plain('OK')}
+   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}return plain('OK')}
    return plain('OK');
  }
  return plain('OK');
