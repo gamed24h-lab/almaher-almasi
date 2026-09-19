@@ -240,6 +240,7 @@ async function attendanceApi(request,env,ctx){
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   const body=await request.json().catch(()=>({})),action=txt(body.action);
   if(action==='report')return json(await attendanceReport(env,me,body));
+  if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
