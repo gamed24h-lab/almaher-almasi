@@ -10,10 +10,13 @@ const enc=v=>encodeURIComponent(String(v??''));
 const lower=v=>txt(v).toLowerCase();
 const isDeveloper=u=>lower(u?.role)==='developer';
 const elevated=u=>!!u&&(isDeveloper(u)||u.role==='مدير عام'||u.permissions?.all===true||u.permissions?.allBranches===true);
-const canView=u=>!!u&&(elevated(u)||u.permissions?.attendance_view===true||u.permissions?.attendance_manage_devices===true||u.permissions?.attendance_manage_links===true||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_reports===true);
+const canView=u=>!!u&&(elevated(u)||u.permissions?.attendance_view===true||u.permissions?.attendance_manage_devices===true||u.permissions?.attendance_manage_links===true||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_manage_schedules===true||u.permissions?.attendance_manage_policies===true||u.permissions?.attendance_delete_employees===true||u.permissions?.attendance_reports===true);
 const canManageDevices=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_devices===true);
 const canManageLinks=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_links===true);
 const canManageEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_employees===true);
+const canManageSchedules=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_schedules===true);
+const canManagePolicies=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_policies===true);
+const canDeleteEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_delete_employees===true);
 const canReports=u=>!!u&&(elevated(u)||u.permissions?.attendance_reports===true);
 const actorId=u=>txt(u?.id||u?.username||u?.email||'');
 const actorName=u=>txt(u?.name||u?.username||u?.email||'');
@@ -320,7 +323,7 @@ async function queueEmployeeAutoPush(env,me,employee){
 }
 
 async function deleteAttendanceEmployee(env,me,body){
- if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لحذف موظفي الحضور.'),{status:403});
+ if(!canDeleteEmployees(me))throw Object.assign(new Error('لا توجد صلاحية مستقلة لحذف موظفي الحضور.'),{status:403});
  const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
  const pending=(await rest(env,'attendance_employee_delete_requests?attendance_employee_id=eq.'+enc(employee.id)+'&status=eq.pending&select=*&order=created_at.desc&limit=1').catch(()=>[]))?.[0]||null;
  if(pending)return {ok:true,pending:true,request_id:pending.id,message:'يوجد طلب حذف لهذا الموظف قيد التنفيذ بالفعل.'};
@@ -425,7 +428,7 @@ async function importHistoricalAttendance(env,me,body){
 }
 
 async function saveEmployeeCalendarRule(env,me,body){
- if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ if(!canManageSchedules(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جداول الدوام والإجازات والاستئذانات.'),{status:403});
  const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
  const id=txt(body.id),type=txt(body.rule_type),allowed=new Set(['leave','permission','overtime','work_override','off']);
  if(!allowed.has(type))throw Object.assign(new Error('نوع الاستثناء غير صحيح.'),{status:400});
@@ -462,7 +465,7 @@ async function saveEmployeeCalendarRule(env,me,body){
  return {ok:true,rule:after};
 }
 async function deleteEmployeeCalendarRule(env,me,body){
- if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ if(!canManageSchedules(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جداول الدوام والإجازات والاستئذانات.'),{status:403});
  const id=txt(body.id),rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;
  if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
  const employee=await scopedEmployee(env,me,before.attendance_employee_id);if(!employee)throw Object.assign(new Error('الاستثناء خارج نطاق الفرع.'),{status:403});
@@ -472,7 +475,7 @@ async function deleteEmployeeCalendarRule(env,me,body){
 }
 
 async function saveAttendancePolicy(env,me,body){
- if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات الحضور.'),{status:403});
+ if(!canManagePolicies(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات الحضور والمخالفات.'),{status:403});
  const branchId=elevated(me)?txt(body.branch_id):actorBranch(me),mode=body.data_environment==='production'?'production':'training';
  if(!branchId)throw Object.assign(new Error('اختر الفرع أولًا.'),{status:400});
  const branch=(await rest(env,'branches?id=eq.'+enc(branchId)+'&select=id,name&limit=1'))?.[0]||null;
@@ -521,7 +524,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
