@@ -108,6 +108,8 @@ export const api={
   customerAccess:(token)=>request(`/api/customer/access?token=${encodeURIComponent(token)}`),
   mega:(action,body={},method='POST')=>{const effectiveMethod=action==='executive_brief'?'POST':method;return request(`/api/mega?action=${encodeURIComponent(action)}`,{method:effectiveMethod,body:effectiveMethod==='GET'?undefined:{action,...body}})},
   destinations:()=>request('/api/destinations'),
+  attendance:()=>request('/api/attendance'),
+  attendanceWrite:(body)=>request('/api/attendance',{method:'POST',body}),
   returnTripOptions:()=>request('/api/return-trip-options'),
   returnTripInfo:(bookingNo)=>request(`/api/return-trip-info?booking_number=${encodeURIComponent(bookingNo)}`),
   returnSeatContext:(tripId)=>request(`/api/return-seat-context?trip_id=${encodeURIComponent(tripId)}`),
