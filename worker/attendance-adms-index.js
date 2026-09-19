@@ -80,6 +80,15 @@ async function markSyncComplete(env,device,commandType,resultBody){
  const now=new Date().toISOString();
  await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:'success',result_code:0,result_body:String(resultBody||'').slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
 }
+async function storeProbePayload(env,device,serial,url,body){
+ const table=txt(url.searchParams.get('table')).toUpperCase();
+ const allowed=new Set(['SHIFT','SCHEDULE','ATTENDRULE','USER_OF_RUN','NUM_RUN','SCHCLASS','SHIFTINFO','ATTSHIFT']);
+ if(!allowed.has(table))return false;
+ const params={};for(const [k,v] of url.searchParams.entries())params[k]=String(v).slice(0,300);
+ const payload=String(body||'').slice(0,20000);
+ await rest(env,'attendance_device_probe_payloads',{method:'POST',body:{device_id:device.id,serial_number:serial,table_name:table,query_params:params,payload,payload_bytes:new TextEncoder().encode(payload).length},prefer:'return=minimal'}).catch(()=>{});
+ return true;
+}
 async function storeAttendanceLogs(env,device,serial,request,body){
  const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,staff_user_id,branch_id,display_name').catch(()=>[]);
  const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),rows=[];
@@ -131,6 +140,7 @@ async function admsRequest(request,env){
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
      return plain('OK');
    }
+   if(await storeProbePayload(env,device,serial,url,body))return plain('OK');
    const users=parseUserLines(body);
    if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}return plain('OK')}
    return plain('OK');
