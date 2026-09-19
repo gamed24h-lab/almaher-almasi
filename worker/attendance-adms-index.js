@@ -187,6 +187,7 @@ function dateStart(value){const v=txt(value);if(!/^\d{4}-\d{2}-\d{2}$/.test(v))r
 function dateEndExclusive(value){const d=dateStart(value);if(!d)return null;d.setUTCDate(d.getUTCDate()+1);return d}
 function cleanTime(v){const s=txt(v);return /^\d{2}:\d{2}(:\d{2})?$/.test(s)?s.slice(0,5):null}
 function cleanOffDays(v){if(!Array.isArray(v))return [];return [...new Set(v.map(Number).filter(n=>Number.isInteger(n)&&n>=0&&n<=6))].sort()}
+function cleanWeekdays(v){const days=cleanOffDays(v);return days.length?days:[0,1,2,3,4,5,6]}
 function cleanShiftPeriods(v){
  if(!Array.isArray(v))return [];
  const rows=[];
@@ -201,7 +202,8 @@ function cleanShiftPeriods(v){
    end_time:end,
    grace_minutes:Math.max(0,Math.min(240,Number(p.grace_minutes??10))),
    device_shift_template_id:templateId||null,
-   source_type:templateId?'device_template':'custom'
+   source_type:templateId?'device_template':'custom',
+   weekdays:cleanWeekdays(p.weekdays)
   });
  }
  return rows.slice(0,12);
@@ -210,7 +212,7 @@ function safeDeviceText(v,max=40){return txt(v).replace(/[\t\r\n]/g,' ').replace
 async function replaceShiftPeriods(env,me,employeeId,periods){
  await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(employeeId),{method:'DELETE',prefer:'return=minimal'});
  if(!periods.length)return [];
- const now=new Date().toISOString(),rows=periods.map(p=>({attendance_employee_id:employeeId,sequence_no:p.sequence_no,label:p.label,start_time:p.start_time,end_time:p.end_time,grace_minutes:p.grace_minutes,device_shift_template_id:p.device_shift_template_id||null,source_type:p.device_shift_template_id?'device_template':'custom',active:true,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now}));
+ const now=new Date().toISOString(),rows=periods.map(p=>({attendance_employee_id:employeeId,sequence_no:p.sequence_no,label:p.label,start_time:p.start_time,end_time:p.end_time,grace_minutes:p.grace_minutes,device_shift_template_id:p.device_shift_template_id||null,source_type:p.device_shift_template_id?'device_template':'custom',weekdays:cleanWeekdays(p.weekdays),active:true,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now}));
  return await rest(env,'attendance_employee_shift_periods',{method:'POST',body:rows,prefer:'return=representation'});
 }
 function deviceLocalNow(){try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace('T',' ')}catch{return new Date().toISOString().slice(0,19).replace('T',' ')}}
@@ -422,9 +424,56 @@ async function importHistoricalAttendance(env,me,body){
  return {ok:true,queued,linked_pins:linkedPins,message:queued?'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.':'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
 }
 
+async function saveEmployeeCalendarRule(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const id=txt(body.id),type=txt(body.rule_type),allowed=new Set(['leave','permission','overtime','work_override','off']);
+ if(!allowed.has(type))throw Object.assign(new Error('نوع الاستثناء غير صحيح.'),{status:400});
+ const startDate=txt(body.start_date),endDate=txt(body.end_date||body.start_date);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||endDate<startDate)throw Object.assign(new Error('حدد تاريخ بداية ونهاية صحيحين.'),{status:400});
+ const startTime=cleanTime(body.start_time),endTime=cleanTime(body.end_time);
+ if(['permission','overtime','work_override'].includes(type)&&(!startTime||!endTime))throw Object.assign(new Error('وقت البداية والنهاية مطلوب لهذا النوع.'),{status:400});
+ let before=null;
+ if(id){
+  const rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&attendance_employee_id=eq.'+enc(employee.id)+'&select=*&limit=1');
+  before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
+ }
+ const now=new Date().toISOString(),payload={
+  attendance_employee_id:employee.id,
+  branch_id:employee.branch_id||null,
+  rule_type:type,
+  label:txt(body.label)||null,
+  start_date:startDate,
+  end_date:endDate,
+  start_time:startTime,
+  end_time:endTime,
+  grace_minutes:type==='work_override'?Math.max(0,Math.min(240,Number(body.grace_minutes??employee.grace_minutes??10))):null,
+  status:'active',
+  data_environment:employee.data_environment||'training',
+  notes:txt(body.notes)||null,
+  updated_by:actorId(me)||actorName(me)||null,
+  updated_at:now
+ };
+ let after;
+ if(id)after=(await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ else after=(await rest(env,'attendance_employee_calendar_rules',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null,created_at:now},prefer:'return=representation'}))?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ الاستثناء.'),{status:500});
+ await audit(env,me,id?'attendance_calendar_rule_update':'attendance_calendar_rule_create','attendance_employee_calendar_rule',after.id,employee.branch_id,before,after,txt(body.reason)||'إدارة جدول حضور الموظف');
+ return {ok:true,rule:after};
+}
+async function deleteEmployeeCalendarRule(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة جدول الموظف.'),{status:403});
+ const id=txt(body.id),rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;
+ if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
+ const employee=await scopedEmployee(env,me,before.attendance_employee_id);if(!employee)throw Object.assign(new Error('الاستثناء خارج نطاق الفرع.'),{status:403});
+ await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});
+ await audit(env,me,'attendance_calendar_rule_delete','attendance_employee_calendar_rule',id,employee.branch_id,before,null,txt(body.reason)||'حذف استثناء جدول حضور');
+ return {ok:true};
+}
+
 async function attendanceState(env,me,url){
- const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
- const [devices,links,logs,employees,users,branches,shiftPeriods,deleteRequests]=await Promise.all([
+ const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
+ const [devices,links,logs,employees,users,branches,shiftPeriods,deleteRequests,calendarRules]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
   rest(env,'attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at&data_environment=eq.'+enc(mode)+logFilter+'&order=occurred_at.desc&limit=500'),
@@ -432,7 +481,8 @@ async function attendanceState(env,me,url){
   rest(env,'staff_users?select=id,name,username,role,branch_id,status&status=neq.%D9%85%D9%88%D9%82%D9%88%D9%81'+userFilter+'&order=name.asc'),
   rest(env,'branches'+branchFilter),
   rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc'),
-  rest(env,'attendance_employee_delete_requests?select=*&order=created_at.desc&limit=100'+deleteFilter)
+  rest(env,'attendance_employee_delete_requests?select=*&order=created_at.desc&limit=100'+deleteFilter),
+  rest(env,'attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+calendarFilter+'&order=start_date.desc,created_at.desc&limit=2000')
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
  const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
@@ -441,7 +491,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -456,7 +506,12 @@ async function attendanceReport(env,me,body){
  if(txt(body.device_id))path+='&device_id=eq.'+enc(body.device_id);
  path+='&order=occurred_at.asc&limit=10000';
  const logs=await rest(env,path);
- return {ok:true,logs,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
+ let rulePath='attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(txt(body.to_date||body.from_date))+'&end_date=gte.'+enc(txt(body.from_date));
+ if(branchId)rulePath+='&branch_id=eq.'+enc(branchId);
+ if(txt(body.attendance_employee_id))rulePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
+ rulePath+='&order=start_date.asc,created_at.asc&limit=5000';
+ const calendarRules=await rest(env,rulePath);
+ return {ok:true,logs,calendar_rules:calendarRules,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
 }
 
 async function saveDevice(env,me,body){
@@ -520,6 +575,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
+  if(action==='save_calendar_rule')return json(await saveEmployeeCalendarRule(env,me,body));
+  if(action==='delete_calendar_rule')return json(await deleteEmployeeCalendarRule(env,me,body));
   if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
