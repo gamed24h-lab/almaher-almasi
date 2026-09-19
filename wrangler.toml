@@ -1,5 +1,5 @@
 name = "almaher-almasi"
-main = "worker/finance-budget-management-index.js"
+main = "worker/attendance-adms-index.js"
 compatibility_date = "2026-08-21"
 compatibility_flags = ["nodejs_compat"]
 keep_vars = true
@@ -9,7 +9,7 @@ workers_dev = false
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/.netlify/functions/*", "/health", "/healthz"]
+run_worker_first = ["/api/*", "/iclock/*", "/.netlify/functions/*", "/health", "/healthz"]
 
 # Keep existing Cloudflare dashboard Variables/Secrets.
 # Required at runtime:
