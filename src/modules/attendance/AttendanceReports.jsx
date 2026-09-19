@@ -205,8 +205,11 @@ export default function AttendanceReports({state,onError,onNotice}){
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
- const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
- const daily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
+ const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const [reviewRow,setReviewRow]=useState(null),[reviewForm,setReviewForm]=useState({decision_status:'approved',approved_penalty_minutes:0,manager_note:'',reason:''}),[reviewBusy,setReviewBusy]=useState(false);
+ const decisionMap=useMemo(()=>new Map((violationDecisions||[]).map(d=>[String(d.attendance_employee_id)+'|'+String(d.work_date),d])),[violationDecisions]);
+ const rawDaily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
+ const daily=useMemo(()=>rawDaily.map(r=>{const violation=r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0,d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;return {...r,review_status:d?.decision_status||(violation?'pending':'none'),approved_penalty_minutes:d?Number(d.approved_penalty_minutes||0):null,review_note:d?.manager_note||'',reviewed_by:d?.reviewed_by||'',reviewed_at:d?.reviewed_at||null,decision_id:d?.id||null}}),[rawDaily,decisionMap]);
  const monthly=useMemo(()=>buildMonthly(daily),[daily]);
  const violations=useMemo(()=>daily.filter(r=>r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0),[daily]);
  const totals=useMemo(()=>({
@@ -215,16 +218,39 @@ export default function AttendanceReports({state,onError,onNotice}){
   late:daily.filter(r=>r.late_minutes>0).length,
   early:daily.filter(r=>r.early_leave_minutes>0).length,
   missing:daily.filter(r=>r.missing_punches>0).length,
-  penalty:daily.reduce((n,r)=>n+Number(r.penalty_minutes||0),0)
+  penalty:daily.reduce((n,r)=>n+Number(r.penalty_minutes||0),0),
+  approved_penalty:daily.reduce((n,r)=>n+Number(r.approved_penalty_minutes||0),0),
+  pending_review:daily.filter(r=>r.review_status==='pending').length,
+  reviewed:daily.filter(r=>['approved','waived','adjusted'].includes(r.review_status)).length
  }),[daily]);
 
  async function loadReport(){
   setBusy(true);onError?.('');
   try{
    const out=await api.attendanceWrite({action:'report',...filters});
-   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setTruncated(!!out.truncated);setLoaded(true);
-   onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء في الفترة.');
+   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setTruncated(!!out.truncated);setLoaded(true);
+   onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء و'+String((out.violation_decisions||[]).length)+' قرار HR في الفترة.');
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
+ }
+ function openReview(r){
+  const d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;
+  setReviewRow(r);setReviewForm({decision_status:d?.decision_status||'approved',approved_penalty_minutes:d?.approved_penalty_minutes??r.penalty_minutes??0,manager_note:d?.manager_note||'',reason:''});
+ }
+ async function saveReview(e){
+  e.preventDefault();if(!reviewRow?.employee_id)return;setReviewBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'save_violation_decision',attendance_employee_id:reviewRow.employee_id,work_date:reviewRow.day,decision_status:reviewForm.decision_status,system_penalty_minutes:reviewRow.penalty_minutes||0,approved_penalty_minutes:reviewForm.approved_penalty_minutes||0,manager_note:reviewForm.manager_note||'',reason:reviewForm.reason||'',violation_snapshot:{status:reviewRow.status,violations_summary:reviewRow.violations_summary,late_minutes:reviewRow.late_minutes,early_leave_minutes:reviewRow.early_leave_minutes,shortage_minutes:reviewRow.shortage_minutes,missing_punches:reviewRow.missing_punches,system_penalty_minutes:reviewRow.penalty_minutes,first_in:reviewRow.first_in,last_out:reviewRow.last_out}});
+   const saved=out?.decision;if(saved)setViolationDecisions(x=>[...x.filter(d=>!(String(d.attendance_employee_id)===String(saved.attendance_employee_id)&&String(d.work_date)===String(saved.work_date))),saved]);
+   setReviewRow(null);onNotice?.('تم حفظ قرار HR على مخالفة '+reviewRow.name+' بتاريخ '+reviewRow.day+'.');
+  }catch(err){onError?.(err.message)}finally{setReviewBusy(false)}
+ }
+ async function resetReview(){
+  if(!reviewRow?.employee_id)return;if(!confirm('إعادة هذه المخالفة إلى «بانتظار المراجعة»؟'))return;setReviewBusy(true);onError?.('');
+  try{
+   await api.attendanceWrite({action:'reset_violation_decision',attendance_employee_id:reviewRow.employee_id,work_date:reviewRow.day,reason:reviewForm.reason||'إعادة للمراجعة'});
+   setViolationDecisions(x=>x.filter(d=>!(String(d.attendance_employee_id)===String(reviewRow.employee_id)&&String(d.work_date)===String(reviewRow.day))));
+   setReviewRow(null);onNotice?.('تمت إعادة المخالفة للمراجعة.');
+  }catch(err){onError?.(err.message)}finally{setReviewBusy(false)}
  }
  function printCurrent(){
   const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(state.scope?.branch_id))||'كل الفروع');
