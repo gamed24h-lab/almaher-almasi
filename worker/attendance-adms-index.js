@@ -27,7 +27,19 @@ function serialFrom(url){return txt(url.searchParams.get('SN')||url.searchParams
 function safeInt(v){const n=Number.parseInt(txt(v),10);return Number.isFinite(n)?n:null}
 function parseSaudiDeviceTime(raw){const value=txt(raw);if(!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(value))return null;const d=new Date(value.replace(' ','T')+'+03:00');return Number.isNaN(d.getTime())?null:d.toISOString()}
 function dedupe(deviceId,pin,time,statusCode,verifyCode,workCode){return [deviceId,pin,time,statusCode??'',verifyCode??'',workCode||''].join('|')}
-function parseDeviceInfo(body){const out={};for(const raw of String(body||'').split(/\r?\n/)){const line=raw.trim();if(!line.startsWith('~')||!line.includes('='))continue;const i=line.indexOf('='),key=line.slice(1,i).trim().toLowerCase(),value=line.slice(i+1).trim();if(['devicename','firmware','firmver','pushversion','platform','ipaddress','mac'].includes(key))out[key]=value}return out}
+function parseDeviceInfo(body){
+ const out={};const parts=String(body||'').split(/[\r\n,]+/).map(x=>x.trim()).filter(Boolean);
+ for(const part of parts){if(!part.includes('='))continue;const i=part.indexOf('='),key=part.slice(0,i).replace(/^~/,'').trim().toLowerCase(),value=part.slice(i+1).trim();out[key]=value}
+ return out;
+}
+function parseFields(line){
+ const out={};let clean=String(line||'').trim().replace(/^USER\s+/i,'').replace(/^USERINFO\s+/i,'');
+ for(const part of clean.split('\t')){if(!part.includes('='))continue;const i=part.indexOf('='),key=part.slice(0,i).trim().toLowerCase(),value=part.slice(i+1).trim();out[key]=value}
+ return out;
+}
+function parseUserLines(body){
+ const rows=[];for(const raw of String(body||'').split(/\r?\n/)){const f=parseFields(raw);const pin=txt(f.pin||f.userid||f.uid);if(!pin)continue;if(!('name' in f)&&!('pri' in f)&&!('privilege' in f)&&!('card' in f)&&!('grp' in f)&&!('verify' in f))continue;rows.push({pin,name:txt(f.name),privilege:safeInt(f.pri??f.privilege),card:txt(f.card),group:txt(f.grp??f.group),timezone:txt(f.tz),verify:safeInt(f.verify)})}return rows;
+}
 async function getDevice(env,serial){if(!serial)return null;const rows=await rest(env,'attendance_devices?serial_number=eq.'+enc(serial)+'&select=*&limit=1');return rows?.[0]||null}
 async function touchDevice(env,device,request,url,extra={}){if(!device?.id)return;const patch={last_seen_at:new Date().toISOString(),last_ip:clientIp(request),updated_at:new Date().toISOString()};const pv=txt(url.searchParams.get('pushver')||extra.pushversion);if(pv)patch.push_version=pv;const fw=txt(extra.firmware||extra.firmver);if(fw)patch.firmware=fw;const dn=txt(extra.devicename);if(dn)patch.device_name=dn;const meta={...(device.metadata||{}),last_protocol_path:url.pathname,last_user_agent:txt(request.headers.get('User-Agent')),platform:txt(extra.platform)||device.metadata?.platform||null,mac:txt(extra.mac)||device.metadata?.mac||null};patch.metadata=meta;await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'})}
 function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
