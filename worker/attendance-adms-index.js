@@ -504,9 +504,10 @@ async function closeAttendanceMonth(env,me,body){
  if(!branchId)throw Object.assign(new Error('اختر فرعًا محددًا قبل إقفال الشهر.'),{status:400});
  if(!/^\d{4}-\d{2}-01$/.test(period))throw Object.assign(new Error('شهر الإقفال غير صحيح.'),{status:400});
  const end=monthEndKey(period),today=saudiTodayKey();if(!end||end>=today)throw Object.assign(new Error('لا يمكن إقفال الشهر قبل انتهائه بالكامل.'),{status:409});
- const snapshot=body.snapshot&&typeof body.snapshot==='object'&&!Array.isArray(body.snapshot)?body.snapshot:{},daily=Array.isArray(snapshot.daily)?snapshot.daily:[],monthly=Array.isArray(snapshot.monthly)?snapshot.monthly:[];
+ const snapshot=body.snapshot&&typeof body.snapshot==='object'&&!Array.isArray(body.snapshot)?body.snapshot:{},daily=Array.isArray(snapshot.daily)?snapshot.daily:[],monthly=Array.isArray(snapshot.monthly)?snapshot.monthly:[],filters=snapshot.filters&&typeof snapshot.filters==='object'?snapshot.filters:{};
  if(!daily.length||!monthly.length)throw Object.assign(new Error('اعرض التقرير الشهري الكامل أولًا قبل الإقفال.'),{status:400});
  if(daily.length>10000||monthly.length>2000)throw Object.assign(new Error('حجم لقطة الإقفال أكبر من الحد المسموح.'),{status:413});
+ if(txt(filters.from_date)!==period||txt(filters.to_date)!==end||txt(filters.branch_id)!==branchId||txt(filters.attendance_employee_id)||txt(filters.device_id))throw Object.assign(new Error('إقفال الشهر يتطلب كشف الشهر كاملًا لفرع واحد بدون فلترة موظف أو جهاز.'),{status:400});
  const pending=daily.filter(r=>r&&r.employee_id&&(r.status==='غياب'||r.status==='حضور جزئي'||Number(r.late_minutes)>0||Number(r.early_leave_minutes)>0||Number(r.missing_punches)>0||Number(r.shortage_minutes)>0)&&r.review_status==='pending');
  if(pending.length)throw Object.assign(new Error('يوجد '+pending.length+' مخالفة ما زالت بانتظار مراجعة HR. راجعها قبل إقفال الشهر.'),{status:409});
  const before=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
