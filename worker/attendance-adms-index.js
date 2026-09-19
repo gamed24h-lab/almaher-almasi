@@ -41,7 +41,19 @@ function parseUserLines(body){
  const rows=[];for(const raw of String(body||'').split(/\r?\n/)){const f=parseFields(raw);const pin=txt(f.pin||f.userid||f.uid);if(!pin)continue;if(!('name' in f)&&!('pri' in f)&&!('privilege' in f)&&!('card' in f)&&!('grp' in f)&&!('verify' in f))continue;rows.push({pin,name:txt(f.name),privilege:safeInt(f.pri??f.privilege),card:txt(f.card),group:txt(f.grp??f.group),timezone:txt(f.tz),verify:safeInt(f.verify)})}return rows;
 }
 async function getDevice(env,serial){if(!serial)return null;const rows=await rest(env,'attendance_devices?serial_number=eq.'+enc(serial)+'&select=*&limit=1');return rows?.[0]||null}
-async function touchDevice(env,device,request,url,extra={}){if(!device?.id)return;const patch={last_seen_at:new Date().toISOString(),last_ip:clientIp(request),updated_at:new Date().toISOString()};const pv=txt(url.searchParams.get('pushver')||extra.pushversion);if(pv)patch.push_version=pv;const fw=txt(extra.firmware||extra.firmver);if(fw)patch.firmware=fw;const dn=txt(extra.devicename);if(dn)patch.device_name=dn;const meta={...(device.metadata||{}),last_protocol_path:url.pathname,last_user_agent:txt(request.headers.get('User-Agent')),platform:txt(extra.platform)||device.metadata?.platform||null,mac:txt(extra.mac)||device.metadata?.mac||null};patch.metadata=meta;await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'})}
+async function touchDevice(env,device,request,url,extra={}){
+ if(!device?.id)return;
+ const now=new Date().toISOString(),patch={last_seen_at:now,last_ip:clientIp(request),updated_at:now};
+ if(url.pathname==='/iclock/getrequest')patch.last_command_poll_at=now;
+ const pv=txt(url.searchParams.get('pushver')||extra.pushversion);if(pv)patch.push_version=pv;
+ const fw=txt(extra.firmware||extra.firmver||extra.fwversion);if(fw)patch.firmware=fw;
+ const dn=txt(extra.devicename);if(dn)patch.device_name=dn;
+ const uc=safeInt(extra.usercount),fc=safeInt(extra.fpcount),face=safeInt(extra.facecount),tc=safeInt(extra.transactioncount);
+ if(uc!=null)patch.reported_user_count=uc;if(fc!=null)patch.reported_fp_count=fc;if(face!=null)patch.reported_face_count=face;if(tc!=null)patch.reported_transaction_count=tc;
+ const meta={...(device.metadata||{}),last_protocol_path:url.pathname,last_user_agent:txt(request.headers.get('User-Agent')),platform:txt(extra.platform)||device.metadata?.platform||null,mac:txt(extra.mac||extra.macaddress)||device.metadata?.mac||null,ip_address:txt(extra.ipaddress)||device.metadata?.ip_address||null};
+ patch.metadata=meta;
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'});
+}
 function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
 
 async function admsRequest(request,env){if(!base(env)||!serviceKey(env))return plain('ERROR: SERVER_CONFIG',503);const url=new URL(request.url),serial=serialFrom(url);if(url.pathname==='/iclock/health')return plain('OK');if(!serial)return plain('ERROR: SN_REQUIRED',200);const device=await getDevice(env,serial).catch(()=>null);if(!device||device.status!=='active')return plain('ERROR: DEVICE_NOT_REGISTERED',200);
