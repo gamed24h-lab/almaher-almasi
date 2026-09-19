@@ -2,9 +2,11 @@ import React,{useEffect,useMemo,useState} from 'react';
 import {Fingerprint,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,PageHeader,Select,Table} from '../../components/UI.jsx';
+import AttendanceEmployees from './AttendanceEmployees.jsx';
+import AttendanceReports from './AttendanceReports.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
-const blankLink={id:'',device_id:'',device_pin:'',staff_user_id:'',display_name:''};
+const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
 const text=v=>String(v??'').trim();
 function fmtDate(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return ''}}
