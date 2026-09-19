@@ -10,7 +10,7 @@ const blank={id:'',employee_code:'',name:'',branch_id:'',phone:'',national_id:''
 function today(){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}catch{return new Date().toISOString().slice(0,10)}}
 const blankRule=()=>({id:'',rule_type:'leave',label:'',start_date:today(),end_date:today(),start_time:'08:00',end_time:'17:00',grace_minutes:10,notes:'',reason:''});
 const ruleLabel=t=>t==='leave'?'إجازة':t==='permission'?'استئذان':t==='overtime'?'عمل إضافي':t==='work_override'?'دوام مؤقت':t==='off'?'راحة / إجازة إضافية':t||'—';
-const ruleTone=t=>t==='leave'||t==='off'?'blue':t==='overtime'?'green':t==='permission'?'orange':'purple';
+const ruleTone=t=>t==='leave'||t==='off'?'blue':t==='overtime'?'green':t==='permission'?'orange':'blue';
 
 export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[];
