@@ -329,12 +329,13 @@ async function attendanceState(env,me,url){
   rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc')
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
- const [deviceUsers,commands]=deviceIds.length?await Promise.all([
+ const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
    rest(env,'attendance_device_users?select=id,device_id,serial_number,device_pin,name,privilege,card_number,group_no,timezone_raw,verify_mode,data_environment,source_table,first_seen_at,last_seen_at'+inFilter+'&order=device_pin.asc'),
-   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100')
- ]):[[],[]];
+   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
+   rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
+ ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -375,8 +376,9 @@ async function saveEmployee(env,me,body){
  let after;if(id)after=(await rest(env,'attendance_employees?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;else after=(await rest(env,'attendance_employees',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
  if(!after)throw Object.assign(new Error('تعذر حفظ موظف الحضور.'),{status:500});
  if(suppliedPeriods)await replaceShiftPeriods(env,me,after.id,periods);
- await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods},txt(body.reason)||'إدارة موظف حضور');
- return {ok:true,employee:after,shift_periods:periods};
+ const autoPush=body.auto_push!==false,devicesQueued=autoPush?await queueEmployeeAutoPush(env,me,after):0;
+ await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
+ return {ok:true,employee:after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued};
 }
 
 async function saveLink(env,me,body){
@@ -406,6 +408,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
   if(action==='import_historical_attendance')return json(await importHistoricalAttendance(env,me,body));
+  if(action==='save_device_shift_template')return json(await saveDeviceShiftTemplate(env,me,body));
+  if(action==='delete_device_shift_template')return json(await deleteDeviceShiftTemplate(env,me,body));
   if(action==='push_device_user')return json(await pushDeviceUser(env,me,body));
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
