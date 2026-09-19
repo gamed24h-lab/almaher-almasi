@@ -317,6 +317,63 @@ async function queueEmployeeAutoPush(env,me,employee){
  return devicesQueued;
 }
 
+async function deleteAttendanceEmployee(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لحذف موظفي الحضور.'),{status:403});
+ const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const pending=(await rest(env,'attendance_employee_delete_requests?attendance_employee_id=eq.'+enc(employee.id)+'&status=eq.pending&select=*&order=created_at.desc&limit=1').catch(()=>[]))?.[0]||null;
+ if(pending)return {ok:true,pending:true,request_id:pending.id,message:'يوجد طلب حذف لهذا الموظف قيد التنفيذ بالفعل.'};
+ const links=await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id)+'&active=eq.true&select=*').catch(()=>[]);
+ if(links.length&&!canManageDevices(me))throw Object.assign(new Error('حذف الموظف من الجهاز يحتاج صلاحية إدارة أجهزة البصمة.'),{status:403});
+ const priorSuccess=await rest(env,'attendance_device_commands?entity_type=eq.attendance_employee&entity_id=eq.'+enc(employee.id)+'&command_type=eq.delete_employee_user&status=eq.success&select=device_id,metadata').catch(()=>[]);
+ const done=new Set((priorSuccess||[]).map(c=>String(c.device_id)+'|'+txt(c?.metadata?.pin)));
+ const remaining=[];
+ for(const link of links){
+  const key=String(link.device_id)+'|'+txt(link.device_pin);if(done.has(key))continue;
+  const device=await scopedDevice(env,me,link.device_id);if(!device)throw Object.assign(new Error('أحد الأجهزة المرتبطة بالموظف غير متاح ضمن صلاحياتك.'),{status:403});
+  remaining.push({link,device});
+ }
+ const groupId=crypto.randomUUID(),now=new Date().toISOString(),requestRows=await rest(env,'attendance_employee_delete_requests',{method:'POST',body:{
+  attendance_employee_id:employee.id,
+  command_group_id:groupId,
+  employee_code:employee.employee_code,
+  employee_name:employee.name,
+  branch_id:employee.branch_id||null,
+  status:'pending',
+  device_count:remaining.length,
+  employee_snapshot:employee,
+  requested_by:actorId(me)||actorName(me)||null,
+  reason:txt(body.reason)||'حذف موظف الحضور من النظام والجهاز',
+  created_at:now,
+  updated_at:now
+ },prefer:'return=representation'}),requestRow=requestRows?.[0]||null;
+ if(!requestRow)throw Object.assign(new Error('تعذر إنشاء طلب حذف الموظف.'),{status:500});
+ await audit(env,me,'attendance_employee_delete_requested','attendance_employee',employee.id,employee.branch_id,employee,{devices:remaining.map(x=>({device_id:x.device.id,pin:x.link.device_pin}))},txt(body.reason)||'حذف موظف الحضور من النظام والجهاز');
+ if(!remaining.length){
+  for(const link of links||[])await rest(env,'attendance_device_users?device_id=eq.'+enc(link.device_id)+'&device_pin=eq.'+enc(link.device_pin),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_employees?id=eq.'+enc(employee.id),{method:'DELETE',prefer:'return=minimal'});
+  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(requestRow.id),{method:'PATCH',body:{status:'success',success_count:0,failed_count:0,result_summary:{deleted_from_devices:done.size,local_only:links.length===0},completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'});
+  return {ok:true,pending:false,deleted:true,devices:done.size,message:links.length?'تم حذف الموظف من النظام، وكانت الأجهزة المرتبطة قد أكدت حذفه مسبقًا.':'تم حذف الموظف من النظام. لا توجد أجهزة مرتبطة به.'};
+ }
+ const commandRows=remaining.map(({link,device})=>({
+  device_id:device.id,
+  command_type:'delete_employee_user',
+  command_text:'DATA DELETE USERINFO PIN='+safeDeviceText(link.device_pin,24),
+  operation_group_id:groupId,
+  entity_type:'attendance_employee',
+  entity_id:employee.id,
+  metadata:{pin:txt(link.device_pin),employee_name:employee.name,request_id:requestRow.id},
+  created_by:actorId(me)||actorName(me)||null
+ }));
+ try{
+  await rest(env,'attendance_device_commands',{method:'POST',body:commandRows,prefer:'return=representation'});
+ }catch(e){
+  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(requestRow.id),{method:'PATCH',body:{status:'failed',failed_count:remaining.length,result_summary:{error:e.message||'queue_failed'},completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+  throw e;
+ }
+ return {ok:true,pending:true,request_id:requestRow.id,devices:remaining.length,message:'تم إرسال طلب حذف الموظف إلى '+remaining.length+' جهاز/أجهزة. سيُحذف من النظام تلقائيًا بعد تأكيد الأجهزة.'};
+}
+
 async function importDeviceUsers(env,me,body){
  if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة للاستيراد.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
