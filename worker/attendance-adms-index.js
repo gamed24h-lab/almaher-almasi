@@ -117,17 +117,17 @@ async function admsRequest(request,env){
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);return plain('OK: '+n)}
+   if(table==='ATTLOG'){await storeAttendanceLogs(env,device,serial,request,body);return plain('OK')}
    if(table==='USERINFO'||table==='OPERLOG'){
      const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);
      return plain('OK: '+Math.max(n,String(body).split(/\r?\n/).filter(Boolean).length));
    }
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
-     return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
+     return plain('OK');
    }
    const users=parseUserLines(body);
-   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK: '+n)}
-   return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
+   if(users.length){await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK')}
+   return plain('OK');
  }
  return plain('OK');
 }
