@@ -74,6 +74,12 @@ async function completeDeviceCommand(env,body){
  if(!id)return;
  await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:String(body||'').slice(0,2000),completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
 }
+async function markSyncComplete(env,device,commandType,resultBody){
+ const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.'+enc(commandType)+'&status=in.(queued,sent)&select=id&order=id.desc&limit=1').catch(()=>[]);
+ const id=rows?.[0]?.id;if(!id)return;
+ const now=new Date().toISOString();
+ await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:'success',result_code:0,result_body:String(resultBody||'').slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+}
 async function storeAttendanceLogs(env,device,serial,request,body){
  const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,staff_user_id,branch_id,display_name').catch(()=>[]);
  const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),rows=[];
@@ -117,16 +123,16 @@ async function admsRequest(request,env){
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table==='ATTLOG'){await storeAttendanceLogs(env,device,serial,request,body);return plain('OK')}
+   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);if(n)await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');return plain('OK')}
    if(table==='USERINFO'||table==='OPERLOG'){
-     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);
-     return plain('OK: '+Math.max(n,String(body).split(/\r?\n/).filter(Boolean).length));
+     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n)await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');
+     return plain('OK')
    }
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
      return plain('OK');
    }
    const users=parseUserLines(body);
-   if(users.length){await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK')}
+   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');if(n)await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');return plain('OK')}
    return plain('OK');
  }
  return plain('OK');
