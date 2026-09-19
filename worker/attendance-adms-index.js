@@ -142,6 +142,22 @@ function dateStart(value){const v=txt(value);if(!/^\d{4}-\d{2}-\d{2}$/.test(v))r
 function dateEndExclusive(value){const d=dateStart(value);if(!d)return null;d.setUTCDate(d.getUTCDate()+1);return d}
 function cleanTime(v){const s=txt(v);return /^\d{2}:\d{2}(:\d{2})?$/.test(s)?s.slice(0,5):null}
 function cleanOffDays(v){if(!Array.isArray(v))return [];return [...new Set(v.map(Number).filter(n=>Number.isInteger(n)&&n>=0&&n<=6))].sort()}
+function deviceLocalNow(){try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace('T',' ')}catch{return new Date().toISOString().slice(0,19).replace('T',' ')}}
+async function queueDeviceSync(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لسحب بيانات جهاز البصمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&select=id,command_type,status&limit=20').catch(()=>[]);
+ if(existing?.some(x=>x.command_type==='sync_users'||x.command_type==='sync_attlog'))return {ok:true,queued:false,message:'يوجد طلب مزامنة قيد التنفيذ بالفعل.'};
+ const now=deviceLocalNow();
+ const commands=[
+  {device_id:device.id,command_type:'sync_info',command_text:'INFO',created_by:actorId(me)||actorName(me)||null},
+  {device_id:device.id,command_type:'sync_users',command_text:'DATA QUERY USERINFO',created_by:actorId(me)||actorName(me)||null},
+  {device_id:device.id,command_type:'sync_attlog',command_text:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,created_by:actorId(me)||actorName(me)||null}
+ ];
+ const created=await rest(env,'attendance_device_commands',{method:'POST',body:commands,prefer:'return=representation'});
+ await audit(env,me,'attendance_device_sync_requested','attendance_device',device.id,device.branch_id,null,{commands:commands.map(x=>x.command_type)},'سحب بيانات الجهاز والموظفين وسجل الحضور');
+ return {ok:true,queued:true,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[]};
+}
 
 async function attendanceState(env,me,url){
  const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
