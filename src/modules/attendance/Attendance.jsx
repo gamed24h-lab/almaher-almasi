@@ -13,16 +13,17 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){if(!d?.last_seen_at)return false;return Date.now()-new Date(d.last_seen_at).getTime()<5*60*1000}
 
 export default function Attendance(){
- const [state,setState]=useState({devices:[],links:[],logs:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],links:[],logs:[],employees:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
- const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],users=state.users||[];
+ const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],employees=state.employees||[],users=state.users||[];
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
- const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=logs.filter(x=>!x.staff_user_id&&!x.employee_name).length,onlineCount=devices.filter(online).length;
+ const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
+ const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=logs.filter(x=>!x.attendance_employee_id&&!x.staff_user_id&&!x.employee_name).length,onlineCount=devices.filter(online).length;
  function addDevice(){setDeviceForm({...blankDevice});setDeviceOpen(true)}
  function editDevice(row){setDeviceForm({...blankDevice,...row,branch_id:row.branch_id||'',reason:''});setDeviceOpen(true)}
  async function saveDevice(e){e.preventDefault();setDeviceBusy(true);setError('');try{await api.attendanceWrite({action:'save_device',...deviceForm});setDeviceOpen(false);setNotice('تم حفظ إعداد جهاز البصمة.');await load()}catch(e2){setError(e2.message)}finally{setDeviceBusy(false)}}
