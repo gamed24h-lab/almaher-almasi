@@ -1,5 +1,5 @@
 import React,{useMemo,useState} from 'react';
-import {AlertTriangle,FileText,Printer} from 'lucide-react';
+import {AlertTriangle,FileText,Lock,Printer,Unlock} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
@@ -17,6 +17,8 @@ const text=v=>String(v??'').trim();
 function fmtDate(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return ''}}
 function todayKey(){return dayKey(new Date())}
+function monthBounds(day){const v=String(day||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return null;const start=v.slice(0,7)+'-01',[y,m]=start.split('-').map(Number),end=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);return {start,end}}
+function isFullMonth(from,to){const b=monthBounds(from);return !!b&&b.start===from&&b.end===to}
 function dayOfWeek(day){try{return new Date(day+'T12:00:00+03:00').getUTCDay()}catch{return 0}}
 function dateRange(from,to){const out=[],a=new Date(from+'T12:00:00+03:00'),b=new Date(to+'T12:00:00+03:00');for(let d=new Date(a);d<=b;d.setUTCDate(d.getUTCDate()+1))out.push(d.toISOString().slice(0,10));return out}
 function minutesFromClock(v){const m=String(v||'').match(/(\d{2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
@@ -205,8 +207,9 @@ export default function AttendanceReports({state,onError,onNotice}){
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
- const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),branch_id:state.scope?.branch_id||'',attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[monthClosure,setMonthClosure]=useState(null),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
  const [reviewRow,setReviewRow]=useState(null),[reviewForm,setReviewForm]=useState({decision_status:'approved',approved_penalty_minutes:0,manager_note:'',reason:''}),[reviewBusy,setReviewBusy]=useState(false);
+ const [reopenOpen,setReopenOpen]=useState(false),[reopenReason,setReopenReason]=useState(''),[closeBusy,setCloseBusy]=useState(false);
  const decisionMap=useMemo(()=>new Map((violationDecisions||[]).map(d=>[String(d.attendance_employee_id)+'|'+String(d.work_date),d])),[violationDecisions]);
  const rawDaily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
  const daily=useMemo(()=>rawDaily.map(r=>{const violation=r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0,d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;return {...r,review_status:d?.decision_status||(violation?'pending':'none'),approved_penalty_minutes:d?Number(d.approved_penalty_minutes||0):null,review_note:d?.manager_note||'',reviewed_by:d?.reviewed_by||'',reviewed_at:d?.reviewed_at||null,decision_id:d?.id||null}}),[rawDaily,decisionMap]);
