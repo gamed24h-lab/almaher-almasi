@@ -69,14 +69,39 @@ async function popDeviceCommands(env,device){
  for(const cmd of queued)await rest(env,'attendance_device_commands?id=eq.'+enc(cmd.id),{method:'PATCH',body:{status:'sent',sent_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
  return queued;
 }
+async function finalizeEmployeeDeleteGroup(env,groupId){
+ if(!groupId)return;
+ const req=(await rest(env,'attendance_employee_delete_requests?command_group_id=eq.'+enc(groupId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!req||req.status!=='pending')return;
+ const commands=await rest(env,'attendance_device_commands?operation_group_id=eq.'+enc(groupId)+'&command_type=eq.delete_employee_user&select=id,device_id,status,result_code,metadata,entity_id&order=id.asc').catch(()=>[]);
+ if(!commands?.length)return;
+ if(commands.some(c=>c.status==='queued'||c.status==='sent'))return;
+ const success=commands.filter(c=>c.status==='success'),failed=commands.filter(c=>c.status!=='success'),now=new Date().toISOString();
+ for(const cmd of success){
+  const pin=txt(cmd?.metadata?.pin);if(!pin)continue;
+  await rest(env,'attendance_device_users?device_id=eq.'+enc(cmd.device_id)+'&device_pin=eq.'+enc(pin),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+ }
+ if(failed.length){
+  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'failed',success_count:success.length,failed_count:failed.length,result_summary:{failed:failed.map(c=>({command_id:c.id,device_id:c.device_id,pin:txt(c?.metadata?.pin),result_code:c.result_code}))},completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  return;
+ }
+ const employeeId=txt(req.attendance_employee_id||commands[0]?.entity_id);
+ if(employeeId){
+  await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employeeId),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_employees?id=eq.'+enc(employeeId),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+ }
+ await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'success',success_count:success.length,failed_count:0,result_summary:{deleted_from_devices:success.length},completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+}
 async function completeDeviceCommand(env,body){
- const raw=String(body||''),lines=raw.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const raw=String(body||''),lines=raw.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),groups=new Set();
  for(const line of lines){
   const params=new URLSearchParams(line),id=txt(params.get('ID')||params.get('id')),rc=safeInt(params.get('Return')||params.get('return'));
   if(!id)continue;
   const now=new Date().toISOString();
-  await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
+  const cmd=rows?.[0];if(cmd?.command_type==='delete_employee_user'&&cmd.operation_group_id)groups.add(String(cmd.operation_group_id));
  }
+ for(const groupId of groups)await finalizeEmployeeDeleteGroup(env,groupId);
 }
 async function markSyncComplete(env,device,commandType,resultBody){
  const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.'+enc(commandType)+'&status=in.(queued,sent)&select=id&order=id.desc&limit=1').catch(()=>[]);
@@ -211,7 +236,16 @@ function userUpdateCommand(pin,data){
  return 'DATA UPDATE USERINFO PIN='+p+'\tName='+name+'\tPri='+pri+'\tPasswd=\tCard='+card+'\tGrp='+grp+'\tTZ='+tz+'\tVerify='+verify+'\tViceCard=';
 }
 async function queueCommands(env,device,me,commands){
- const rows=commands.map(c=>({device_id:device.id,command_type:c.type,command_text:c.command,created_by:actorId(me)||actorName(me)||null}));
+ const rows=commands.map(c=>({
+  device_id:device.id,
+  command_type:c.type,
+  command_text:c.command,
+  operation_group_id:c.operation_group_id||null,
+  entity_type:c.entity_type||null,
+  entity_id:c.entity_id||null,
+  metadata:c.metadata||{},
+  created_by:actorId(me)||actorName(me)||null
+ }));
  return await rest(env,'attendance_device_commands',{method:'POST',body:rows,prefer:'return=representation'});
 }
 async function pushDeviceUser(env,me,body){
@@ -283,6 +317,63 @@ async function queueEmployeeAutoPush(env,me,employee){
  return devicesQueued;
 }
 
+async function deleteAttendanceEmployee(env,me,body){
+ if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لحذف موظفي الحضور.'),{status:403});
+ const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const pending=(await rest(env,'attendance_employee_delete_requests?attendance_employee_id=eq.'+enc(employee.id)+'&status=eq.pending&select=*&order=created_at.desc&limit=1').catch(()=>[]))?.[0]||null;
+ if(pending)return {ok:true,pending:true,request_id:pending.id,message:'يوجد طلب حذف لهذا الموظف قيد التنفيذ بالفعل.'};
+ const links=await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id)+'&active=eq.true&select=*').catch(()=>[]);
+ if(links.length&&!canManageDevices(me))throw Object.assign(new Error('حذف الموظف من الجهاز يحتاج صلاحية إدارة أجهزة البصمة.'),{status:403});
+ const priorSuccess=await rest(env,'attendance_device_commands?entity_type=eq.attendance_employee&entity_id=eq.'+enc(employee.id)+'&command_type=eq.delete_employee_user&status=eq.success&select=device_id,metadata').catch(()=>[]);
+ const done=new Set((priorSuccess||[]).map(c=>String(c.device_id)+'|'+txt(c?.metadata?.pin)));
+ const remaining=[];
+ for(const link of links){
+  const key=String(link.device_id)+'|'+txt(link.device_pin);if(done.has(key))continue;
+  const device=await scopedDevice(env,me,link.device_id);if(!device)throw Object.assign(new Error('أحد الأجهزة المرتبطة بالموظف غير متاح ضمن صلاحياتك.'),{status:403});
+  remaining.push({link,device});
+ }
+ const groupId=crypto.randomUUID(),now=new Date().toISOString(),requestRows=await rest(env,'attendance_employee_delete_requests',{method:'POST',body:{
+  attendance_employee_id:employee.id,
+  command_group_id:groupId,
+  employee_code:employee.employee_code,
+  employee_name:employee.name,
+  branch_id:employee.branch_id||null,
+  status:'pending',
+  device_count:remaining.length,
+  employee_snapshot:employee,
+  requested_by:actorId(me)||actorName(me)||null,
+  reason:txt(body.reason)||'حذف موظف الحضور من النظام والجهاز',
+  created_at:now,
+  updated_at:now
+ },prefer:'return=representation'}),requestRow=requestRows?.[0]||null;
+ if(!requestRow)throw Object.assign(new Error('تعذر إنشاء طلب حذف الموظف.'),{status:500});
+ await audit(env,me,'attendance_employee_delete_requested','attendance_employee',employee.id,employee.branch_id,employee,{devices:remaining.map(x=>({device_id:x.device.id,pin:x.link.device_pin}))},txt(body.reason)||'حذف موظف الحضور من النظام والجهاز');
+ if(!remaining.length){
+  for(const link of links||[])await rest(env,'attendance_device_users?device_id=eq.'+enc(link.device_id)+'&device_pin=eq.'+enc(link.device_pin),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_employees?id=eq.'+enc(employee.id),{method:'DELETE',prefer:'return=minimal'});
+  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(requestRow.id),{method:'PATCH',body:{status:'success',success_count:0,failed_count:0,result_summary:{deleted_from_devices:done.size,local_only:links.length===0},completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'});
+  return {ok:true,pending:false,deleted:true,devices:done.size,message:links.length?'تم حذف الموظف من النظام، وكانت الأجهزة المرتبطة قد أكدت حذفه مسبقًا.':'تم حذف الموظف من النظام. لا توجد أجهزة مرتبطة به.'};
+ }
+ const commandRows=remaining.map(({link,device})=>({
+  device_id:device.id,
+  command_type:'delete_employee_user',
+  command_text:'DATA DELETE USERINFO PIN='+safeDeviceText(link.device_pin,24),
+  operation_group_id:groupId,
+  entity_type:'attendance_employee',
+  entity_id:employee.id,
+  metadata:{pin:txt(link.device_pin),employee_name:employee.name,request_id:requestRow.id},
+  created_by:actorId(me)||actorName(me)||null
+ }));
+ try{
+  await rest(env,'attendance_device_commands',{method:'POST',body:commandRows,prefer:'return=representation'});
+ }catch(e){
+  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(requestRow.id),{method:'PATCH',body:{status:'failed',failed_count:remaining.length,result_summary:{error:e.message||'queue_failed'},completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+  throw e;
+ }
+ return {ok:true,pending:true,request_id:requestRow.id,devices:remaining.length,message:'تم إرسال طلب حذف الموظف إلى '+remaining.length+' جهاز/أجهزة. سيُحذف من النظام تلقائيًا بعد تأكيد الأجهزة.'};
+}
+
 async function importDeviceUsers(env,me,body){
  if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة للاستيراد.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
@@ -332,15 +423,16 @@ async function importHistoricalAttendance(env,me,body){
 }
 
 async function attendanceState(env,me,url){
- const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
- const [devices,links,logs,employees,users,branches,shiftPeriods]=await Promise.all([
+ const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
+ const [devices,links,logs,employees,users,branches,shiftPeriods,deleteRequests]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
   rest(env,'attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at&data_environment=eq.'+enc(mode)+logFilter+'&order=occurred_at.desc&limit=500'),
   rest(env,'attendance_employees?select=*&data_environment=eq.'+enc(mode)+empFilter+'&order=name.asc'),
   rest(env,'staff_users?select=id,name,username,role,branch_id,status&status=neq.%D9%85%D9%88%D9%82%D9%88%D9%81'+userFilter+'&order=name.asc'),
   rest(env,'branches'+branchFilter),
-  rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc')
+  rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc'),
+  rest(env,'attendance_employee_delete_requests?select=*&order=created_at.desc&limit=100'+deleteFilter)
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
  const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
@@ -349,7 +441,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -428,6 +520,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
+  if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
