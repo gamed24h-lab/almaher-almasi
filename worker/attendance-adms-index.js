@@ -10,13 +10,15 @@ const enc=v=>encodeURIComponent(String(v??''));
 const lower=v=>txt(v).toLowerCase();
 const isDeveloper=u=>lower(u?.role)==='developer';
 const elevated=u=>!!u&&(isDeveloper(u)||u.role==='مدير عام'||u.permissions?.all===true||u.permissions?.allBranches===true);
-const canView=u=>!!u&&(elevated(u)||u.permissions?.attendance_view===true||u.permissions?.attendance_manage_devices===true||u.permissions?.attendance_manage_links===true||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_manage_schedules===true||u.permissions?.attendance_manage_policies===true||u.permissions?.attendance_review_violations===true||u.permissions?.attendance_delete_employees===true||u.permissions?.attendance_reports===true);
+const canView=u=>!!u&&(elevated(u)||u.permissions?.attendance_view===true||u.permissions?.attendance_manage_devices===true||u.permissions?.attendance_manage_links===true||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_manage_schedules===true||u.permissions?.attendance_manage_policies===true||u.permissions?.attendance_review_violations===true||u.permissions?.attendance_close_month===true||u.permissions?.attendance_reopen_month===true||u.permissions?.attendance_delete_employees===true||u.permissions?.attendance_reports===true);
 const canManageDevices=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_devices===true);
 const canManageLinks=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_links===true);
 const canManageEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_employees===true);
 const canManageSchedules=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_schedules===true);
 const canManagePolicies=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_policies===true);
 const canReviewViolations=u=>!!u&&(elevated(u)||u.permissions?.attendance_review_violations===true);
+const canCloseMonth=u=>!!u&&(elevated(u)||u.permissions?.attendance_close_month===true);
+const canReopenMonth=u=>!!u&&(elevated(u)||u.permissions?.attendance_reopen_month===true);
 const canDeleteEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_delete_employees===true);
 const canReports=u=>!!u&&(elevated(u)||u.permissions?.attendance_reports===true);
 const actorId=u=>txt(u?.id||u?.username||u?.email||'');
@@ -435,6 +437,7 @@ async function saveEmployeeCalendarRule(env,me,body){
  if(!allowed.has(type))throw Object.assign(new Error('نوع الاستثناء غير صحيح.'),{status:400});
  const startDate=txt(body.start_date),endDate=txt(body.end_date||body.start_date);
  if(!/^\d{4}-\d{2}-\d{2}$/.test(startDate)||!/^\d{4}-\d{2}-\d{2}$/.test(endDate)||endDate<startDate)throw Object.assign(new Error('حدد تاريخ بداية ونهاية صحيحين.'),{status:400});
+ await assertAttendanceMonthOpen(env,employee.branch_id,startDate,endDate,employee.data_environment==='production'?'production':'training');
  const startTime=cleanTime(body.start_time),endTime=cleanTime(body.end_time);
  if(['permission','overtime','work_override'].includes(type)&&(!startTime||!endTime))throw Object.assign(new Error('وقت البداية والنهاية مطلوب لهذا النوع.'),{status:400});
  let before=null;
@@ -470,9 +473,68 @@ async function deleteEmployeeCalendarRule(env,me,body){
  const id=txt(body.id),rows=await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;
  if(!before)throw Object.assign(new Error('الاستثناء غير موجود.'),{status:404});
  const employee=await scopedEmployee(env,me,before.attendance_employee_id);if(!employee)throw Object.assign(new Error('الاستثناء خارج نطاق الفرع.'),{status:403});
+ await assertAttendanceMonthOpen(env,employee.branch_id,before.start_date,before.end_date,employee.data_environment==='production'?'production':'training');
  await rest(env,'attendance_employee_calendar_rules?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});
  await audit(env,me,'attendance_calendar_rule_delete','attendance_employee_calendar_rule',id,employee.branch_id,before,null,txt(body.reason)||'حذف استثناء جدول حضور');
  return {ok:true};
+}
+
+function monthStartKey(dateText){
+ const v=txt(dateText);if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return null;return v.slice(0,7)+'-01';
+}
+function monthEndKey(monthStart){
+ if(!/^\d{4}-\d{2}-01$/.test(txt(monthStart)))return null;
+ const [y,m]=monthStart.split('-').map(Number),d=new Date(Date.UTC(y,m,0));return d.toISOString().slice(0,10);
+}
+function saudiTodayKey(){
+ try{const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return new Date().toISOString().slice(0,10)}
+}
+async function closedMonthsBetween(env,branchId,startDate,endDate,mode){
+ if(!branchId)return [];
+ const a=monthStartKey(startDate),b=monthStartKey(endDate);if(!a||!b)return [];
+ return await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&data_environment=eq.'+enc(mode)+'&status=eq.closed&period_month=gte.'+enc(a)+'&period_month=lte.'+enc(b)+'&select=id,period_month,status,closure_version,closed_by,closed_at&order=period_month.asc').catch(()=>[]);
+}
+async function assertAttendanceMonthOpen(env,branchId,startDate,endDate,mode){
+ const rows=await closedMonthsBetween(env,branchId,startDate,endDate,mode);
+ if(rows?.length){const months=rows.map(x=>String(x.period_month).slice(0,7)).join('، ');throw Object.assign(new Error('الفترة تقع داخل شهر حضور مقفل: '+months+'. يلزم إعادة فتح الشهر أولًا.'),{status:409})}
+}
+async function closeAttendanceMonth(env,me,body){
+ if(!canCloseMonth(me))throw Object.assign(new Error('لا توجد صلاحية لإقفال شهر الحضور.'),{status:403});
+ const branchId=requestedBranch(me,body),mode=accountMode(me),period=txt(body.period_month);
+ if(!branchId)throw Object.assign(new Error('اختر فرعًا محددًا قبل إقفال الشهر.'),{status:400});
+ if(!/^\d{4}-\d{2}-01$/.test(period))throw Object.assign(new Error('شهر الإقفال غير صحيح.'),{status:400});
+ const end=monthEndKey(period),today=saudiTodayKey();if(!end||end>=today)throw Object.assign(new Error('لا يمكن إقفال الشهر قبل انتهائه بالكامل.'),{status:409});
+ const snapshot=body.snapshot&&typeof body.snapshot==='object'&&!Array.isArray(body.snapshot)?body.snapshot:{},daily=Array.isArray(snapshot.daily)?snapshot.daily:[],monthly=Array.isArray(snapshot.monthly)?snapshot.monthly:[],filters=snapshot.filters&&typeof snapshot.filters==='object'?snapshot.filters:{};
+ if(!daily.length||!monthly.length)throw Object.assign(new Error('اعرض التقرير الشهري الكامل أولًا قبل الإقفال.'),{status:400});
+ if(daily.length>10000||monthly.length>2000)throw Object.assign(new Error('حجم لقطة الإقفال أكبر من الحد المسموح.'),{status:413});
+ if(txt(filters.from_date)!==period||txt(filters.to_date)!==end||txt(filters.branch_id)!==branchId||txt(filters.attendance_employee_id)||txt(filters.device_id))throw Object.assign(new Error('إقفال الشهر يتطلب كشف الشهر كاملًا لفرع واحد بدون فلترة موظف أو جهاز.'),{status:400});
+ const pending=daily.filter(r=>r&&r.employee_id&&(r.status==='غياب'||r.status==='حضور جزئي'||Number(r.late_minutes)>0||Number(r.early_leave_minutes)>0||Number(r.missing_punches)>0||Number(r.shortage_minutes)>0)&&r.review_status==='pending');
+ if(pending.length)throw Object.assign(new Error('يوجد '+pending.length+' مخالفة ما زالت بانتظار مراجعة HR. راجعها قبل إقفال الشهر.'),{status:409});
+ const before=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(before?.status==='closed')return {ok:true,closure:before,already_closed:true,message:'الشهر مقفل بالفعل.'};
+ const branch=(await rest(env,'branches?id=eq.'+enc(branchId)+'&select=id,name&limit=1'))?.[0]||null;if(!branch)throw Object.assign(new Error('الفرع غير موجود.'),{status:404});
+ const now=new Date().toISOString(),version=Math.max(1,Number(before?.closure_version||0)+1),payload={
+  branch_id:branchId,period_month:period,data_environment:mode,status:'closed',closure_version:version,
+  snapshot:{daily,monthly,filters:snapshot.filters||{},generated_at:now},
+  totals:body.totals&&typeof body.totals==='object'&&!Array.isArray(body.totals)?body.totals:{},
+  closed_by:actorName(me)||actorId(me)||null,closed_at:now,reopened_by:null,reopened_at:null,reopen_reason:null,updated_at:now
+ };
+ const rows=await rest(env,'attendance_month_closures?on_conflict=branch_id%2Cperiod_month%2Cdata_environment',{method:'POST',body:{...payload,created_at:before?.created_at||now},prefer:'resolution=merge-duplicates,return=representation'}),after=rows?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر إقفال شهر الحضور.'),{status:500});
+ await audit(env,me,before?'attendance_month_reclose':'attendance_month_close','attendance_month_closure',after.id,branchId,before,after,txt(body.reason)||'إقفال شهر الحضور');
+ return {ok:true,closure:after,message:'تم إقفال شهر '+period.slice(0,7)+' للفرع '+(branch.name||'')+' وتجميد نتائجه.'};
+}
+async function reopenAttendanceMonth(env,me,body){
+ if(!canReopenMonth(me))throw Object.assign(new Error('لا توجد صلاحية خاصة لإعادة فتح شهر الحضور.'),{status:403});
+ const branchId=requestedBranch(me,body),mode=accountMode(me),period=txt(body.period_month),reason=txt(body.reason);
+ if(!branchId)throw Object.assign(new Error('اختر فرعًا محددًا.'),{status:400});
+ if(!/^\d{4}-\d{2}-01$/.test(period))throw Object.assign(new Error('شهر الإقفال غير صحيح.'),{status:400});
+ if(reason.length<5)throw Object.assign(new Error('سبب إعادة فتح الشهر مطلوب.'),{status:400});
+ const before=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'))?.[0]||null;
+ if(!before||before.status!=='closed')throw Object.assign(new Error('هذا الشهر غير مقفل حاليًا.'),{status:409});
+ const now=new Date().toISOString(),rows=await rest(env,'attendance_month_closures?id=eq.'+enc(before.id),{method:'PATCH',body:{status:'open',reopened_by:actorName(me)||actorId(me)||null,reopened_at:now,reopen_reason:reason,updated_at:now},prefer:'return=representation'}),after=rows?.[0]||null;
+ await audit(env,me,'attendance_month_reopen','attendance_month_closure',before.id,branchId,before,after,reason);
+ return {ok:true,closure:after,message:'تمت إعادة فتح شهر '+period.slice(0,7)+' للتعديل والمراجعة.'};
 }
 
 async function saveAttendancePolicy(env,me,body){
@@ -515,6 +577,7 @@ async function saveAttendanceViolationDecision(env,me,body){
  const systemPenalty=clamp(body.system_penalty_minutes);
  const approvedPenalty=status==='waived'?0:status==='approved'?systemPenalty:clamp(body.approved_penalty_minutes);
  const mode=employee.data_environment==='production'?'production':'training';
+ await assertAttendanceMonthOpen(env,employee.branch_id,workDate,workDate,mode);
  const before=(await rest(env,'attendance_violation_decisions?attendance_employee_id=eq.'+enc(employee.id)+'&work_date=eq.'+enc(workDate)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  const snapshot=body.violation_snapshot&&typeof body.violation_snapshot==='object'&&!Array.isArray(body.violation_snapshot)?body.violation_snapshot:{};
  const now=new Date().toISOString(),payload={
@@ -541,6 +604,7 @@ async function resetAttendanceViolationDecision(env,me,body){
  const employee=await scopedEmployee(env,me,txt(body.attendance_employee_id));
  if(!employee)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});
  const workDate=txt(body.work_date),mode=employee.data_environment==='production'?'production':'training';
+ await assertAttendanceMonthOpen(env,employee.branch_id,workDate,workDate,mode);
  const rows=await rest(env,'attendance_violation_decisions?attendance_employee_id=eq.'+enc(employee.id)+'&work_date=eq.'+enc(workDate)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'),before=rows?.[0]||null;
  if(!before)return {ok:true,deleted:false};
  await rest(env,'attendance_violation_decisions?id=eq.'+enc(before.id),{method:'DELETE',prefer:'return=minimal'});
@@ -569,7 +633,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -594,7 +658,12 @@ async function attendanceReport(env,me,body){
  if(txt(body.attendance_employee_id))decisionPath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
  decisionPath+='&order=work_date.asc,updated_at.asc&limit=5000';
  const violationDecisions=await rest(env,decisionPath);
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,from_date:txt(body.from_date),to_date:txt(body.to_date||body.from_date),environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
+ let monthClosure=null;
+ const fromKey=txt(body.from_date),toKey=txt(body.to_date||body.from_date),period=monthStartKey(fromKey);
+ if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
+  monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ }
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
 }
 
 async function saveDevice(env,me,body){
@@ -659,6 +728,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
   if(action==='save_attendance_policy')return json(await saveAttendancePolicy(env,me,body));
+  if(action==='close_attendance_month')return json(await closeAttendanceMonth(env,me,body));
+  if(action==='reopen_attendance_month')return json(await reopenAttendanceMonth(env,me,body));
   if(action==='save_violation_decision')return json(await saveAttendanceViolationDecision(env,me,body));
   if(action==='reset_violation_decision')return json(await resetAttendanceViolationDecision(env,me,body));
   if(action==='save_calendar_rule')return json(await saveEmployeeCalendarRule(env,me,body));

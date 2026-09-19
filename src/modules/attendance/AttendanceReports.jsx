@@ -1,5 +1,5 @@
 import React,{useMemo,useState} from 'react';
-import {AlertTriangle,FileText,Printer} from 'lucide-react';
+import {AlertTriangle,FileText,Lock,Printer,Unlock} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
@@ -17,6 +17,8 @@ const text=v=>String(v??'').trim();
 function fmtDate(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return ''}}
 function todayKey(){return dayKey(new Date())}
+function monthBounds(day){const v=String(day||'');if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return null;const start=v.slice(0,7)+'-01',[y,m]=start.split('-').map(Number),end=new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);return {start,end}}
+function isFullMonth(from,to){const b=monthBounds(from);return !!b&&b.start===from&&b.end===to}
 function dayOfWeek(day){try{return new Date(day+'T12:00:00+03:00').getUTCDay()}catch{return 0}}
 function dateRange(from,to){const out=[],a=new Date(from+'T12:00:00+03:00'),b=new Date(to+'T12:00:00+03:00');for(let d=new Date(a);d<=b;d.setUTCDate(d.getUTCDate()+1))out.push(d.toISOString().slice(0,10));return out}
 function minutesFromClock(v){const m=String(v||'').match(/(\d{2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
@@ -205,12 +207,17 @@ export default function AttendanceReports({state,onError,onNotice}){
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
- const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),branch_id:state.scope?.branch_id||'',attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[monthClosure,setMonthClosure]=useState(null),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
  const [reviewRow,setReviewRow]=useState(null),[reviewForm,setReviewForm]=useState({decision_status:'approved',approved_penalty_minutes:0,manager_note:'',reason:''}),[reviewBusy,setReviewBusy]=useState(false);
+ const [reopenOpen,setReopenOpen]=useState(false),[reopenReason,setReopenReason]=useState(''),[closeBusy,setCloseBusy]=useState(false);
  const decisionMap=useMemo(()=>new Map((violationDecisions||[]).map(d=>[String(d.attendance_employee_id)+'|'+String(d.work_date),d])),[violationDecisions]);
- const rawDaily=useMemo(()=>loaded?buildDaily(logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,employees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
- const daily=useMemo(()=>rawDaily.map(r=>{const violation=r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0,d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;return {...r,review_status:d?.decision_status||(violation?'pending':'none'),approved_penalty_minutes:d?Number(d.approved_penalty_minutes||0):null,review_note:d?.manager_note||'',reviewed_by:d?.reviewed_by||'',reviewed_at:d?.reviewed_at||null,decision_id:d?.id||null}}),[rawDaily,decisionMap]);
- const monthly=useMemo(()=>buildMonthly(daily),[daily]);
+ const reportEmployees=useMemo(()=>employees.filter(e=>!filters.branch_id||String(e.branch_id)===String(filters.branch_id)),[employees,filters.branch_id]);
+ const reportDevices=useMemo(()=>devices.filter(d=>!filters.branch_id||String(d.branch_id)===String(filters.branch_id)),[devices,filters.branch_id]);
+ const rawDaily=useMemo(()=>loaded?buildDaily(logs,reportEmployees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,reportEmployees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
+ const liveDaily=useMemo(()=>rawDaily.map(r=>{const violation=r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0,d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;return {...r,review_status:d?.decision_status||(violation?'pending':'none'),approved_penalty_minutes:d?Number(d.approved_penalty_minutes||0):null,review_note:d?.manager_note||'',reviewed_by:d?.reviewed_by||'',reviewed_at:d?.reviewed_at||null,decision_id:d?.id||null}}),[rawDaily,decisionMap]);
+ const frozen=monthClosure?.status==='closed'&&monthClosure?.snapshot&&isFullMonth(filters.from_date,filters.to_date);
+ const daily=useMemo(()=>frozen&&Array.isArray(monthClosure?.snapshot?.daily)?monthClosure.snapshot.daily:liveDaily,[frozen,monthClosure,liveDaily]);
+ const monthly=useMemo(()=>frozen&&Array.isArray(monthClosure?.snapshot?.monthly)?monthClosure.snapshot.monthly:buildMonthly(daily),[frozen,monthClosure,daily]);
  const violations=useMemo(()=>daily.filter(r=>r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0),[daily]);
  const totals=useMemo(()=>({
   absence:daily.filter(r=>r.status==='غياب').length,
@@ -223,14 +230,32 @@ export default function AttendanceReports({state,onError,onNotice}){
   pending_review:daily.filter(r=>r.review_status==='pending').length,
   reviewed:daily.filter(r=>['approved','waived','adjusted'].includes(r.review_status)).length
  }),[daily]);
+ const selectedBranchId=filters.branch_id||state.scope?.branch_id||'',fullMonth=isFullMonth(filters.from_date,filters.to_date),pastMonth=fullMonth&&filters.to_date<todayKey(),canClose=!!state.permissions?.close_month&&loaded&&fullMonth&&pastMonth&&!!selectedBranchId&&!filters.attendance_employee_id&&!filters.device_id&&!frozen;
 
  async function loadReport(){
   setBusy(true);onError?.('');
   try{
-   const out=await api.attendanceWrite({action:'report',...filters});
-   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setTruncated(!!out.truncated);setLoaded(true);
+   const out=await api.attendanceWrite({action:'report',...filters,branch_id:selectedBranchId});
+   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setMonthClosure(out.month_closure||null);setTruncated(!!out.truncated);setLoaded(true);
    onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء و'+String((out.violation_decisions||[]).length)+' قرار HR في الفترة.');
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
+ }
+ async function closeMonth(){
+  if(!canClose)return;
+  if(totals.pending_review>0){onError?.('راجع كل مخالفات الشهر أولًا قبل الإقفال.');return}
+  if(!confirm('إقفال شهر '+filters.from_date.slice(0,7)+' وتجميد نتائجه لهذا الفرع؟ بعد الإقفال يلزم صلاحية خاصة لإعادة فتحه.'))return;
+  setCloseBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'close_attendance_month',branch_id:selectedBranchId,period_month:filters.from_date.slice(0,7)+'-01',snapshot:{daily,monthly,filters:{...filters,branch_id:selectedBranchId}},totals,reason:'إقفال شهر الحضور بعد مراجعة المخالفات'});
+   setMonthClosure(out.closure||null);onNotice?.(out.message||'تم إقفال شهر الحضور وتجميد نتائجه.');
+  }catch(err){onError?.(err.message)}finally{setCloseBusy(false)}
+ }
+ async function reopenMonth(e){
+  e.preventDefault();if(!monthClosure?.period_month)return;setCloseBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'reopen_attendance_month',branch_id:selectedBranchId,period_month:monthClosure.period_month,reason:reopenReason});
+   setMonthClosure(out.closure||null);setReopenOpen(false);setReopenReason('');onNotice?.(out.message||'تمت إعادة فتح الشهر.');
+  }catch(err){onError?.(err.message)}finally{setCloseBusy(false)}
  }
  function openReview(r){
   const d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;
@@ -253,7 +278,7 @@ export default function AttendanceReports({state,onError,onNotice}){
   }catch(err){onError?.(err.message)}finally{setReviewBusy(false)}
  }
  function printCurrent(){
-  const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(state.scope?.branch_id))||'كل الفروع');
+  const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(selectedBranchId))||'كل الفروع')+(frozen?' · شهر مقفل — نسخة '+String(monthClosure?.closure_version||1):'');
   if(filters.report_type==='raw')return printTable('سجل البصمات الخام',subtitle,[{label:'الموظف',value:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{label:'PIN',value:r=>r.device_pin},{label:'الجهاز',value:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{label:'التاريخ والوقت',value:r=>fmtDate(r.occurred_at)},{label:'الحالة',value:r=>r.status_code??'—'},{label:'التحقق',value:r=>r.verify_code??'—'}],logs);
   if(filters.report_type==='monthly')return printTable('التقرير الشهري النهائي للحضور',subtitle,[{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'أيام العمل',key:'working_days'},{label:'حضور',key:'present_days'},{label:'جزئي',key:'partial_days'},{label:'غياب',key:'absent_days'},{label:'تأخير',key:'late_days'},{label:'مبكر',key:'early_days'},{label:'بصمة ناقصة',key:'missing_punch_days'},{label:'ساعات فعلية',value:r=>humanMinutes(r.total_minutes)},{label:'نقص',value:r=>humanMinutes(r.shortage_minutes)},{label:'إضافي',value:r=>humanMinutes(r.overtime_minutes)},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)},{label:'جزاء معتمد',value:r=>humanMinutes(r.approved_penalty_minutes)},{label:'معلق للمراجعة',key:'pending_review_count'}],monthly);
   if(filters.report_type==='violations')return printTable('كشف مخالفات الحضور',subtitle,[{label:'التاريخ',key:'day'},{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'الحالة',key:'status'},{label:'المخالفات',key:'violations_summary'},{label:'تأخير',value:r=>humanMinutes(r.late_minutes)},{label:'انصراف مبكر',value:r=>humanMinutes(r.early_leave_minutes)},{label:'نقص ساعات',value:r=>humanMinutes(r.shortage_minutes)},{label:'بصمات ناقصة',key:'missing_punches'},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)},{label:'قرار HR',value:r=>reviewLabel(r.review_status)},{label:'جزاء معتمد',value:r=>r.approved_penalty_minutes==null?'—':humanMinutes(r.approved_penalty_minutes)},{label:'ملاحظة',value:r=>r.review_note||'—'}],violations);
@@ -263,16 +288,17 @@ export default function AttendanceReports({state,onError,onNotice}){
  const rawCols=[{key:'employee',label:'الموظف',render:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{key:'pin',label:'PIN',render:r=>r.device_pin},{key:'device',label:'الجهاز',render:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{key:'time',label:'الوقت',render:r=>fmtDate(r.occurred_at)},{key:'status',label:'الحالة',render:r=>r.status_code??'—'},{key:'verify',label:'التحقق',render:r=>r.verify_code??'—'}];
  const dailyCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'periods_summary',label:'الفترات / الاستثناء'},{key:'first_in',label:'أول دخول'},{key:'last_out',label:'آخر خروج'},{key:'work',label:'عمل فعلي',render:r=>humanMinutes(r.work_minutes)},{key:'late',label:'التأخير',render:r=>r.late_minutes?<Badge tone="orange">{humanMinutes(r.late_minutes)}</Badge>:'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?<Badge tone="orange">{humanMinutes(r.early_leave_minutes)}</Badge>:'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?<Badge tone="red">{humanMinutes(r.shortage_minutes)}</Badge>:'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches?<Badge tone="red">{r.missing_punches}</Badge>:'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'}];
  const monthlyCols=[{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'working_days',label:'أيام العمل'},{key:'present_days',label:'حضور'},{key:'partial_days',label:'حضور جزئي',render:r=>r.partial_days?<Badge tone="orange">{r.partial_days}</Badge>:0},{key:'absent_days',label:'غياب',render:r=>r.absent_days?<Badge tone="red">{r.absent_days}</Badge>:0},{key:'leave_days',label:'إجازات'},{key:'late_days',label:'تأخير',render:r=>r.late_days?<Badge tone="orange">{r.late_days}</Badge>:0},{key:'early_days',label:'انصراف مبكر',render:r=>r.early_days?<Badge tone="orange">{r.early_days}</Badge>:0},{key:'missing_punch_days',label:'بصمة ناقصة',render:r=>r.missing_punch_days?<Badge tone="red">{r.missing_punch_days}</Badge>:0},{key:'hours',label:'ساعات فعلية',render:r=>humanMinutes(r.total_minutes)},{key:'shortage',label:'إجمالي النقص',render:r=>humanMinutes(r.shortage_minutes)},{key:'ot',label:'إضافي',render:r=>humanMinutes(r.overtime_minutes)},{key:'permission',label:'استئذان',render:r=>humanMinutes(r.permission_minutes)},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes?<Badge tone="green">{humanMinutes(r.approved_penalty_minutes)}</Badge>:'—'},{key:'pending',label:'معلق للمراجعة',render:r=>r.pending_review_count?<Badge tone="orange">{r.pending_review_count}</Badge>:0}];
- const violationCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'violations_summary',label:'المخالفات'},{key:'late',label:'تأخير',render:r=>r.late_minutes?humanMinutes(r.late_minutes):'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?humanMinutes(r.early_leave_minutes):'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?humanMinutes(r.shortage_minutes):'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches||'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'review',label:'قرار HR',render:r=><div><Badge tone={reviewTone(r.review_status)}>{reviewLabel(r.review_status)}</Badge>{r.reviewed_by&&<div className="muted-small">{r.reviewed_by}</div>}</div>},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes==null?'—':<Badge tone={r.approved_penalty_minutes?'green':'blue'}>{humanMinutes(r.approved_penalty_minutes)}</Badge>},{key:'note',label:'ملاحظة',render:r=>r.review_note||'—'},{key:'action',label:'',render:r=>state.permissions?.review_violations&&r.employee_id?<Button onClick={()=>openReview(r)}>مراجعة</Button>:'—'}];
+ const violationCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'violations_summary',label:'المخالفات'},{key:'late',label:'تأخير',render:r=>r.late_minutes?humanMinutes(r.late_minutes):'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?humanMinutes(r.early_leave_minutes):'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?humanMinutes(r.shortage_minutes):'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches||'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'review',label:'قرار HR',render:r=><div><Badge tone={reviewTone(r.review_status)}>{reviewLabel(r.review_status)}</Badge>{r.reviewed_by&&<div className="muted-small">{r.reviewed_by}</div>}</div>},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes==null?'—':<Badge tone={r.approved_penalty_minutes?'green':'blue'}>{humanMinutes(r.approved_penalty_minutes)}</Badge>},{key:'note',label:'ملاحظة',render:r=>r.review_note||'—'},{key:'action',label:'',render:r=>state.permissions?.review_violations&&r.employee_id&&!frozen?<Button onClick={()=>openReview(r)}>مراجعة</Button>:frozen?<Badge tone="blue">مقفل</Badge>:'—'}];
 
  const rows=filters.report_type==='raw'?logs:filters.report_type==='monthly'?monthly:filters.report_type==='violations'?violations:daily;
- return <><Card><div className="card-title"><div><h3><FileText size={19}/> الكشوفات والطباعة</h3><small>الحساب يجمع الجدول الأسبوعي والاستثناءات وسياسة الفرع لاكتشاف الغياب الجزئي والانصراف المبكر ونقص الساعات والبصمات الناقصة.</small></div><div className="finance-actions"><Button onClick={loadReport} disabled={busy}>{busy?'جاري التجهيز...':'عرض الكشف'}</Button><Button variant="primary" onClick={printCurrent} disabled={!loaded||!rows.length}><Printer size={16}/> طباعة / PDF</Button></div></div>
+ return <><Card><div className="card-title"><div><h3><FileText size={19}/> الكشوفات والطباعة</h3><small>الحساب يجمع الجدول الأسبوعي والاستثناءات وسياسة الفرع، والشهر المقفل يعرض النسخة المجمدة المعتمدة.</small></div><div className="finance-actions"><Button onClick={loadReport} disabled={busy}>{busy?'جاري التجهيز...':'عرض الكشف'}</Button>{canClose&&<Button onClick={closeMonth} disabled={closeBusy||totals.pending_review>0}><Lock size={15}/>{closeBusy?' جاري الإقفال...':' إقفال الشهر'}</Button>}{frozen&&state.permissions?.reopen_month&&<Button onClick={()=>setReopenOpen(true)} disabled={closeBusy}><Unlock size={15}/> إعادة فتح الشهر</Button>}<Button variant="primary" onClick={printCurrent} disabled={!loaded||!rows.length}><Printer size={16}/> طباعة / PDF</Button></div></div>
  <div className="form-grid">
+  <Field label="الفرع"><Select value={filters.branch_id||''} onChange={e=>{setFilters(x=>({...x,branch_id:e.target.value,attendance_employee_id:'',device_id:''}));setLoaded(false);setMonthClosure(null)}} disabled={!state.scope?.all_branches}><option value="">كل الفروع</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
   <Field label="نوع الكشف"><Select value={filters.report_type} onChange={e=>setFilters(x=>({...x,report_type:e.target.value}))}><option value="daily">كشف حضور يومي تفصيلي</option><option value="monthly">التقرير الشهري النهائي</option><option value="violations">كشف المخالفات</option><option value="raw">سجل البصمات الخام</option></Select></Field>
-  <Field label="من تاريخ"><Input type="date" value={filters.from_date} onChange={e=>setFilters(x=>({...x,from_date:e.target.value,to_date:x.to_date&&x.to_date>=e.target.value?x.to_date:e.target.value}))}/></Field>
-  <Field label="إلى تاريخ"><Input type="date" min={filters.from_date} value={filters.to_date} onChange={e=>setFilters(x=>({...x,to_date:e.target.value}))}/></Field>
-  <Field label="الموظف"><Select value={filters.attendance_employee_id} onChange={e=>setFilters(x=>({...x,attendance_employee_id:e.target.value}))}><option value="">كل الموظفين</option>{employees.map(x=><option key={x.id} value={x.id}>{x.employee_code} — {x.name}</option>)}</Select></Field>
-  <Field label="الجهاز"><Select value={filters.device_id} onChange={e=>setFilters(x=>({...x,device_id:e.target.value}))}><option value="">كل الأجهزة</option>{devices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
+  <Field label="من تاريخ"><Input type="date" value={filters.from_date} onChange={e=>{setFilters(x=>({...x,from_date:e.target.value,to_date:x.to_date&&x.to_date>=e.target.value?x.to_date:e.target.value}));setLoaded(false);setMonthClosure(null)}}/></Field>
+  <Field label="إلى تاريخ"><Input type="date" min={filters.from_date} value={filters.to_date} onChange={e=>{setFilters(x=>({...x,to_date:e.target.value}));setLoaded(false);setMonthClosure(null)}}/></Field>
+  <Field label="الموظف"><Select value={filters.attendance_employee_id} onChange={e=>{setFilters(x=>({...x,attendance_employee_id:e.target.value}));setLoaded(false);setMonthClosure(null)}}><option value="">كل الموظفين</option>{reportEmployees.map(x=><option key={x.id} value={x.id}>{x.employee_code} — {x.name}</option>)}</Select></Field>
+  <Field label="الجهاز"><Select value={filters.device_id} onChange={e=>{setFilters(x=>({...x,device_id:e.target.value}));setLoaded(false);setMonthClosure(null)}}><option value="">كل الأجهزة</option>{reportDevices.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
  </div>
  {loaded&&filters.report_type!=='raw'&&<div className="stats-grid" style={{marginTop:12}}>
   <Card><div className="stat-card"><div><span>غياب كامل</span><strong>{totals.absence}</strong></div></div></Card>
@@ -285,6 +311,9 @@ export default function AttendanceReports({state,onError,onNotice}){
   <Card><div className="stat-card"><div><span>تمت المراجعة</span><strong>{totals.reviewed}</strong></div></div></Card>
   <Card><div className="stat-card"><div><span>جزاء معتمد</span><strong>{humanMinutes(totals.approved_penalty)}</strong></div></div></Card>
  </div>}
+ {frozen&&<div className="success-note"><Lock size={16}/> هذا الشهر مقفل — نسخة {monthClosure?.closure_version||1}. النتائج المعروضة مجمدة كما كانت وقت الإقفال بواسطة {monthClosure?.closed_by||'المستخدم المخول'} في {fmtDate(monthClosure?.closed_at)}.</div>}
+ {loaded&&fullMonth&&!selectedBranchId&&<div className="error-box">لإقفال شهر الحضور لازم تختار فرعًا محددًا.</div>}
+ {loaded&&canClose&&totals.pending_review>0&&<div className="error-box">يوجد {totals.pending_review} مخالفة بانتظار مراجعة HR، لذلك الإقفال متوقف حتى مراجعتها.</div>}
  {loaded&&filters.report_type==='violations'&&<div className="success-note"><AlertTriangle size={16}/> كل مخالفة تبدأ «بانتظار المراجعة». موظف HR صاحب صلاحية الاعتماد يقدر يعتمد الجزاء المقترح، يعفي الموظف، أو يعدّل الجزاء مع ملاحظة. لا يوجد خصم مالي تلقائيًا.</div>}
  {truncated&&<div className="error-box">الكشف وصل للحد الأقصى 10,000 حركة. قلّل الفترة للحصول على كشف كامل.</div>}
  {filters.report_type==='raw'?<Table rows={logs} columns={rawCols}/>:filters.report_type==='monthly'?<Table rows={monthly} columns={monthlyCols}/>:filters.report_type==='violations'?<Table rows={violations} columns={violationCols}/>:<Table rows={daily} columns={dailyCols}/>}
@@ -298,5 +327,12 @@ export default function AttendanceReports({state,onError,onNotice}){
    <Field label="سبب القرار"><Input value={reviewForm.reason||''} onChange={e=>setReviewForm(x=>({...x,reason:e.target.value}))} placeholder="اختياري — يظهر في سجل التدقيق"/></Field>
    <div className="modal-actions">{reviewRow.review_status!=='pending'&&<Button type="button" onClick={resetReview} disabled={reviewBusy}>إعادة للمراجعة</Button>}<Button type="button" onClick={()=>setReviewRow(null)} disabled={reviewBusy}>إلغاء</Button><Button variant="primary" type="submit" disabled={reviewBusy}>{reviewBusy?'جاري الحفظ...':'حفظ القرار'}</Button></div>
   </form>}
+ </Modal>
+ <Modal open={reopenOpen} onClose={()=>setReopenOpen(false)} title="إعادة فتح شهر الحضور">
+  <form onSubmit={reopenMonth} className="form-grid">
+   <div className="error-box" style={{gridColumn:'1/-1'}}><Unlock size={16}/> إعادة الفتح ستسمح بتعديل المخالفات والاستثناءات ثم يلزم إقفال الشهر مرة أخرى لإصدار نسخة جديدة.</div>
+   <Field label="سبب إعادة الفتح"><Textarea value={reopenReason} onChange={e=>setReopenReason(e.target.value)} placeholder="مثال: اكتشاف بصمة ناقصة تم تصحيحها" required/></Field>
+   <div className="modal-actions"><Button type="button" onClick={()=>setReopenOpen(false)} disabled={closeBusy}>إلغاء</Button><Button variant="primary" type="submit" disabled={closeBusy||reopenReason.trim().length<5}>{closeBusy?'جاري الفتح...':'تأكيد إعادة الفتح'}</Button></div>
+  </form>
  </Modal></>;
 }
