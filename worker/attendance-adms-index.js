@@ -154,7 +154,16 @@ function cleanShiftPeriods(v){
  for(let i=0;i<v.length;i++){
   const p=v[i]||{},start=cleanTime(p.start_time),end=cleanTime(p.end_time);
   if(!start||!end)continue;
-  rows.push({sequence_no:i+1,label:txt(p.label)||('الفترة '+String(i+1)),start_time:start,end_time:end,grace_minutes:Math.max(0,Math.min(240,Number(p.grace_minutes??10)))});
+  const templateId=txt(p.device_shift_template_id);
+  rows.push({
+   sequence_no:i+1,
+   label:txt(p.label)||('الفترة '+String(i+1)),
+   start_time:start,
+   end_time:end,
+   grace_minutes:Math.max(0,Math.min(240,Number(p.grace_minutes??10))),
+   device_shift_template_id:templateId||null,
+   source_type:templateId?'device_template':'custom'
+  });
  }
  return rows.slice(0,12);
 }
@@ -162,7 +171,7 @@ function safeDeviceText(v,max=40){return txt(v).replace(/[\t\r\n]/g,' ').replace
 async function replaceShiftPeriods(env,me,employeeId,periods){
  await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(employeeId),{method:'DELETE',prefer:'return=minimal'});
  if(!periods.length)return [];
- const now=new Date().toISOString(),rows=periods.map(p=>({attendance_employee_id:employeeId,sequence_no:p.sequence_no,label:p.label,start_time:p.start_time,end_time:p.end_time,grace_minutes:p.grace_minutes,active:true,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now}));
+ const now=new Date().toISOString(),rows=periods.map(p=>({attendance_employee_id:employeeId,sequence_no:p.sequence_no,label:p.label,start_time:p.start_time,end_time:p.end_time,grace_minutes:p.grace_minutes,device_shift_template_id:p.device_shift_template_id||null,source_type:p.device_shift_template_id?'device_template':'custom',active:true,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now}));
  return await rest(env,'attendance_employee_shift_periods',{method:'POST',body:rows,prefer:'return=representation'});
 }
 function deviceLocalNow(){try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace('T',' ')}catch{return new Date().toISOString().slice(0,19).replace('T',' ')}}
@@ -218,6 +227,48 @@ async function pushEmployeeToDevices(env,me,body){
  await audit(env,me,'attendance_employee_push_to_devices','attendance_employee',employee.id,employee.branch_id,null,{devices:links.map(x=>x.device_id)},'رفع بيانات موظف الحضور إلى أجهزة البصمة');
  return {ok:true,queued:true,count:queued.length};
 }
+async function saveDeviceShiftTemplate(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة فترات دوام الجهاز.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const id=txt(body.id),name=txt(body.name),start=cleanTime(body.start_time),end=cleanTime(body.end_time),grace=Math.max(0,Math.min(240,Number(body.grace_minutes??10)));
+ if(!name||!start||!end)throw Object.assign(new Error('اسم الفترة ووقت البداية والنهاية مطلوبة.'),{status:400});
+ let before=null;
+ if(id){
+  const rows=await rest(env,'attendance_device_shift_templates?id=eq.'+enc(id)+'&device_id=eq.'+enc(device.id)+'&select=*&limit=1');before=rows?.[0]||null;
+  if(!before)throw Object.assign(new Error('فترة الجهاز غير موجودة.'),{status:404});
+ }
+ const payload={device_id:device.id,name,start_time:start,end_time:end,grace_minutes:grace,sequence_no:Math.max(1,Number(body.sequence_no||1)),active:body.active!==false,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ let after;
+ if(id)after=(await rest(env,'attendance_device_shift_templates?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ else after=(await rest(env,'attendance_device_shift_templates',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ فترة الجهاز.'),{status:500});
+ await rest(env,'attendance_employee_shift_periods?device_shift_template_id=eq.'+enc(after.id),{method:'PATCH',body:{label:after.name,start_time:after.start_time,end_time:after.end_time,grace_minutes:after.grace_minutes,source_type:'device_template',updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+ await audit(env,me,id?'attendance_device_shift_update':'attendance_device_shift_create','attendance_device_shift_template',after.id,device.branch_id,before,after,'إدارة فترات دوام الجهاز');
+ return {ok:true,template:after};
+}
+async function deleteDeviceShiftTemplate(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة فترات دوام الجهاز.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const id=txt(body.id),rows=await rest(env,'attendance_device_shift_templates?id=eq.'+enc(id)+'&device_id=eq.'+enc(device.id)+'&select=*&limit=1'),before=rows?.[0]||null;
+ if(!before)throw Object.assign(new Error('فترة الجهاز غير موجودة.'),{status:404});
+ await rest(env,'attendance_employee_shift_periods?device_shift_template_id=eq.'+enc(id),{method:'PATCH',body:{device_shift_template_id:null,source_type:'custom',updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+ await rest(env,'attendance_device_shift_templates?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});
+ await audit(env,me,'attendance_device_shift_delete','attendance_device_shift_template',id,device.branch_id,before,null,'حذف فترة دوام من إعدادات الجهاز');
+ return {ok:true};
+}
+async function queueEmployeeAutoPush(env,me,employee){
+ const links=await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id)+'&active=eq.true&select=*').catch(()=>[]);
+ let devicesQueued=0;
+ for(const link of links||[]){
+  const device=await scopedDevice(env,me,link.device_id);if(!device)continue;
+  const snap=(await rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(link.device_pin)+'&select=*&limit=1').catch(()=>[]))?.[0]||{};
+  const command=userUpdateCommand(link.device_pin,{...snap,name:employee.name});
+  await queueCommands(env,device,me,[{type:'push_user',command},{type:'verify_user',command:'DATA QUERY USERINFO PIN='+safeDeviceText(link.device_pin,24)}]);
+  devicesQueued+=1;
+ }
+ return devicesQueued;
+}
+
 async function importDeviceUsers(env,me,body){
  if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة للاستيراد.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
@@ -278,12 +329,13 @@ async function attendanceState(env,me,url){
   rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc')
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
- const [deviceUsers,commands]=deviceIds.length?await Promise.all([
+ const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
    rest(env,'attendance_device_users?select=id,device_id,serial_number,device_pin,name,privilege,card_number,group_no,timezone_raw,verify_mode,data_environment,source_table,first_seen_at,last_seen_at'+inFilter+'&order=device_pin.asc'),
-   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100')
- ]):[[],[]];
+   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
+   rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
+ ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -324,8 +376,9 @@ async function saveEmployee(env,me,body){
  let after;if(id)after=(await rest(env,'attendance_employees?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;else after=(await rest(env,'attendance_employees',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
  if(!after)throw Object.assign(new Error('تعذر حفظ موظف الحضور.'),{status:500});
  if(suppliedPeriods)await replaceShiftPeriods(env,me,after.id,periods);
- await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods},txt(body.reason)||'إدارة موظف حضور');
- return {ok:true,employee:after,shift_periods:periods};
+ const autoPush=body.auto_push!==false,devicesQueued=autoPush?await queueEmployeeAutoPush(env,me,after):0;
+ await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
+ return {ok:true,employee:after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued};
 }
 
 async function saveLink(env,me,body){
@@ -355,6 +408,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
   if(action==='import_historical_attendance')return json(await importHistoricalAttendance(env,me,body));
+  if(action==='save_device_shift_template')return json(await saveDeviceShiftTemplate(env,me,body));
+  if(action==='delete_device_shift_template')return json(await deleteDeviceShiftTemplate(env,me,body));
   if(action==='push_device_user')return json(await pushDeviceUser(env,me,body));
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
