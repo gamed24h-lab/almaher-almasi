@@ -123,7 +123,7 @@ async function admsRequest(request,env){
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);if(n)await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');return plain('OK')}
+   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);if(n){await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch')}return plain('OK')}
    if(table==='USERINFO'||table==='OPERLOG'){
      const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}
      return plain('OK')
@@ -241,6 +241,31 @@ async function importDeviceUsers(env,me,body){
  return {ok:true,imported:valid.length,skipped:deviceUsers.length-valid.length};
 }
 
+
+async function relinkDeviceHistory(env,device){
+ const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&attendance_employee_id=not.is.null&select=device_pin,attendance_employee_id,staff_user_id,branch_id,display_name&order=device_pin.asc');
+ let linkedPins=0;
+ for(const link of links||[]){
+  await rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(link.device_pin),{method:'PATCH',body:{attendance_employee_id:link.attendance_employee_id,staff_user_id:link.staff_user_id||null,employee_name:link.display_name||null,branch_id:link.branch_id||device.branch_id||null},prefer:'return=minimal'});
+  linkedPins+=1;
+ }
+ return linkedPins;
+}
+async function importHistoricalAttendance(env,me,body){
+ if(!canManageDevices(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة الأجهزة وربط البصمة لاستيراد الحركات القديمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const linkedPins=await relinkDeviceHistory(env,device);
+ const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
+ let queued=false;
+ if(!existing?.length){
+  const now=deviceLocalNow();
+  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now}]);
+  queued=true;
+ }
+ await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
+ return {ok:true,queued,linked_pins:linkedPins,message:queued?'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.':'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
+}
+
 async function attendanceState(env,me,url){
  const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
  const [devices,links,logs,employees,users,branches,shiftPeriods]=await Promise.all([
@@ -329,6 +354,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='report')return json(await attendanceReport(env,me,body));
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
+  if(action==='import_historical_attendance')return json(await importHistoricalAttendance(env,me,body));
   if(action==='push_device_user')return json(await pushDeviceUser(env,me,body));
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
