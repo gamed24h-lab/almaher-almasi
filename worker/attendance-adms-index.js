@@ -56,23 +56,78 @@ async function touchDevice(env,device,request,url,extra={}){
 }
 function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
 
-async function admsRequest(request,env){if(!base(env)||!serviceKey(env))return plain('ERROR: SERVER_CONFIG',503);const url=new URL(request.url),serial=serialFrom(url);if(url.pathname==='/iclock/health')return plain('OK');if(!serial)return plain('ERROR: SN_REQUIRED',200);const device=await getDevice(env,serial).catch(()=>null);if(!device||device.status!=='active')return plain('ERROR: DEVICE_NOT_REGISTERED',200);
- if(request.method==='GET'&&url.pathname==='/iclock/cdata'){await touchDevice(env,device,request,url).catch(()=>{});return plain(handshake(serial))}
- if(request.method==='GET'&&url.pathname==='/iclock/getrequest'){await touchDevice(env,device,request,url).catch(()=>{});return plain('OK')}
- if((request.method==='GET'||request.method==='POST')&&url.pathname==='/iclock/registry'){const body=request.method==='POST'?await request.text():'';const info=parseDeviceInfo(body);await touchDevice(env,device,request,url,info).catch(()=>{});return plain(request.method==='GET'?handshake(serial):'OK')}
- if(request.method==='POST'&&url.pathname==='/iclock/devicecmd'){await touchDevice(env,device,request,url).catch(()=>{});return plain('OK')}
+async function upsertDeviceUsers(env,device,serial,userRows,sourceTable){
+ if(!userRows?.length)return 0;
+ const now=new Date().toISOString(),rows=userRows.map(u=>({device_id:device.id,serial_number:serial,device_pin:u.pin,name:u.name||null,privilege:u.privilege,card_number:u.card||null,group_no:u.group||null,timezone_raw:u.timezone||null,verify_mode:u.verify,data_environment:device.data_environment||'training',source_table:sourceTable||null,last_seen_at:now,metadata:{protocol:'zkteco_adms'}}));
+ await rest(env,'attendance_device_users?on_conflict=device_id%2Cdevice_pin',{method:'POST',body:rows,prefer:'resolution=merge-duplicates,return=minimal'});
+ return rows.length;
+}
+async function popDeviceCommands(env,device){
+ const queued=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=eq.queued&select=id,command_text&order=id.asc&limit=3').catch(()=>[]);
+ if(!queued?.length)return [];
+ const now=new Date().toISOString();
+ for(const cmd of queued)await rest(env,'attendance_device_commands?id=eq.'+enc(cmd.id),{method:'PATCH',body:{status:'sent',sent_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ return queued;
+}
+async function completeDeviceCommand(env,body){
+ const params=new URLSearchParams(String(body||'')),id=txt(params.get('ID')||params.get('id')),rc=safeInt(params.get('Return')||params.get('return')),cmd=txt(params.get('CMD')||params.get('cmd'));
+ if(!id)return;
+ await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:String(body||'').slice(0,2000),completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+}
+async function storeAttendanceLogs(env,device,serial,request,body){
+ const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,staff_user_id,branch_id,display_name').catch(()=>[]);
+ const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),rows=[];
+ for(const raw of String(body||'').split(/\r?\n/)){
+   const line=raw.trim();if(!line)continue;const f=line.split('\t'),pin=txt(f[0]),rawTime=txt(f[1]),occurred=parseSaudiDeviceTime(rawTime);if(!pin||!occurred)continue;
+   const statusCode=safeInt(f[2]),verifyCode=safeInt(f[3]),workCode=txt(f[4]),link=linkMap.get(pin)||null,branchId=link?.branch_id||device.branch_id||null;
+   rows.push({device_id:device.id,serial_number:serial,branch_id:branchId,device_pin:pin,attendance_employee_id:link?.attendance_employee_id||null,staff_user_id:link?.staff_user_id||null,employee_name:txt(link?.display_name)||null,occurred_at:occurred,device_time_raw:rawTime,status_code:statusCode,verify_code:verifyCode,work_code:workCode||null,source_ip:clientIp(request)||null,raw_line:line.slice(0,700),data_environment:device.data_environment||'training',dedupe_key:dedupe(device.id,pin,rawTime,statusCode,verifyCode,workCode),metadata:{protocol:'zkteco_adms',table:'ATTLOG'}});
+ }
+ if(rows.length)await rest(env,'attendance_raw_logs?on_conflict=dedupe_key',{method:'POST',body:rows,prefer:'resolution=ignore-duplicates,return=minimal'});
+ return rows.length;
+}
+async function admsRequest(request,env){
+ if(!base(env)||!serviceKey(env))return plain('ERROR: SERVER_CONFIG',503);
+ const url=new URL(request.url),serial=serialFrom(url);
+ if(url.pathname==='/iclock/health')return plain('OK');
+ if(!serial)return plain('ERROR: SN_REQUIRED',200);
+ const device=await getDevice(env,serial).catch(()=>null);
+ if(!device||device.status!=='active')return plain('ERROR: DEVICE_NOT_REGISTERED',200);
+
+ if(request.method==='GET'&&url.pathname==='/iclock/cdata'){
+   await touchDevice(env,device,request,url).catch(()=>{});
+   return plain(handshake(serial));
+ }
+ if(request.method==='GET'&&url.pathname==='/iclock/getrequest'){
+   await touchDevice(env,device,request,url).catch(()=>{});
+   const commands=await popDeviceCommands(env,device);
+   if(!commands.length)return plain('OK');
+   return plain(commands.map(c=>'C:'+c.id+':'+c.command_text).join('\r\n')+'\r\n');
+ }
+ if((request.method==='GET'||request.method==='POST')&&url.pathname==='/iclock/registry'){
+   const body=request.method==='POST'?await request.text():'',info=parseDeviceInfo(body);
+   await touchDevice(env,device,request,url,info).catch(()=>{});
+   return plain(request.method==='GET'?handshake(serial):'OK');
+ }
+ if(request.method==='POST'&&url.pathname==='/iclock/devicecmd'){
+   const body=await request.text();
+   await touchDevice(env,device,request,url).catch(()=>{});
+   await completeDeviceCommand(env,body);
+   return plain('OK');
+ }
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
-   const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table!=='ATTLOG')return plain('OK: '+String(body.split(/\r?\n/).filter(Boolean).length));
-   const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,staff_user_id,branch_id,display_name').catch(()=>[]);
-   const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),rows=[];
-   for(const raw of body.split(/\r?\n/)){
-     const line=raw.trim();if(!line)continue;const f=line.split('\t'),pin=txt(f[0]),rawTime=txt(f[1]),occurred=parseSaudiDeviceTime(rawTime);if(!pin||!occurred)continue;
-     const statusCode=safeInt(f[2]),verifyCode=safeInt(f[3]),workCode=txt(f[4]),link=linkMap.get(pin)||null,branchId=link?.branch_id||device.branch_id||null;
-     rows.push({device_id:device.id,serial_number:serial,branch_id:branchId,device_pin:pin,attendance_employee_id:link?.attendance_employee_id||null,staff_user_id:link?.staff_user_id||null,employee_name:txt(link?.display_name)||null,occurred_at:occurred,device_time_raw:rawTime,status_code:statusCode,verify_code:verifyCode,work_code:workCode||null,source_ip:clientIp(request)||null,raw_line:line.slice(0,700),data_environment:device.data_environment||'training',dedupe_key:dedupe(device.id,pin,rawTime,statusCode,verifyCode,workCode),metadata:{protocol:'zkteco_adms',table:'ATTLOG'}})
+   const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
+   await touchDevice(env,device,request,url,info).catch(()=>{});
+   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);return plain('OK: '+n)}
+   if(table==='USERINFO'||table==='OPERLOG'){
+     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);
+     return plain('OK: '+Math.max(n,String(body).split(/\r?\n/).filter(Boolean).length));
    }
-   if(rows.length)await rest(env,'attendance_raw_logs?on_conflict=dedupe_key',{method:'POST',body:rows,prefer:'resolution=ignore-duplicates,return=minimal'});
-   return plain('OK: '+rows.length)
+   if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
+     return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
+   }
+   const users=parseUserLines(body);
+   if(users.length){const n=await upsertDeviceUsers(env,device,serial,users,table||'UNKNOWN');return plain('OK: '+n)}
+   return plain('OK: '+String(body).split(/\r?\n/).filter(Boolean).length);
  }
  return plain('OK');
 }
