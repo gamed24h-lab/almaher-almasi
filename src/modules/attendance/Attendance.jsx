@@ -43,18 +43,19 @@ export default function Attendance(){
  const linkCols=[
   {key:'device',label:'الجهاز',render:r=>deviceMap.get(String(r.device_id))?.name||r.device_id},
   {key:'pin',label:'رقم الموظف بالجهاز',render:r=><strong dir="ltr">{r.device_pin}</strong>},
-  {key:'staff',label:'الموظف',render:r=>userMap.get(String(r.staff_user_id))?.name||r.display_name||<Badge tone="orange">غير مرتبط</Badge>},
+  {key:'staff',label:'الموظف',render:r=>employeeMap.get(String(r.attendance_employee_id))?.name||userMap.get(String(r.staff_user_id))?.name||r.display_name||<Badge tone="orange">غير مرتبط</Badge>},
   {key:'branch',label:'الفرع',render:r=>branchMap.get(String(r.branch_id))||'—'},
   {key:'actions',label:'',render:r=>state.permissions?.manage_links?<div className="finance-actions"><Button onClick={()=>editLink(r)}>تعديل</Button><Button onClick={()=>deleteLink(r)}>حذف الربط</Button></div>:'—'}
  ];
  const logCols=[
-  {key:'employee',label:'الموظف',render:r=><div><strong>{userMap.get(String(r.staff_user_id))?.name||r.employee_name||('PIN '+r.device_pin)}</strong>{!r.staff_user_id&&!r.employee_name&&<div className="muted-small">يحتاج ربط موظف</div>}</div>},
+  {key:'employee',label:'الموظف',render:r=><div><strong>{employeeMap.get(String(r.attendance_employee_id))?.name||userMap.get(String(r.staff_user_id))?.name||r.employee_name||('PIN '+r.device_pin)}</strong>{!r.attendance_employee_id&&!r.staff_user_id&&!r.employee_name&&<div className="muted-small">يحتاج ربط موظف</div>}</div>},
   {key:'device',label:'الجهاز',render:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},
   {key:'branch',label:'الفرع',render:r=>branchMap.get(String(r.branch_id))||'—'},
   {key:'time',label:'وقت البصمة',render:r=>fmtDate(r.occurred_at)},
   {key:'verify',label:'رمز التحقق',render:r=>r.verify_code??'—'},
   {key:'status',label:'رمز الحالة',render:r=>r.status_code??'—'},
-  {key:'env',label:'البيئة',render:r=>r.data_environment==='production'?<Badge tone="green">فعلي</Badge>:<Badge tone="orange">تدريب</Badge>}
+  {key:'env',label:'البيئة',render:r=>r.data_environment==='production'?<Badge tone="green">فعلي</Badge>:<Badge tone="orange">تدريب</Badge>},
+  {key:'link',label:'',render:r=>state.permissions?.manage_links&&!r.attendance_employee_id?<Button onClick={()=>addLink({device_id:r.device_id,device_pin:r.device_pin})}><Link2 size={14}/> ربط</Button>:'—'}
  ];
  return <><PageHeader title="الحضور والبصمة" subtitle="ربط أجهزة ZKTeco والفروع واستقبال البصمات عبر ADMS بدون حفظ قالب البصمة أو صورة الوجه" actions={<><Button onClick={load} disabled={loading}><RefreshCw size={16}/> تحديث</Button>{state.permissions?.manage_links&&<Button onClick={addLink} disabled={!devices.length}><Link2 size={16}/> ربط موظف</Button>}{state.permissions?.manage_devices&&<Button variant="primary" onClick={addDevice}><Plus size={16}/> إضافة جهاز</Button>}</>}/>
  <ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
