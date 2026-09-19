@@ -70,9 +70,13 @@ async function popDeviceCommands(env,device){
  return queued;
 }
 async function completeDeviceCommand(env,body){
- const params=new URLSearchParams(String(body||'')),id=txt(params.get('ID')||params.get('id')),rc=safeInt(params.get('Return')||params.get('return')),cmd=txt(params.get('CMD')||params.get('cmd'));
- if(!id)return;
- await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:String(body||'').slice(0,2000),completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+ const raw=String(body||''),lines=raw.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ for(const line of lines){
+  const params=new URLSearchParams(line),id=txt(params.get('ID')||params.get('id')),rc=safeInt(params.get('Return')||params.get('return'));
+  if(!id)continue;
+  const now=new Date().toISOString();
+  await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ }
 }
 async function markSyncComplete(env,device,commandType,resultBody){
  const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.'+enc(commandType)+'&status=in.(queued,sent)&select=id&order=id.desc&limit=1').catch(()=>[]);
