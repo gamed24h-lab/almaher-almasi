@@ -211,7 +211,16 @@ function userUpdateCommand(pin,data){
  return 'DATA UPDATE USERINFO PIN='+p+'\tName='+name+'\tPri='+pri+'\tPasswd=\tCard='+card+'\tGrp='+grp+'\tTZ='+tz+'\tVerify='+verify+'\tViceCard=';
 }
 async function queueCommands(env,device,me,commands){
- const rows=commands.map(c=>({device_id:device.id,command_type:c.type,command_text:c.command,created_by:actorId(me)||actorName(me)||null}));
+ const rows=commands.map(c=>({
+  device_id:device.id,
+  command_type:c.type,
+  command_text:c.command,
+  operation_group_id:c.operation_group_id||null,
+  entity_type:c.entity_type||null,
+  entity_id:c.entity_id||null,
+  metadata:c.metadata||{},
+  created_by:actorId(me)||actorName(me)||null
+ }));
  return await rest(env,'attendance_device_commands',{method:'POST',body:rows,prefer:'return=representation'});
 }
 async function pushDeviceUser(env,me,body){
