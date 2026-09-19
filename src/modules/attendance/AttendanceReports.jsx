@@ -1,7 +1,7 @@
 import React,{useMemo,useState} from 'react';
 import {AlertTriangle,FileText,Printer} from 'lucide-react';
 import {api} from '../../lib/api.js';
-import {Badge,Button,Card,Field,Input,Select,Table} from '../../components/UI.jsx';
+import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
 const DEFAULT_POLICY={
  early_leave_grace_minutes:10,
@@ -39,6 +39,8 @@ function distanceToPeriod(m,start,end){const x=adjustedMinute(m,start,end),finis
 function ruleOnDay(rule,day){return rule.start_date<=day&&rule.end_date>=day}
 function ruleMinutes(rule){const s=minutesFromClock(rule.start_time),e=minutesFromClock(rule.end_time);return periodDuration(s,e)}
 function statusTone(v){return v==='حضور'?'green':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
+function reviewLabel(v){return v==='approved'?'معتمدة':v==='waived'?'معفاة':v==='adjusted'?'معدلة':v==='pending'?'بانتظار المراجعة':'—'}
+function reviewTone(v){return v==='approved'?'green':v==='waived'?'blue':v==='adjusted'?'orange':v==='pending'?'red':'blue'}
 function policyFor(employee,policyMap){return {...DEFAULT_POLICY,...(policyMap.get(String(employee?.branch_id))||{})}}
 
 function expectedPeriods(employee,day,periodsMap,rules){
@@ -180,7 +182,7 @@ function buildDaily(logs,employees,periodsMap,rules,policyMap,fromDate,toDate,fi
 function buildMonthly(daily){
  const map=new Map();
  for(const r of daily){
-  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,partial_days:0,absent_days:0,leave_days:0,off_days:0,late_days:0,early_days:0,missing_punch_days:0,total_minutes:0,scheduled_minutes:0,shortage_minutes:0,early_leave_minutes:0,overtime_minutes:0,permission_minutes:0,penalty_minutes:0,punches:0};
+  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,partial_days:0,absent_days:0,leave_days:0,off_days:0,late_days:0,early_days:0,missing_punch_days:0,total_minutes:0,scheduled_minutes:0,shortage_minutes:0,early_leave_minutes:0,overtime_minutes:0,permission_minutes:0,penalty_minutes:0,approved_penalty_minutes:0,pending_review_count:0,reviewed_violation_days:0,punches:0};
   if(r.expected)x.working_days+=1;
   if(r.punches>0)x.present_days+=1;
   if(r.status==='حضور جزئي')x.partial_days+=1;
@@ -190,7 +192,7 @@ function buildMonthly(daily){
   if(r.late_minutes>0)x.late_days+=1;
   if(r.early_leave_minutes>0)x.early_days+=1;
   if(r.missing_punches>0)x.missing_punch_days+=1;
-  x.total_minutes+=r.work_minutes;x.scheduled_minutes+=r.adjusted_scheduled_minutes;x.shortage_minutes+=r.shortage_minutes;x.early_leave_minutes+=r.early_leave_minutes;x.overtime_minutes+=r.overtime_minutes;x.permission_minutes+=r.permission_minutes;x.penalty_minutes+=r.penalty_minutes;x.punches+=r.punches;
+  x.total_minutes+=r.work_minutes;x.scheduled_minutes+=r.adjusted_scheduled_minutes;x.shortage_minutes+=r.shortage_minutes;x.early_leave_minutes+=r.early_leave_minutes;x.overtime_minutes+=r.overtime_minutes;x.permission_minutes+=r.permission_minutes;x.penalty_minutes+=r.penalty_minutes;x.approved_penalty_minutes+=Number(r.approved_penalty_minutes||0);if(r.review_status==='pending')x.pending_review_count+=1;else if(['approved','waived','adjusted'].includes(r.review_status))x.reviewed_violation_days+=1;x.punches+=r.punches;
   map.set(key,x);
  }
  return [...map.values()].sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
