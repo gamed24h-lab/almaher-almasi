@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {Database,DownloadCloud,Fingerprint,RefreshCw,UploadCloud,UserPlus,Users} from 'lucide-react';
+import {Database,DownloadCloud,Fingerprint,History,RefreshCw,UploadCloud,UserPlus,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table} from '../../components/UI.jsx';
 
@@ -12,11 +12,11 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
-function cmdName(v){return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
+function cmdName(v){return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?'الحركات القديمة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
 const blankUser={device_id:'',device_pin:'',name:'',privilege:0,card_number:'',group_no:'1',timezone_raw:'0000000100000000',verify_mode:0};
 
 export default function AttendanceDeviceData({state,onChanged,onError,onNotice}){
- const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
+ const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[historyBusy,setHistoryBusy]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
  const timerRef=useRef(null),attemptRef=useRef(0);
  const devices=state.devices||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
@@ -51,6 +51,16 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice})
    await onChanged?.();
   }catch(e){onError?.(e.message)}finally{setImportBusy('')}
  }
+ async function importHistory(d){
+  if(!confirm('استيراد وربط كل الحركات القديمة الموجودة على هذا الجهاز؟ العملية آمنة من التكرار لأن كل حركة لها مفتاح منع تكرار.'))return;
+  setHistoryBusy(d.id);onError?.('');attemptRef.current=0;
+  try{
+   const out=await api.attendanceWrite({action:'import_historical_attendance',device_id:d.id});
+   setWatching(d.id);
+   onNotice?.(out?.message||'تم بدء استيراد الحركات القديمة وربطها بالموظفين.');
+   await onChanged?.();
+  }catch(e){onError?.(e.message)}finally{setHistoryBusy('')}
+ }
  function editUser(u){setUserForm({...blankUser,...u,device_id:u.device_id,device_pin:u.device_pin,privilege:u.privilege??0,group_no:u.group_no||'1',timezone_raw:u.timezone_raw||'0000000100000000',verify_mode:u.verify_mode??0});setUserOpen(true)}
  async function saveAndPush(e){
   e.preventDefault();setUserBusy(true);onError?.('');attemptRef.current=0;
@@ -68,7 +78,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice})
   {key:'reported',label:'الموجود بالجهاز',render:d=><div><strong>{d.reported_user_count??'—'} موظف</strong><div className="muted-small">{d.reported_fp_count??'—'} قالب بصمة · {d.reported_face_count??'—'} وجه</div><div className="muted-small">{d.reported_transaction_count??'—'} حركة معلنة</div></div>},
   {key:'synced',label:'المسحوب للنظام',render:d=>{const us=usersByDevice.get(String(d.id))||[],imported=us.filter(u=>linkMap.get(String(d.id)+'|'+String(u.device_pin))?.attendance_employee_id).length;return <div><strong>{us.length} موظف مسحوب</strong><div className="muted-small">{imported} مستورد كموظف حضور</div></div>}},
   {key:'command',label:'حالة آخر أوامر',render:d=>{const rows=(commandsByDevice.get(String(d.id))||[]).slice(0,4);return rows.length?<div style={{display:'grid',gap:4}}>{rows.map(c=><div key={c.id} style={{display:'flex',gap:6,alignItems:'center',justifyContent:'space-between'}}><span className="muted-small">{cmdName(c.command_type)}</span><Badge tone={c.status==='success'?'green':c.status==='failed'?'red':'orange'}>{cmdLabel(c.status)}</Badge></div>)}</div>:'—'}},
-  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id;const count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions">{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><DownloadCloud size={15}/>{active?' جاري السحب...':' سحب بيانات الجهاز'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}</div>}}
+  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id;const count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions">{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><DownloadCloud size={15}/>{active?' جاري السحب...':' سحب بيانات الجهاز'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}{state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>importHistory(d)} disabled={historyBusy===d.id||active}><History size={15}/>{historyBusy===d.id?' جاري الاستيراد...':' استيراد الحركات القديمة'}</Button>}</div>}}
  ];
  const userCols=[
   {key:'pin',label:'PIN',render:u=><strong dir="ltr">{u.device_pin}</strong>},
