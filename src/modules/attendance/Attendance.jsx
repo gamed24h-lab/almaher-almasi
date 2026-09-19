@@ -27,8 +27,8 @@ export default function Attendance(){
  function addDevice(){setDeviceForm({...blankDevice});setDeviceOpen(true)}
  function editDevice(row){setDeviceForm({...blankDevice,...row,branch_id:row.branch_id||'',reason:''});setDeviceOpen(true)}
  async function saveDevice(e){e.preventDefault();setDeviceBusy(true);setError('');try{await api.attendanceWrite({action:'save_device',...deviceForm});setDeviceOpen(false);setNotice('تم حفظ إعداد جهاز البصمة.');await load()}catch(e2){setError(e2.message)}finally{setDeviceBusy(false)}}
- function addLink(){setLinkForm({...blankLink,device_id:devices[0]?.id||''});setLinkOpen(true)}
- function editLink(row){setLinkForm({...blankLink,...row,staff_user_id:row.staff_user_id||'',display_name:row.display_name||''});setLinkOpen(true)}
+ function addLink(seed={}){setLinkForm({...blankLink,device_id:seed.device_id||devices[0]?.id||'',device_pin:seed.device_pin||'',attendance_employee_id:seed.attendance_employee_id||''});setLinkOpen(true)}
+ function editLink(row){setLinkForm({...blankLink,...row,attendance_employee_id:row.attendance_employee_id||'',staff_user_id:row.staff_user_id||'',display_name:row.display_name||''});setLinkOpen(true)}
  async function saveLink(e){e.preventDefault();setLinkBusy(true);setError('');try{await api.attendanceWrite({action:'save_link',...linkForm});setLinkOpen(false);setNotice('تم ربط رقم جهاز البصمة بالموظف.');await load()}catch(e2){setError(e2.message)}finally{setLinkBusy(false)}}
  async function deleteLink(row){if(!confirm('حذف ربط هذا الرقم بالموظف؟ سجلات البصمة نفسها لن تُحذف.'))return;setError('');try{await api.attendanceWrite({action:'delete_link',id:row.id});setNotice('تم حذف الربط مع الاحتفاظ بسجل البصمات.');await load()}catch(e){setError(e.message)}}
  const deviceCols=[
