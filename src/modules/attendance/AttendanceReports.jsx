@@ -235,10 +235,27 @@ export default function AttendanceReports({state,onError,onNotice}){
  async function loadReport(){
   setBusy(true);onError?.('');
   try{
-   const out=await api.attendanceWrite({action:'report',...filters});
-   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setTruncated(!!out.truncated);setLoaded(true);
+   const out=await api.attendanceWrite({action:'report',...filters,branch_id:selectedBranchId});
+   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setMonthClosure(out.month_closure||null);setTruncated(!!out.truncated);setLoaded(true);
    onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء و'+String((out.violation_decisions||[]).length)+' قرار HR في الفترة.');
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
+ }
+ async function closeMonth(){
+  if(!canClose)return;
+  if(totals.pending_review>0){onError?.('راجع كل مخالفات الشهر أولًا قبل الإقفال.');return}
+  if(!confirm('إقفال شهر '+filters.from_date.slice(0,7)+' وتجميد نتائجه لهذا الفرع؟ بعد الإقفال يلزم صلاحية خاصة لإعادة فتحه.'))return;
+  setCloseBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'close_attendance_month',branch_id:selectedBranchId,period_month:filters.from_date.slice(0,7)+'-01',snapshot:{daily,monthly,filters:{...filters,branch_id:selectedBranchId}},totals,reason:'إقفال شهر الحضور بعد مراجعة المخالفات'});
+   setMonthClosure(out.closure||null);onNotice?.(out.message||'تم إقفال شهر الحضور وتجميد نتائجه.');
+  }catch(err){onError?.(err.message)}finally{setCloseBusy(false)}
+ }
+ async function reopenMonth(e){
+  e.preventDefault();if(!monthClosure?.period_month)return;setCloseBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'reopen_attendance_month',branch_id:selectedBranchId,period_month:monthClosure.period_month,reason:reopenReason});
+   setMonthClosure(out.closure||null);setReopenOpen(false);setReopenReason('');onNotice?.(out.message||'تمت إعادة فتح الشهر.');
+  }catch(err){onError?.(err.message)}finally{setCloseBusy(false)}
  }
  function openReview(r){
   const d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;
@@ -261,7 +278,7 @@ export default function AttendanceReports({state,onError,onNotice}){
   }catch(err){onError?.(err.message)}finally{setReviewBusy(false)}
  }
  function printCurrent(){
-  const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(state.scope?.branch_id))||'كل الفروع');
+  const subtitle='من '+filters.from_date+' إلى '+filters.to_date+' · '+(branchMap.get(String(selectedBranchId))||'كل الفروع')+(frozen?' · شهر مقفل — نسخة '+String(monthClosure?.closure_version||1):'');
   if(filters.report_type==='raw')return printTable('سجل البصمات الخام',subtitle,[{label:'الموظف',value:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{label:'PIN',value:r=>r.device_pin},{label:'الجهاز',value:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{label:'التاريخ والوقت',value:r=>fmtDate(r.occurred_at)},{label:'الحالة',value:r=>r.status_code??'—'},{label:'التحقق',value:r=>r.verify_code??'—'}],logs);
   if(filters.report_type==='monthly')return printTable('التقرير الشهري النهائي للحضور',subtitle,[{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'أيام العمل',key:'working_days'},{label:'حضور',key:'present_days'},{label:'جزئي',key:'partial_days'},{label:'غياب',key:'absent_days'},{label:'تأخير',key:'late_days'},{label:'مبكر',key:'early_days'},{label:'بصمة ناقصة',key:'missing_punch_days'},{label:'ساعات فعلية',value:r=>humanMinutes(r.total_minutes)},{label:'نقص',value:r=>humanMinutes(r.shortage_minutes)},{label:'إضافي',value:r=>humanMinutes(r.overtime_minutes)},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)},{label:'جزاء معتمد',value:r=>humanMinutes(r.approved_penalty_minutes)},{label:'معلق للمراجعة',key:'pending_review_count'}],monthly);
   if(filters.report_type==='violations')return printTable('كشف مخالفات الحضور',subtitle,[{label:'التاريخ',key:'day'},{label:'الكود',key:'employee_code'},{label:'الموظف',key:'name'},{label:'الحالة',key:'status'},{label:'المخالفات',key:'violations_summary'},{label:'تأخير',value:r=>humanMinutes(r.late_minutes)},{label:'انصراف مبكر',value:r=>humanMinutes(r.early_leave_minutes)},{label:'نقص ساعات',value:r=>humanMinutes(r.shortage_minutes)},{label:'بصمات ناقصة',key:'missing_punches'},{label:'جزاء مقترح',value:r=>humanMinutes(r.penalty_minutes)},{label:'قرار HR',value:r=>reviewLabel(r.review_status)},{label:'جزاء معتمد',value:r=>r.approved_penalty_minutes==null?'—':humanMinutes(r.approved_penalty_minutes)},{label:'ملاحظة',value:r=>r.review_note||'—'}],violations);
