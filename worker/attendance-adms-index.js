@@ -819,10 +819,11 @@ async function completeDeviceCommand(env,body){
  for(const groupId of groups)await finalizeEmployeeDeleteGroup(env,groupId);
 }
 async function markSyncComplete(env,device,commandType,resultBody){
- const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.'+enc(commandType)+'&status=in.(queued,sent)&select=id&order=id.desc&limit=1').catch(()=>[]);
- const id=rows?.[0]?.id;if(!id)return;
+ const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.'+enc(commandType)+'&status=in.(queued,sent)&select=id,metadata,created_by&order=id.desc&limit=1').catch(()=>[]);
+ const row=rows?.[0]||null,id=row?.id;if(!id)return null;
  const now=new Date().toISOString();
  await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:'success',result_code:0,result_body:String(resultBody||'').slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ return row;
 }
 async function storeProbePayload(env,device,serial,url,body){
  const table=txt(url.searchParams.get('table')).toUpperCase();
@@ -892,7 +893,12 @@ async function admsRequest(request,env){
    }
    if(table==='USERINFO'||table==='OPERLOG'){
      if(table==='OPERLOG')await storeBiometricDiscovery(env,device,serial,body,table).catch(()=>({records:0}));
-     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}
+     const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);
+     if(n){
+      const syncCmd=await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');
+      await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users');
+      if(syncCmd?.metadata?.biometric_inventory_after_users===true)await queueLegacyInventoryAfterUsers(env,device,syncCmd.metadata,syncCmd.created_by).catch(()=>({queued:0}));
+     }
      return plain('OK')
    }
    if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'||table==='FACE'){
@@ -951,39 +957,37 @@ async function queueDeviceSync(env,me,body){
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
  const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&select=id,command_type,status,metadata&limit=100').catch(()=>[]);
  if(existing?.some(x=>x.command_type==='sync_users'||x.command_type==='sync_attlog'||x?.metadata?.smart_sync===true))return {ok:true,queued:false,message:'يوجد Smart Sync قيد التنفيذ بالفعل على هذا الجهاز.'};
- const now=deviceLocalNow(),requestedAt=new Date().toISOString(),batch='smart-sync-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),allowBiometrics=canManageBiometrics(me);
+ const now=deviceLocalNow(),requestedAt=new Date().toISOString(),batch='smart-sync-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),allowBiometrics=canManageBiometrics(me),modern=protocolAtLeast(device.push_version,2,2,14);
  const baseMeta={smart_sync:true,smart_sync_batch:batch,requested_at:requestedAt};
+ const candidates=allowBiometrics?await biometricImportCandidates(env,device,null):[];
+ const linkedPinCount=candidates.filter(x=>x.attendance_employee_id).length,knownPinCount=candidates.length,biometricStrategy=allowBiometrics?(modern?'biodata':'legacy_fingertmp'):null;
  const commands=[
-  {device_id:device.id,command_type:'sync_info',command_text:'INFO',metadata:{...baseMeta,stage:'device_info'},created_by:actorId(me)||actorName(me)||null},
-  {device_id:device.id,command_type:'sync_users',command_text:'DATA QUERY USERINFO',metadata:{...baseMeta,stage:'users'},created_by:actorId(me)||actorName(me)||null},
-  {device_id:device.id,command_type:'sync_attlog',command_text:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{...baseMeta,stage:'attendance'},created_by:actorId(me)||actorName(me)||null}
+  {type:'sync_info',command:'INFO',metadata:{...baseMeta,stage:'device_info'}},
+  {type:'sync_users',command:'DATA QUERY USERINFO',metadata:{...baseMeta,stage:'users',biometric_inventory_after_users:allowBiometrics&&!modern}},
+  {type:'sync_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{...baseMeta,stage:'attendance'}}
  ];
- let biometricCommandCount=0,linkedPinCount=0,biometricStrategy=null;
+ let biometricCommandCount=0;
  if(allowBiometrics){
-  const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&attendance_employee_id=not.is.null&select=device_pin,attendance_employee_id').catch(()=>[]);
-  const unique=[...new Map((links||[]).filter(x=>txt(x.device_pin)).map(x=>[txt(x.device_pin),x])).values()];
-  linkedPinCount=unique.length;
-  const modern=protocolAtLeast(device.push_version,2,2,14);biometricStrategy=modern?'biodata':'legacy_fingertmp';
   if(modern){
    commands.push(
-    {device_id:device.id,command_type:'biometric_import_fingerprint',command_text:'DATA QUERY BIODATA Type=1',metadata:{...baseMeta,stage:'biometrics',biometric_type:'finger',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null},
-    {device_id:device.id,command_type:'biometric_import_face',command_text:'DATA QUERY BIODATA Type=2',metadata:{...baseMeta,stage:'biometrics',biometric_type:'face',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null},
-    {device_id:device.id,command_type:'biometric_import_face',command_text:'DATA QUERY BIODATA Type=9',metadata:{...baseMeta,stage:'biometrics',biometric_type:'visible_face',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null}
+    {type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1',metadata:{...baseMeta,stage:'biometrics',biometric_type:'finger',strategy:'biodata_all'}},
+    {type:'biometric_import_face',command:'DATA QUERY BIODATA Type=2',metadata:{...baseMeta,stage:'biometrics',biometric_type:'face',strategy:'biodata_all'}},
+    {type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9',metadata:{...baseMeta,stage:'biometrics',biometric_type:'visible_face',strategy:'biodata_all'}}
    );
    biometricCommandCount=3;
   }else{
-   for(const link of unique){
-    const pin=safeDeviceText(link.device_pin,24);
-    commands.push({device_id:device.id,command_type:'biometric_import_fingerprint',command_text:'DATA QUERY FINGERTMP PIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{...baseMeta,stage:'biometrics',pin,attendance_employee_id:link.attendance_employee_id,biometric_type:'finger',strategy:'legacy_fingertmp'},created_by:actorId(me)||actorName(me)||null});
+   for(const row of candidates){
+    const pin=safeDeviceText(row.device_pin,24);
+    commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY FINGERTMP PIN='+pin,entity_type:row.attendance_employee_id?'attendance_employee':'attendance_device_pin',entity_id:row.attendance_employee_id||pin,metadata:{...baseMeta,stage:'biometrics',pin,attendance_employee_id:row.attendance_employee_id||null,biometric_type:'finger',strategy:'legacy_fingertmp',inventory_only:!row.attendance_employee_id}});
    }
-   biometricCommandCount=unique.length;
+   biometricCommandCount=candidates.length;
   }
  }
- const created=await rest(env,'attendance_device_commands',{method:'POST',body:commands,prefer:'return=representation'});
- const meta={...(device.metadata||{}),last_smart_sync:{batch,requested_at:requestedAt,requested_by:actorId(me)||actorName(me)||null,total_commands:commands.length,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,biometric_strategy:biometricStrategy,biometrics_included:allowBiometrics,raw_biometric_templates_stored:false}};
+ const created=await queueCommands(env,device,me,commands);
+ const meta={...(device.metadata||{}),last_smart_sync:{batch,requested_at:requestedAt,requested_by:actorId(me)||actorName(me)||null,total_commands:commands.length,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,known_pins_before_sync:knownPinCount,biometric_strategy:biometricStrategy,biometrics_included:allowBiometrics,inventory_after_users:allowBiometrics&&!modern,raw_biometric_templates_stored:false}};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:requestedAt},prefer:'return=minimal'}).catch(()=>{});
- await audit(env,me,'attendance_device_smart_sync_requested','attendance_device',device.id,device.branch_id,null,{batch,commands:commands.map(x=>x.command_type),total_commands:commands.length,biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,biometric_strategy:biometricStrategy},'Smart Sync: معلومات الجهاز والموظفين والحركات والبصمات');
- return {ok:true,queued:true,batch,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[],biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,message:allowBiometrics?'بدأ Smart Sync: الجهاز + الموظفون + الحركات + البصمات.':'بدأ Smart Sync للجهاز والموظفين والحركات. البصمات لم تُدرج لأن المستخدم لا يملك صلاحية إدارتها.'};
+ await audit(env,me,'attendance_device_smart_sync_requested','attendance_device',device.id,device.branch_id,null,{batch,commands:commands.map(x=>x.type),total_commands:commands.length,biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,known_pins_before_sync:knownPinCount,biometric_strategy:biometricStrategy,inventory_after_users:allowBiometrics&&!modern},'Smart Sync: معلومات الجهاز والموظفين والحركات وجرد البصمات');
+ return {ok:true,queued:true,batch,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[],biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,known_pins:knownPinCount,message:allowBiometrics?'بدأ Smart Sync: الجهاز + الموظفون + الحركات + جرد البصمات.':'بدأ Smart Sync للجهاز والموظفين والحركات. البصمات لم تُدرج لأن المستخدم لا يملك صلاحية إدارتها.'};
 }
 async function diagnoseDevice(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لتشخيص أجهزة البصمة.'),{status:403});
@@ -1543,8 +1547,9 @@ async function attendanceState(env,me,url){
  const biometricScope=branchId?'&branch_id=eq.'+enc(branchId):'';
  const biometricProfiles=await rest(env,'attendance_biometric_profiles?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=2000').catch(()=>[]);
  const biometricDeviceStates=await rest(env,'attendance_biometric_device_states?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
+ const biometricInventory=await rest(env,'attendance_biometric_inventory?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1643,15 +1648,32 @@ function parseBiometricTemplateLines(body,tableName){
 async function storeBiometricDiscovery(env,device,serial,body,tableName){
  const records=parseBiometricTemplateLines(body,tableName);if(!records.length)return {records:0,matched:0,unmatched:0};
  const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,branch_id').catch(()=>[]);
- const linkMap=new Map((links||[]).filter(x=>x.attendance_employee_id).map(x=>[txt(x.device_pin),x]));
+ const linkGroups=new Map();
+ for(const link of links||[]){const pin=txt(link.device_pin),a=linkGroups.get(pin)||[];a.push(link);linkGroups.set(pin,a)}
+ const linkMap=new Map();
+ for(const [pin,a] of linkGroups.entries()){
+  const ids=[...new Set(a.map(x=>txt(x.attendance_employee_id)).filter(Boolean))];
+  if(ids.length===1)linkMap.set(pin,a.find(x=>txt(x.attendance_employee_id)===ids[0])||a[0]);
+ }
  const employeeIds=[...new Set(records.map(r=>linkMap.get(r.pin)?.attendance_employee_id).filter(Boolean))];
  const existing=employeeIds.length?await rest(env,'attendance_biometric_profiles?attendance_employee_id=in.('+employeeIds.map(enc).join(',')+')&data_environment=eq.'+enc(device.data_environment||'training')+'&select=*').catch(()=>[]):[];
  const existingMap=new Map((existing||[]).map(x=>[String(x.attendance_employee_id)+'|'+txt(x.biometric_key),x]));
- const now=new Date().toISOString(),rows=[],deviceRows=[],seen=new Set();let matched=0,unmatched=0;
+ const now=new Date().toISOString(),rows=[],deviceRows=[],inventoryRows=[],seen=new Set(),inventorySeen=new Set();let matched=0,unmatched=0;
  for(const r of records){
-  const link=linkMap.get(r.pin);if(!link?.attendance_employee_id){unmatched+=1;continue}
   const key=r.biometric_type==='face'?'face':'finger:'+r.finger_code;
-  if(!key||key==='finger:null')continue;
+  if(!key||key==='finger:null'||!txt(r.pin))continue;
+  const link=linkMap.get(r.pin)||null,inventoryKey=txt(r.pin)+'|'+key;
+  if(!inventorySeen.has(inventoryKey)){
+   inventorySeen.add(inventoryKey);
+   inventoryRows.push({
+    device_id:device.id,branch_id:link?.branch_id||device.branch_id||null,device_pin:r.pin,attendance_employee_id:link?.attendance_employee_id||null,
+    biometric_type:r.biometric_type,biometric_key:key,finger_code:r.finger_code||null,slot_no:r.slot_no??null,status:'active',
+    last_seen_at:now,last_result_code:0,data_environment:device.data_environment||'training',
+    metadata:{source:'device_inventory',source_table:r.source_table||txt(tableName).toUpperCase()||null,template_valid:r.valid??1,template_index:r.index_no??null,major_ver:r.major_ver??null,minor_ver:r.minor_ver??null,format:r.format??null,raw_template_stored:false},
+    created_at:now,updated_at:now
+   });
+  }
+  if(!link?.attendance_employee_id){unmatched+=1;continue}
   const dedupe=String(link.attendance_employee_id)+'|'+key;if(seen.has(dedupe))continue;seen.add(dedupe);
   const old=existingMap.get(dedupe)||null;
   const metadata={...(old?.metadata||{}),source:'device_import',device_imported_at:now,source_table:r.source_table||txt(tableName).toUpperCase()||null,template_valid:r.valid??1,template_index:r.index_no??null,major_ver:r.major_ver??null,minor_ver:r.minor_ver??null,format:r.format??null,raw_template_stored:false};
@@ -1671,14 +1693,16 @@ async function storeBiometricDiscovery(env,device,serial,body,tableName){
   });
   matched+=1;
  }
+ if(inventoryRows.length)await rest(env,'attendance_biometric_inventory?on_conflict=device_id%2Cdevice_pin%2Cbiometric_key%2Cdata_environment',{method:'POST',body:inventoryRows,prefer:'resolution=merge-duplicates,return=minimal'}).catch(()=>{});
  if(rows.length)await rest(env,'attendance_biometric_profiles?on_conflict=attendance_employee_id%2Cbiometric_key%2Cdata_environment',{method:'POST',body:rows,prefer:'resolution=merge-duplicates,return=minimal'}).catch(()=>{});
  if(deviceRows.length)await rest(env,'attendance_biometric_device_states?on_conflict=device_id%2Cattendance_employee_id%2Cbiometric_key%2Cdata_environment',{method:'POST',body:deviceRows,prefer:'resolution=merge-duplicates,return=minimal'}).catch(()=>{});
- const meta={...(device.metadata||{}),last_biometric_import_received_at:now,last_biometric_import_records:records.length,last_biometric_import_matched:matched,last_biometric_import_unmatched:unmatched,raw_biometric_templates_stored:false};
+ const meta={...(device.metadata||{}),last_biometric_import_received_at:now,last_biometric_import_records:records.length,last_biometric_inventory_count:inventoryRows.length,last_biometric_import_matched:matched,last_biometric_import_unmatched:unmatched,raw_biometric_templates_stored:false};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});device.metadata=meta;
  const systemActor={id:'device:'+String(device.id),name:'جهاز البصمة',role:'system',permissions:{}};
- await audit(env,systemActor,'attendance_biometrics_discovered','attendance_device',device.id,device.branch_id,null,{serial_number:serial,records:records.length,matched,unmatched,source_table:txt(tableName).toUpperCase(),raw_template_stored:false},'استيراد حالة البصمات الموجودة على الجهاز').catch(()=>{});
- return {records:records.length,matched,unmatched};
+ await audit(env,systemActor,'attendance_biometrics_discovered','attendance_device',device.id,device.branch_id,null,{serial_number:serial,records:records.length,inventory:inventoryRows.length,matched,unmatched,source_table:txt(tableName).toUpperCase(),raw_template_stored:false},'استيراد جرد البصمات الموجودة على الجهاز').catch(()=>{});
+ return {records:records.length,inventory:inventoryRows.length,matched,unmatched};
 }
+
 async function pendingBiometricImports(env,deviceId){
  return await rest(env,'attendance_device_commands?device_id=eq.'+enc(deviceId)+'&command_type=in.(biometric_import_fingerprint,biometric_import_face)&status=in.(queued,sent)&select=id,entity_id,metadata,status&limit=500').catch(()=>[]);
 }
@@ -1692,33 +1716,46 @@ function pendingBiometricCovers(pending,employeeId,pin){
   return false;
  });
 }
+async function biometricImportCandidates(env,device,employeeId){
+ let linkPath='attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,branch_id';
+ if(txt(employeeId))linkPath+='&attendance_employee_id=eq.'+enc(employeeId);
+ const links=await rest(env,linkPath).catch(()=>[]);
+ if(txt(employeeId))return [...new Map((links||[]).filter(x=>txt(x.device_pin)&&x.attendance_employee_id).map(x=>[txt(x.device_pin),x])).values()];
+ const users=await rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&select=device_pin,name&limit=5000').catch(()=>[]);
+ const byPin=new Map((users||[]).filter(x=>txt(x.device_pin)).map(x=>[txt(x.device_pin),{device_pin:txt(x.device_pin),attendance_employee_id:null,branch_id:device.branch_id||null,device_user_name:txt(x.name)||null}]));
+ for(const link of links||[]){if(txt(link.device_pin))byPin.set(txt(link.device_pin),{...byPin.get(txt(link.device_pin)),...link})}
+ return [...byPin.values()];
+}
+async function queueLegacyInventoryAfterUsers(env,device,sourceMeta,createdBy){
+ if(protocolAtLeast(device.push_version,2,2,14))return {queued:0,pins:0};
+ const candidates=await biometricImportCandidates(env,device,null),pending=await pendingBiometricImports(env,device.id),commands=[];
+ for(const row of candidates){
+  const pin=safeDeviceText(row.device_pin,24);if(!pin||pendingBiometricCovers(pending,row.attendance_employee_id,pin))continue;
+  commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY FINGERTMP PIN='+pin,entity_type:row.attendance_employee_id?'attendance_employee':'attendance_device_pin',entity_id:row.attendance_employee_id||pin,metadata:{...(sourceMeta||{}),stage:'biometrics',pin,attendance_employee_id:row.attendance_employee_id||null,biometric_type:'finger',strategy:'legacy_fingertmp',inventory_only:!row.attendance_employee_id}});
+ }
+ if(!commands.length)return {queued:0,pins:candidates.length};
+ const rows=commands.map(x=>({device_id:device.id,command_type:x.type,command_text:x.command,operation_group_id:null,entity_type:x.entity_type||null,entity_id:x.entity_id||null,metadata:x.metadata||{},created_by:createdBy||'system:biometric-inventory'}));
+ const created=await rest(env,'attendance_device_commands',{method:'POST',body:rows,prefer:'return=representation'}).catch(()=>[]);
+ return {queued:created?.length||0,pins:candidates.length};
+}
+
 async function importDeviceBiometrics(env,me,body){
  if(!canManageBiometrics(me))throw Object.assign(new Error('لا توجد صلاحية مستقلة لاستيراد البصمات.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
  if(device.status!=='active')throw Object.assign(new Error('جهاز البصمة موقوف.'),{status:409});
- const employeeId=txt(body.attendance_employee_id);
- let path='attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=*';
- if(employeeId)path+='&attendance_employee_id=eq.'+enc(employeeId);
- const links=await rest(env,path).catch(()=>[]);
- let unique=[...new Map((links||[]).filter(x=>txt(x.device_pin)&&x.attendance_employee_id).map(x=>[txt(x.device_pin),x])).values()];
- if(!unique.length)throw Object.assign(new Error('لا يوجد موظفون مربوطون بهذا الجهاز لاستيراد بصماتهم.'),{status:400});
- const pending=await pendingBiometricImports(env,device.id),modern=protocolAtLeast(device.push_version,2,2,14);
- if(modern){
-  if(employeeId&&unique.every(x=>pendingBiometricCovers(pending,x.attendance_employee_id,x.device_pin)))return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:unique.length,message:'يوجد طلب قراءة بصمات لهذا الموظف قيد التنفيذ بالفعل.'};
-  if(!employeeId&&pending.some(x=>txt(x?.metadata?.strategy)==='biodata_all'))return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:unique.length,message:'يوجد استيراد بصمات شامل لهذا الجهاز قيد التنفيذ بالفعل.'};
- }else{
-  unique=unique.filter(x=>!pendingBiometricCovers(pending,x.attendance_employee_id,x.device_pin));
-  if(!unique.length)return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:0,message:'كل طلبات قراءة البصمات المطلوبة قيد التنفيذ بالفعل.'};
- }
+ const employeeId=txt(body.attendance_employee_id),pending=await pendingBiometricImports(env,device.id),modern=protocolAtLeast(device.push_version,2,2,14);
+ let candidates=await biometricImportCandidates(env,device,employeeId);
+ if(employeeId&&!candidates.length)throw Object.assign(new Error('الموظف غير مربوط بهذا الجهاز أو لا يوجد له PIN صالح.'),{status:400});
  const batch='bio-import-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),commands=[];
  if(modern){
-  const pins=employeeId?unique.map(x=>safeDeviceText(x.device_pin,24)):[];
-  if(employeeId&&pins.length){
-   for(const link of unique){
-    const pin=safeDeviceText(link.device_pin,24),metaBase={batch,pin,attendance_employee_id:link.attendance_employee_id,strategy:'biodata_pin'};
-    commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1\tPIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{...metaBase,biometric_type:'finger'}});
-    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=2\tPIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{...metaBase,biometric_type:'face'}});
-    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9\tPIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{...metaBase,biometric_type:'visible_face'}});
+  if(employeeId&&candidates.every(x=>pendingBiometricCovers(pending,x.attendance_employee_id,x.device_pin)))return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:candidates.length,message:'يوجد طلب قراءة بصمات لهذا الموظف قيد التنفيذ بالفعل.'};
+  if(!employeeId&&pending.some(x=>txt(x?.metadata?.strategy)==='biodata_all'))return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:candidates.filter(x=>x.attendance_employee_id).length,message:'يوجد استيراد بصمات شامل لهذا الجهاز قيد التنفيذ بالفعل.'};
+  if(employeeId){
+   for(const row of candidates){
+    const pin=safeDeviceText(row.device_pin,24),metaBase={batch,pin,attendance_employee_id:row.attendance_employee_id,strategy:'biodata_pin'};
+    commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1\tPIN='+pin,entity_type:'attendance_employee',entity_id:row.attendance_employee_id,metadata:{...metaBase,biometric_type:'finger'}});
+    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=2\tPIN='+pin,entity_type:'attendance_employee',entity_id:row.attendance_employee_id,metadata:{...metaBase,biometric_type:'face'}});
+    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9\tPIN='+pin,entity_type:'attendance_employee',entity_id:row.attendance_employee_id,metadata:{...metaBase,biometric_type:'visible_face'}});
    }
   }else{
    commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1',metadata:{batch,biometric_type:'finger',strategy:'biodata_all'}});
@@ -1726,16 +1763,24 @@ async function importDeviceBiometrics(env,me,body){
    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9',metadata:{batch,biometric_type:'visible_face',strategy:'biodata_all'}});
   }
  }else{
-  for(const link of unique){
-   const pin=safeDeviceText(link.device_pin,24);
-   commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY FINGERTMP PIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{batch,pin,attendance_employee_id:link.attendance_employee_id,biometric_type:'finger',strategy:'legacy_fingertmp'}});
+  candidates=candidates.filter(x=>!pendingBiometricCovers(pending,x.attendance_employee_id,x.device_pin));
+  for(const row of candidates){
+   const pin=safeDeviceText(row.device_pin,24);
+   commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY FINGERTMP PIN='+pin,entity_type:row.attendance_employee_id?'attendance_employee':'attendance_device_pin',entity_id:row.attendance_employee_id||pin,metadata:{batch,pin,attendance_employee_id:row.attendance_employee_id||null,biometric_type:'finger',strategy:'legacy_fingertmp',inventory_only:!row.attendance_employee_id}});
   }
+  if(!commands.length&&!employeeId){
+   const pendingUsers=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.sync_users&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
+   if(pendingUsers?.length)return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:0,message:'يتم الآن سحب موظفي الجهاز أولًا، وبعد وصول الـPINs سيبدأ استيراد البصمات تلقائيًا.'};
+   const staged=await queueCommands(env,device,me,[{type:'sync_users',command:'DATA QUERY USERINFO',metadata:{biometric_inventory_after_users:true,biometric_import_batch:batch,stage:'users_before_biometrics',requested_at:new Date().toISOString()}}]);
+   return {ok:true,queued:true,batch,strategy:'legacy_userinfo_then_fingertmp',commands:staged?.length||0,linked_pins:0,message:'بدأ سحب موظفي الجهاز أولًا. بعد وصول الـPINs سيستورد النظام البصمات الموجودة تلقائيًا حتى لو لم تكن مرتبطة بموظفين.'};
+  }
+  if(!commands.length)return {ok:true,queued:false,already_pending:true,commands:0,linked_pins:0,message:'طلبات قراءة البصمات المطلوبة قيد التنفيذ بالفعل.'};
  }
  const queued=await queueCommands(env,device,me,commands);
- const now=new Date().toISOString(),meta={...(device.metadata||{}),last_biometric_import_requested_at:now,last_biometric_import_batch:batch,last_biometric_import_strategy:modern?'biodata':'legacy_fingertmp',last_biometric_import_command_count:commands.length,raw_biometric_templates_stored:false};
+ const now=new Date().toISOString(),linkedCount=candidates.filter(x=>x.attendance_employee_id).length,meta={...(device.metadata||{}),last_biometric_import_requested_at:now,last_biometric_import_batch:batch,last_biometric_import_strategy:modern?'biodata':'legacy_fingertmp',last_biometric_import_command_count:commands.length,last_biometric_import_candidate_pins:candidates.length,raw_biometric_templates_stored:false};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
- await audit(env,me,'attendance_biometric_import_requested','attendance_device',device.id,device.branch_id,null,{batch,strategy:modern?'biodata':'legacy_fingertmp',commands:commands.length,linked_pins:unique.length,employee_id:employeeId||null,duplicate_guard:true},'طلب استيراد البصمات الموجودة على الجهاز');
- return {ok:true,queued:true,batch,strategy:modern?'biodata':'legacy_fingertmp',commands:queued?.length||0,linked_pins:unique.length,message:'تم بدء استيراد البصمات الموجودة على الجهاز لـ '+unique.length+' موظف. القوالب الخام لن تُحفظ.'};
+ await audit(env,me,'attendance_biometric_import_requested','attendance_device',device.id,device.branch_id,null,{batch,strategy:modern?'biodata':'legacy_fingertmp',commands:commands.length,candidate_pins:candidates.length,linked_pins:linkedCount,employee_id:employeeId||null,inventory_without_links:!employeeId,duplicate_guard:true},'طلب جرد واستيراد البصمات الموجودة على الجهاز');
+ return {ok:true,queued:true,batch,strategy:modern?'biodata':'legacy_fingertmp',commands:queued?.length||0,candidate_pins:candidates.length,linked_pins:linkedCount,message:'تم بدء قراءة بصمات '+candidates.length+' PIN من الجهاز. سيتم الاحتفاظ بالجرد حتى للـPIN غير المربوط، بدون حفظ القالب الخام.'};
 }
 
 async function autoReconcileBiometrics(env,me,body){
@@ -1754,9 +1799,10 @@ async function autoReconcileBiometrics(env,me,body){
  const summary={devices_reviewed:devices.length,device_scans:0,employee_scans:0,queued_commands:0,already_pending:0,count_gaps:0,missing_employees:0,unsafe_requires_review:0,unlinked_pins:0,duplicate_pins:0,link_mismatches:0,truncated:false,mode};
  let actions=0;
  for(const device of devices){
-  const [links,states,users]=await Promise.all([
+  const [links,states,inventory,users]=await Promise.all([
    rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=id,device_pin,attendance_employee_id,branch_id').catch(()=>[]),
    rest(env,'attendance_biometric_device_states?device_id=eq.'+enc(device.id)+'&data_environment=eq.'+enc(mode)+'&status=eq.active&select=id,device_pin,attendance_employee_id,biometric_type,biometric_key').catch(()=>[]),
+   rest(env,'attendance_biometric_inventory?device_id=eq.'+enc(device.id)+'&data_environment=eq.'+enc(mode)+'&status=eq.active&select=id,device_pin,attendance_employee_id,biometric_type,biometric_key').catch(()=>[]),
    rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&select=device_pin,name&limit=5000').catch(()=>[])
   ]);
   const linkByPin=new Map(),stateEmployees=new Set();
@@ -1779,7 +1825,7 @@ async function autoReconcileBiometrics(env,me,body){
   const linkedEmployees=[...new Map((links||[]).filter(x=>x.attendance_employee_id&&txt(x.device_pin)).map(x=>[txt(x.attendance_employee_id),x])).values()];
   const missing=linkedEmployees.filter(x=>!stateEmployees.has(txt(x.attendance_employee_id)));
   summary.missing_employees+=missing.length;
-  const knownFp=(states||[]).filter(x=>x.biometric_type==='finger').length,knownFace=(states||[]).filter(x=>x.biometric_type==='face').length;
+  const knownFp=(inventory||[]).filter(x=>x.biometric_type==='finger').length,knownFace=(inventory||[]).filter(x=>x.biometric_type==='face').length;
   const reportedFp=Number(device.reported_fp_count),reportedFace=Number(device.reported_face_count);
   const fpGap=Number.isFinite(reportedFp)&&reportedFp!==knownFp,faceGap=Number.isFinite(reportedFace)&&reportedFace>0&&reportedFace!==knownFace;
   if(fpGap||faceGap){

@@ -40,7 +40,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const [shiftOpen,setShiftOpen]=useState(false),[shiftDevice,setShiftDevice]=useState(null),[shiftForm,setShiftForm]=useState(blankShift),[shiftBusy,setShiftBusy]=useState(false);
  const [syncReportOpen,setSyncReportOpen]=useState(false),[syncReportDeviceId,setSyncReportDeviceId]=useState(''),[syncReportBatch,setSyncReportBatch]=useState('');
  const timerRef=useRef(null),attemptRef=useRef(0),watchBatchRef=useRef('');
- const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[],biometricDeviceStates=state.biometricDeviceStates||[],unlinkedGroups=state.unlinkedGroups||[];
+ const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[],biometricDeviceStates=state.biometricDeviceStates||[],biometricInventory=state.biometricInventory||[],unlinkedGroups=state.unlinkedGroups||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
  const commandsByDevice=useMemo(()=>{const m=new Map();for(const c of commands){const k=String(c.device_id),a=m.get(k)||[];a.push(c);m.set(k,a)}return m},[commands]);
  const shiftsByDevice=useMemo(()=>{const m=new Map();for(const x of deviceShiftTemplates){const k=String(x.device_id),a=m.get(k)||[];a.push(x);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>Number(x.sequence_no)-Number(y.sequence_no));return m},[deviceShiftTemplates]);
@@ -49,14 +49,14 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const predictiveByDevice=useMemo(()=>new Map(devicePredictiveAlerts.map(x=>[String(x.device_id),x])),[devicePredictiveAlerts]);
  const eventsByDevice=useMemo(()=>{const m=new Map();for(const x of healthEvents){const k=String(x.device_id),arr=m.get(k)||[];arr.push(x);m.set(k,arr)}return m},[healthEvents]);
  const linkMap=useMemo(()=>new Map(links.map(l=>[String(l.device_id)+'|'+String(l.device_pin),l])),[links]);
- const biometricByDevice=useMemo(()=>{const m=new Map();for(const x of (biometricDeviceStates.length?biometricDeviceStates:biometricProfiles)){if(x.status!=='active')continue;const deviceId=x.device_id||x.source_device_id;if(!deviceId)continue;const k=String(deviceId),a=m.get(k)||[];a.push(x);m.set(k,a)}return m},[biometricDeviceStates,biometricProfiles]);
+ const biometricByDevice=useMemo(()=>{const m=new Map();const source=biometricInventory.length?biometricInventory:(biometricDeviceStates.length?biometricDeviceStates:biometricProfiles);for(const x of source){if(x.status!=='active')continue;const deviceId=x.device_id||x.source_device_id;if(!deviceId)continue;const k=String(deviceId),a=m.get(k)||[];a.push(x);m.set(k,a)}return m},[biometricInventory,biometricDeviceStates,biometricProfiles]);
  const diagDevice=devices.find(x=>String(x.id)===String(diagDeviceId))||null,diagHealth=healthByDevice.get(String(diagDeviceId))||null,diagCommand=(commandsByDevice.get(String(diagDeviceId))||[]).find(x=>x.command_type==='diagnostic_info')||null;
  const historyDevice=devices.find(x=>String(x.id)===String(historyDeviceId))||null,historySummary=historyByDevice.get(String(historyDeviceId))||null,historyRows=eventsByDevice.get(String(historyDeviceId))||[];
  const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null;
  function smartSyncReport(device,batch=syncReportBatch){
   if(!device)return {users:0,linked:0,unlinkedUsers:0,employeesWithBiometric:0,withoutBiometric:0,fingerprints:0,faces:0,unlinkedMovements:0,success:0,failed:0,pending:0,totalCommands:0};
   const us=usersByDevice.get(String(device.id))||[],deviceLinks=links.filter(x=>x.active&&String(x.device_id)===String(device.id)&&x.attendance_employee_id),linkedPins=new Set(deviceLinks.map(x=>String(x.device_pin))),linkedEmployees=[...new Set(deviceLinks.map(x=>String(x.attendance_employee_id)))];
-  const bios=biometricByDevice.get(String(device.id))||[],bioEmployees=new Set(bios.map(x=>String(x.attendance_employee_id))),fingerprints=bios.filter(x=>x.biometric_type==='finger').length,faces=bios.filter(x=>x.biometric_type==='face').length;
+  const bios=biometricByDevice.get(String(device.id))||[],bioEmployees=new Set(bios.map(x=>String(x.attendance_employee_id||'')).filter(Boolean)),fingerprints=bios.filter(x=>x.biometric_type==='finger').length,faces=bios.filter(x=>x.biometric_type==='face').length;
   const batchRows=(commandsByDevice.get(String(device.id))||[]).filter(x=>batch?x?.metadata?.smart_sync_batch===batch:x?.metadata?.smart_sync===true);
   const unlinkedMovements=unlinkedGroups.filter(x=>String(x.device_id)===String(device.id)).reduce((n,x)=>n+Number(x.count||0),0);
   return {
@@ -98,7 +98,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   }catch(e){onError?.(e.message)}finally{setImportBusy('')}
  }
  async function importBiometrics(d){
-  if(!confirm('سيتم قراءة البصمات الموجودة فعليًا على هذا الجهاز وربط حالتها بالموظفين حسب PIN. لن يتم حفظ قالب البصمة الخام. هل تريد المتابعة؟'))return;
+  if(!confirm('سيتم قراءة جرد البصمات الموجودة فعليًا على هذا الجهاز حسب PIN، حتى لو لم يكن الـPIN مربوطًا بموظف بعد. لن يتم حفظ قالب البصمة الخام. هل تريد المتابعة؟'))return;
   setBiometricImportBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
   try{
    const out=await api.attendanceWrite({action:'import_device_biometrics',device_id:d.id});
