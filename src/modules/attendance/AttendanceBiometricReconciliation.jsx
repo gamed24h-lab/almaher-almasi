@@ -18,7 +18,7 @@ const typeLabel=t=>({
 }[t]||t);
 
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
- const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState('');
+ const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState(''),[autoBusy,setAutoBusy]=useState(false),[lastAuto,setLastAuto]=useState(null);
  const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active');
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
@@ -106,6 +106,20 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    await onChanged?.();
   }catch(e){onError?.(e.message)}finally{setBusy('')}
  }
+ async function autoReconcile(){
+  const scope=filters.device?'الجهاز المحدد':filters.branch?'الفرع المحدد':'كل الأجهزة المتاحة لك';
+  if(!window.confirm('سيتم تشغيل Safe Auto-Reconcile على '+scope+'.\n\nالعملية ستعيد قراءة البصمات فقط، ولن تربط PIN تلقائيًا، ولن تغيّر صاحب أي بصمة، ولن تحذف أي قالب. الحالات المتعارضة ستظل للمراجعة البشرية.\n\nمتابعة؟'))return;
+  setAutoBusy(true);onError?.('');
+  try{
+   const payload={action:'auto_reconcile_biometrics',max_actions:120};
+   if(filters.device)payload.device_id=filters.device;
+   else if(filters.branch)payload.branch_id=filters.branch;
+   const out=await api.attendanceWrite(payload);
+   setLastAuto(out||null);
+   onNotice?.(out?.message||'تم تشغيل المطابقة الآمنة.');
+   await onChanged?.();
+  }catch(e){onError?.(e.message)}finally{setAutoBusy(false)}
+ }
 
  const issueCols=[
   {key:'severity',label:'الأولوية',render:r=><Badge tone={severityTone(r.severity)}>{severityLabel(r.severity)}</Badge>},
@@ -125,6 +139,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
  ];
 
  const critical=issues.filter(x=>x.severity==='critical').length,warnings=issues.filter(x=>x.severity==='warning').length,missing=issues.filter(x=>x.type==='missing_employee_biometric').length,unlinked=issues.filter(x=>x.type==='unlinked_device_user'||x.type==='duplicate_pin'||x.type==='link_mismatch').length;
+ const safeIssues=issues.filter(x=>x.action==='device_scan'||x.action==='employee_scan').length,manualIssues=issues.filter(x=>x.action==='links').length;
  return <div style={{display:'grid',gap:14}}>
   <div className="stats-grid">
    <Card><div className="stat-card"><div><span>حالات حرجة</span><strong>{critical}</strong></div></div></Card>
@@ -132,6 +147,21 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    <Card><div className="stat-card"><div><span>موظفون بدون بصمة مكتشفة</span><strong>{missing}</strong></div></div></Card>
    <Card><div className="stat-card"><div><span>مشاكل ربط / PIN</span><strong>{unlinked}</strong></div></div></Card>
   </div>
+
+  <Card>
+   <div className="card-title"><div><h3><ShieldCheck size={19}/> Safe Auto-Reconcile</h3><small>يعيد قراءة الحالات الآمنة فقط. لا يربط PIN، لا ينقل بصمة بين موظفين، ولا يحذف أو يستبدل أي قالب تلقائيًا.</small></div><div className="finance-actions"><Badge tone={safeIssues?'blue':'green'}>{safeIssues} قابلة للفحص الآمن</Badge>{manualIssues>0&&<Badge tone="orange">{manualIssues} تحتاج مراجعة بشرية</Badge>}</div></div>
+   <div className="finance-actions">
+    <Button variant="primary" onClick={autoReconcile} disabled={autoBusy||!safeIssues}><ShieldCheck size={15}/>{autoBusy?' جاري تشغيل المطابقة الآمنة...':' إصلاح آمن تلقائي'}</Button>
+    {manualIssues>0&&<Button onClick={()=>onOpenLinks?.()}><Link2 size={14}/> مراجعة تعارضات الربط</Button>}
+   </div>
+   <div className="success-note"><ShieldCheck size={16}/> مسموح تلقائيًا: إعادة فحص جهاز به فرق عددي، أو إعادة فحص موظف مربوط لم تظهر بصمته. ممنوع تلقائيًا: PIN غير مربوط، PIN مكرر، أو اختلاف صاحب البصمة.</div>
+   {lastAuto&&<div className="stats-grid" style={{marginTop:10}}>
+    <Card><div className="stat-card"><div><span>أجهزة تمت مراجعتها</span><strong>{lastAuto.devices_reviewed??0}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>فحوص جهاز بدأت</span><strong>{lastAuto.device_scans??0}</strong><small>{lastAuto.employee_scans??0} فحص موظف</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>أوامر تم إرسالها</span><strong>{lastAuto.queued_commands??0}</strong><small>{lastAuto.already_pending??0} كانت شغالة بالفعل</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>مراجعة بشرية</span><strong>{lastAuto.unsafe_requires_review??0}</strong><small>{lastAuto.truncated?'تم بلوغ حد التشغيل الآمن':'لم يتم تعديلها تلقائيًا'}</small></div></div></Card>
+   </div>}
+  </Card>
 
   <Card>
    <div className="card-title"><div><h3><Fingerprint size={19}/> Biometric Reconciliation Center</h3><small>مطابقة ما يعلنه كل جهاز مع الموظفين والـPIN وحالة كل بصمة على كل جهاز، بدون تخزين القالب البيومتري الخام.</small></div><Badge tone={critical?'red':warnings?'orange':'green'}>{issues.length?issues.length+' حالة':'متطابق'}</Badge></div>
