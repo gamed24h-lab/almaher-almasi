@@ -453,6 +453,73 @@ async function saveAttendanceIncidentSlaPolicy(env,me,body){
  return {ok:true,policy:after};
 }
 
+function maintenanceNumber(v){const n=Number(v);return Number.isFinite(n)?Math.max(0,n):0}
+function maintenanceCategory(v){const allowed=new Set(['power','network','device_hardware','device_software','configuration','data_sync','user_mapping','external','unknown','other']);return allowed.has(txt(v))?txt(v):'unknown'}
+function maintenanceType(v){const allowed=new Set(['remote','onsite','replacement','network','power','configuration','software','other']);return allowed.has(txt(v))?txt(v):'other'}
+function maintenanceRisk(v){return ['low','medium','high'].includes(txt(v))?txt(v):'medium'}
+async function scopedIncident(env,me,id){
+ const rows=await rest(env,'attendance_incidents?id=eq.'+enc(id)+'&select=*&limit=1'),incident=rows?.[0]||null;if(!incident)return null;
+ if(!elevated(me)&&txt(incident.branch_id)!==actorBranch(me))return null;return incident;
+}
+async function recalcIncidentMaintenanceCosts(env,maintenance){
+ if(!maintenance?.id)return maintenance;
+ const actions=await rest(env,'attendance_incident_maintenance_actions?maintenance_id=eq.'+enc(maintenance.id)+'&select=quantity,unit_cost,labor_cost,other_cost').catch(()=>[]);
+ let parts=0,labor=0,other=0;for(const a of actions||[]){parts+=maintenanceNumber(a.quantity)*maintenanceNumber(a.unit_cost);labor+=maintenanceNumber(a.labor_cost);other+=maintenanceNumber(a.other_cost)}
+ const patch={parts_cost:Number(parts.toFixed(2)),labor_cost:Number(labor.toFixed(2)),other_cost:Number(other.toFixed(2)),total_cost:Number((parts+labor+other).toFixed(2)),updated_at:new Date().toISOString()};
+ return (await rest(env,'attendance_incident_maintenance?id=eq.'+enc(maintenance.id),{method:'PATCH',body:patch,prefer:'return=representation'}).catch(()=>[]))?.[0]||{...maintenance,...patch};
+}
+async function saveAttendanceIncidentMaintenance(env,me,body){
+ if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة صيانة الحوادث.'),{status:403});
+ const incidentId=txt(body.incident_id),incident=await scopedIncident(env,me,incidentId);if(!incident)throw Object.assign(new Error('الحادثة غير موجودة أو خارج نطاق الفرع.'),{status:404});
+ const existing=(await rest(env,'attendance_incident_maintenance?incident_id=eq.'+enc(incidentId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ let technician=null;const technicianId=txt(body.technician_staff_id);
+ if(technicianId){technician=(await rest(env,'staff_users?id=eq.'+enc(technicianId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!technician||technician.status==='موقوف')throw Object.assign(new Error('الفني المحدد غير متاح.'),{status:400});if(!elevated(me)&&txt(technician.branch_id)&&txt(technician.branch_id)!==txt(incident.branch_id))throw Object.assign(new Error('الفني خارج نطاق الفرع.'),{status:403})}
+ const now=new Date().toISOString(),payload={incident_id:incidentId,root_cause_category:maintenanceCategory(body.root_cause_category),root_cause_text:txt(body.root_cause_text)||null,maintenance_type:maintenanceType(body.maintenance_type),action_taken:txt(body.action_taken)||null,preventive_action:txt(body.preventive_action)||null,recurrence_risk:maintenanceRisk(body.recurrence_risk),recurrence_prevented:body.recurrence_prevented===true,technician_staff_id:technician?.id||null,technician_name:technician?.name||txt(body.technician_name)||null,vendor_name:txt(body.vendor_name)||null,maintenance_started_at:body.maintenance_started_at||existing?.maintenance_started_at||now,maintenance_completed_at:body.maintenance_completed_at||null,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
+ let after;
+ if(existing)after=(await rest(env,'attendance_incident_maintenance?id=eq.'+enc(existing.id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ else after=(await rest(env,'attendance_incident_maintenance',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null,created_at:now},prefer:'return=representation'}))?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ تحليل السبب والصيانة.'),{status:500});
+ await addIncidentEvent(env,incident,existing?'maintenance_updated':'maintenance_started',actorId(me),actorName(me),txt(body.note)||'تحديث بيانات السبب الجذري والصيانة.',{maintenance_id:after.id,root_cause_category:after.root_cause_category,maintenance_type:after.maintenance_type});
+ await audit(env,me,existing?'attendance_incident_maintenance_update':'attendance_incident_maintenance_create','attendance_incident_maintenance',after.id,incident.branch_id,existing,after,txt(body.note)||'إدارة صيانة حادثة حضور');
+ return {ok:true,maintenance:after};
+}
+async function addAttendanceIncidentMaintenanceAction(env,me,body){
+ if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإضافة إجراء صيانة.'),{status:403});
+ const incidentId=txt(body.incident_id),incident=await scopedIncident(env,me,incidentId);if(!incident)throw Object.assign(new Error('الحادثة غير موجودة أو خارج نطاق الفرع.'),{status:404});
+ let maintenance=(await rest(env,'attendance_incident_maintenance?incident_id=eq.'+enc(incidentId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!maintenance){const now=new Date().toISOString();maintenance=(await rest(env,'attendance_incident_maintenance',{method:'POST',body:{incident_id:incidentId,root_cause_category:'unknown',maintenance_type:'other',recurrence_risk:'medium',maintenance_started_at:now,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now},prefer:'return=representation'}))?.[0]||null}
+ if(!maintenance)throw Object.assign(new Error('تعذر إنشاء سجل الصيانة.'),{status:500});
+ const description=txt(body.description);if(!description)throw Object.assign(new Error('اكتب وصف إجراء الصيانة.'),{status:400});
+ const allowedTypes=new Set(['inspection','repair','configuration','replacement','network','power','software','test','work']),actionType=allowedTypes.has(txt(body.action_type))?txt(body.action_type):'work',now=new Date().toISOString();
+ const payload={incident_id:incidentId,maintenance_id:maintenance.id,action_type:actionType,description,part_name:txt(body.part_name)||null,quantity:body.quantity===''||body.quantity==null?null:maintenanceNumber(body.quantity),unit_cost:body.unit_cost===''||body.unit_cost==null?null:maintenanceNumber(body.unit_cost),labor_cost:maintenanceNumber(body.labor_cost),other_cost:maintenanceNumber(body.other_cost),performed_by:txt(body.performed_by)||actorName(me)||null,performed_at:body.performed_at||now,outcome:txt(body.outcome)||null,created_by:actorId(me)||actorName(me)||null,created_at:now};
+ const action=(await rest(env,'attendance_incident_maintenance_actions',{method:'POST',body:payload,prefer:'return=representation'}))?.[0]||null;if(!action)throw Object.assign(new Error('تعذر إضافة إجراء الصيانة.'),{status:500});
+ maintenance=await recalcIncidentMaintenanceCosts(env,maintenance);
+ await addIncidentEvent(env,incident,'maintenance_action',actorId(me),actorName(me),description,{maintenance_action_id:action.id,action_type:action.action_type,part_name:action.part_name,total_cost:maintenance.total_cost});
+ await audit(env,me,'attendance_incident_maintenance_action_create','attendance_incident_maintenance_action',action.id,incident.branch_id,null,action,'إضافة إجراء صيانة للحادثة');
+ return {ok:true,action,maintenance};
+}
+async function deleteAttendanceIncidentMaintenanceAction(env,me,body){
+ if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لحذف إجراء الصيانة.'),{status:403});
+ const id=txt(body.id),action=(await rest(env,'attendance_incident_maintenance_actions?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!action)throw Object.assign(new Error('إجراء الصيانة غير موجود.'),{status:404});
+ const incident=await scopedIncident(env,me,action.incident_id);if(!incident)throw Object.assign(new Error('الحادثة خارج نطاق الفرع.'),{status:403});
+ const maintenance=(await rest(env,'attendance_incident_maintenance?id=eq.'+enc(action.maintenance_id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ await rest(env,'attendance_incident_maintenance_actions?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});const after=maintenance?await recalcIncidentMaintenanceCosts(env,maintenance):null;
+ await addIncidentEvent(env,incident,'maintenance_action_deleted',actorId(me),actorName(me),txt(body.reason)||action.description,{maintenance_action_id:id,total_cost:after?.total_cost??null});
+ await audit(env,me,'attendance_incident_maintenance_action_delete','attendance_incident_maintenance_action',id,incident.branch_id,action,null,txt(body.reason)||'حذف إجراء صيانة');
+ return {ok:true,maintenance:after};
+}
+async function verifyAttendanceIncidentMaintenance(env,me,body){
+ if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لاعتماد الصيانة.'),{status:403});
+ const incidentId=txt(body.incident_id),incident=await scopedIncident(env,me,incidentId);if(!incident)throw Object.assign(new Error('الحادثة غير موجودة أو خارج نطاق الفرع.'),{status:404});
+ const before=(await rest(env,'attendance_incident_maintenance?incident_id=eq.'+enc(incidentId)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('سجل الصيانة غير موجود.'),{status:404});
+ if(!txt(before.root_cause_text)||!txt(before.action_taken))throw Object.assign(new Error('أكمل السبب الجذري والإجراء المتخذ قبل الاعتماد.'),{status:409});
+ const now=new Date().toISOString(),patch={verified_at:now,verified_by:actorId(me)||actorName(me)||null,verification_note:txt(body.verification_note)||'تمت مراجعة الصيانة والإجراء الوقائي.',recurrence_prevented:body.recurrence_prevented===true,maintenance_completed_at:before.maintenance_completed_at||now,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
+ const after=(await rest(env,'attendance_incident_maintenance?id=eq.'+enc(before.id),{method:'PATCH',body:patch,prefer:'return=representation'}))?.[0]||null;
+ await addIncidentEvent(env,incident,'maintenance_verified',actorId(me),actorName(me),patch.verification_note,{maintenance_id:before.id,recurrence_prevented:patch.recurrence_prevented,total_cost:before.total_cost});
+ await audit(env,me,'attendance_incident_maintenance_verify','attendance_incident_maintenance',before.id,incident.branch_id,before,after,patch.verification_note);
+ return {ok:true,maintenance:after};
+}
+
 async function saveAttendanceEscalationRule(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قواعد تصعيد التنبيهات.'),{status:403});
  const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
@@ -1290,11 +1357,15 @@ async function attendanceState(env,me,url){
   if(new Date(x.started_at).getTime()>=monthCutoff){if(x.device_id)deviceIncidentMap.set(String(x.device_id),(deviceIncidentMap.get(String(x.device_id))||0)+1);if(x.branch_id)branchIncidentMap.set(String(x.branch_id),(branchIncidentMap.get(String(x.branch_id))||0)+1)}
  }
  const incidentAnalytics={avg_response_seconds:responseN?Math.round(responseSum/responseN):null,avg_resolution_seconds:resolutionN?Math.round(resolutionSum/resolutionN):null,top_devices:[...deviceIncidentMap.entries()].map(([device_id,count])=>({device_id,count})).sort((a,b)=>b.count-a.count).slice(0,5),top_branches:[...branchIncidentMap.entries()].map(([branch_id,count])=>({branch_id,count})).sort((a,b)=>b.count-a.count).slice(0,5)};
+ const incidentMaintenance=incidentIds.length?await rest(env,'attendance_incident_maintenance?incident_id=in.('+incidentIds.map(enc).join(',')+')&select=*&order=updated_at.desc&limit=1000').catch(()=>[]):[],maintenanceIds=incidentMaintenance.map(x=>x.id).filter(Boolean),maintenanceActions=maintenanceIds.length?await rest(env,'attendance_incident_maintenance_actions?maintenance_id=in.('+maintenanceIds.map(enc).join(',')+')&select=*&order=performed_at.desc&limit=2000').catch(()=>[]):[];
+ const causeMap=new Map(),maintenanceDeviceCost=new Map();let maintenanceCost30d=0,maintenanceCount30d=0,maintenanceVerified=0,preventionCount=0;
+ for(const m of incidentMaintenance||[]){const incident=incidents.find(x=>String(x.id)===String(m.incident_id)),updatedMs=new Date(m.updated_at||m.created_at||0).getTime(),cost=maintenanceNumber(m.total_cost);if(m.verified_at)maintenanceVerified+=1;if(m.recurrence_prevented)preventionCount+=1;if(updatedMs>=monthCutoff){maintenanceCost30d+=cost;maintenanceCount30d+=1;const key=txt(m.root_cause_category)||'unknown';causeMap.set(key,(causeMap.get(key)||0)+1);if(incident?.device_id)maintenanceDeviceCost.set(String(incident.device_id),(maintenanceDeviceCost.get(String(incident.device_id))||0)+cost)}}
+ const maintenanceAnalytics={total_cost_30d:Number(maintenanceCost30d.toFixed(2)),maintenance_count_30d:maintenanceCount30d,verified_count:maintenanceVerified,prevention_count:preventionCount,top_causes:[...causeMap.entries()].map(([root_cause_category,count])=>({root_cause_category,count})).sort((a,b)=>b.count-a.count).slice(0,5),top_cost_devices:[...maintenanceDeviceCost.entries()].map(([device_id,total_cost])=>({device_id,total_cost:Number(total_cost.toFixed(2))})).sort((a,b)=>b.total_cost-a.total_cost).slice(0,5)};
  const watchdog=(await rest(env,'attendance_watchdog_runs?select=*&order=started_at.desc&limit=1').catch(()=>[]))?.[0]||null;
  const biometricScope=branchId?'&branch_id=eq.'+enc(branchId):'';
  const biometricProfiles=await rest(env,'attendance_biometric_profiles?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=2000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1489,6 +1560,10 @@ async function attendanceApi(request,env,ctx){
   if(action==='run_watchdog')return json(await runAttendanceWatchdogNow(env,me));
   if(action==='update_incident')return json(await updateAttendanceIncident(env,me,body));
   if(action==='save_incident_sla_policy')return json(await saveAttendanceIncidentSlaPolicy(env,me,body));
+  if(action==='save_incident_maintenance')return json(await saveAttendanceIncidentMaintenance(env,me,body));
+  if(action==='add_incident_maintenance_action')return json(await addAttendanceIncidentMaintenanceAction(env,me,body));
+  if(action==='delete_incident_maintenance_action')return json(await deleteAttendanceIncidentMaintenanceAction(env,me,body));
+  if(action==='verify_incident_maintenance')return json(await verifyAttendanceIncidentMaintenance(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
