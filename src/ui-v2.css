@@ -1,0 +1,75 @@
+/* ===== Al-Maher UI V2: grouped navigation + module workspaces ===== */
+.ui-v2 .grouped-nav{gap:5px}
+.ui-v2 .grouped-nav>button{margin-bottom:3px}
+.nav-group{display:grid;gap:3px}
+.nav-group-head{width:100%;font-weight:800;color:#cbd9e9!important;background:rgba(255,255,255,.035)!important}
+.nav-group-head span{flex:1;text-align:right}
+.nav-group-head svg:last-child{transition:transform .18s ease}
+.nav-group-head svg:last-child.rotated{transform:rotate(180deg)}
+.nav-group.active-group>.nav-group-head{color:#fff!important;background:rgba(198,161,74,.1)!important}
+.nav-group-items{display:grid;gap:2px;padding-inline-start:12px}
+.nav-group-items button{font-size:12px;padding-block:8px!important;background:rgba(0,0,0,.05)!important}
+.nav-group-items button.active{background:linear-gradient(90deg,rgba(198,161,74,.24),rgba(255,255,255,.07))!important}
+.collapsed .grouped-nav button{min-height:42px}
+
+.module-shell{margin-bottom:18px}
+.module-shell-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:12px}
+.module-title-wrap{min-width:0}
+.module-breadcrumbs{display:flex;align-items:center;gap:5px;color:#788596;font-size:11px;margin-bottom:7px}
+.module-title-line{display:flex;align-items:center;gap:11px}
+.module-title-icon{width:43px;height:43px;border-radius:13px;background:#eaf0f7;color:var(--navy2);display:grid;place-items:center;flex:0 0 auto}
+.module-title-line h1{margin:0;color:#14233a;font-size:27px}
+.module-title-line p{margin:5px 0 0;color:var(--muted);font-size:13px;max-width:820px}
+.module-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-start}
+.module-tabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:thin;padding:6px;background:#fff;border:1px solid #dfe6ee;border-radius:14px;box-shadow:0 5px 18px rgba(16,47,86,.05)}
+.module-tabs button{border:0;background:transparent;color:#536377;border-radius:10px;padding:9px 12px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-weight:800}
+.module-tabs button:hover{background:#f3f6f9;color:#173f76}
+.module-tabs button.active{background:#173f76;color:#fff;box-shadow:0 4px 12px rgba(23,63,118,.2)}
+.module-tabs button b{min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:rgba(23,63,118,.1);display:grid;place-items:center;font-size:10px}
+.module-tabs button.active b{background:rgba(255,255,255,.2);color:#fff}
+
+.mobile-bottom-nav,.mobile-menu-overlay{display:none}
+
+@media(max-width:1100px) and (min-width:761px){
+ .ui-v2.app-shell{grid-template-columns:84px 1fr}
+ .ui-v2 .desktop-sidebar .brand-copy,.ui-v2 .desktop-sidebar .nav-group-head span,.ui-v2 .desktop-sidebar .nav-group-head svg:last-child,.ui-v2 .desktop-sidebar .nav-group-items span,.ui-v2 .desktop-sidebar>nav>button span,.ui-v2 .desktop-sidebar .side-bottom span{display:none}
+ .ui-v2 .desktop-sidebar .brand,.ui-v2 .desktop-sidebar .nav-group-head,.ui-v2 .desktop-sidebar .nav-group-items button,.ui-v2 .desktop-sidebar>nav>button,.ui-v2 .desktop-sidebar .side-bottom button{justify-content:center}
+ .ui-v2 .desktop-sidebar .nav-group-items{padding:0}
+ .ui-v2 .desktop-sidebar .nav-group{gap:1px}
+}
+
+@media(max-width:760px){
+ .ui-v2.app-shell,.ui-v2.collapsed.app-shell{display:block}
+ .ui-v2 .desktop-sidebar{display:none!important}
+ .ui-v2 .content-shell{padding-bottom:82px}
+ .module-shell-head{align-items:stretch;flex-direction:column;gap:10px}
+ .module-title-line h1{font-size:22px}
+ .module-title-line p{font-size:12px}
+ .module-actions{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
+ .module-actions .btn{white-space:nowrap}
+ .module-tabs{border-radius:12px;margin-inline:-2px}
+ .module-tabs button{padding:9px 10px}
+ .mobile-bottom-nav{position:fixed;z-index:65;bottom:0;left:0;right:0;display:grid;grid-template-columns:repeat(5,1fr);background:#0f2f56;border-top:1px solid rgba(255,255,255,.1);padding:5px 5px calc(5px + env(safe-area-inset-bottom));box-shadow:0 -8px 26px rgba(10,27,49,.18)}
+ .mobile-bottom-nav button{border:0;background:transparent;color:#dce7f3;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 2px;border-radius:9px;font-size:9px;font-weight:700}
+ .mobile-bottom-nav button.active{background:rgba(198,161,74,.18);color:#fff}
+ .mobile-bottom-nav button span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .mobile-menu-overlay{display:flex;position:fixed;z-index:1000;inset:0;background:rgba(9,22,38,.56);align-items:flex-end}
+ .mobile-menu-drawer{width:100%;max-height:86vh;background:#f6f8fb;border-radius:22px 22px 0 0;display:flex;flex-direction:column;box-shadow:0 -20px 60px rgba(0,0,0,.28);padding-bottom:env(safe-area-inset-bottom)}
+ .mobile-menu-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #dde5ee;background:#fff;border-radius:22px 22px 0 0}
+ .mobile-menu-head>div{display:flex;flex-direction:column;gap:3px}
+ .mobile-menu-head span{font-size:11px;color:var(--muted)}
+ .mobile-menu-head button{border:0;background:#edf2f7;width:36px;height:36px;border-radius:10px;display:grid;place-items:center}
+ .mobile-menu-scroll{overflow:auto;padding:12px;display:grid;gap:10px}
+ .mobile-menu-scroll>button,.mobile-menu-scroll section>div button{width:100%;border:1px solid #e1e7ee;background:#fff;color:#28415f;border-radius:11px;padding:10px 11px;display:flex;align-items:center;gap:9px;text-align:right}
+ .mobile-menu-scroll button.active{border-color:#c6a14a;background:#fffaf0;color:#153b6d}
+ .mobile-menu-scroll section{background:#fff;border:1px solid #e1e7ee;border-radius:14px;padding:10px}
+ .mobile-menu-scroll section h4{margin:0 0 7px;color:#173f76;font-size:12px}
+ .mobile-menu-scroll section>div{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+ .mobile-menu-scroll section>div button{font-size:12px}
+ .mobile-signout{margin:0 12px 12px;border:1px solid #f0c8c4;background:#fff0ef;color:#a82b21;border-radius:11px;padding:10px 12px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:800}
+}
+
+@media(max-width:460px){
+ .mobile-menu-scroll section>div{grid-template-columns:1fr}
+ .module-title-icon{width:38px;height:38px}
+}
