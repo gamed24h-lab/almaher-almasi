@@ -91,7 +91,7 @@ async function recordDeviceHealthEvent(env,event){
  await rest(env,'attendance_device_health_events?on_conflict=event_key',{method:'POST',body:{event_key:event.event_key,device_id:event.device_id,branch_id:event.branch_id||null,event_type:event.event_type||'event',severity:event.severity||'warning',status:event.status||'closed',started_at:event.started_at||new Date().toISOString(),ended_at:event.ended_at||null,duration_seconds:event.duration_seconds??null,command_id:event.command_id||null,result_code:event.result_code??null,summary:txt(event.summary)||null,metadata:event.metadata&&typeof event.metadata==='object'?event.metadata:{}},prefer:'resolution=ignore-duplicates,return=minimal'}).catch(()=>{});
  return true;
 }
-async function reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts){
+async function reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts,maintenanceAlerts=[]){
  const rows=Array.isArray(devices)?devices:[],ids=rows.map(x=>x.id).filter(Boolean);
  if(!ids.length)return [];
  const now=new Date().toISOString(),deviceMap=new Map(rows.map(x=>[String(x.id),x])),desired=[];
@@ -106,6 +106,7 @@ async function reconcileAttendanceNotifications(env,devices,deviceHealth,deviceP
   const d=deviceMap.get(String(p.device_id));if(!d)continue;
   add({notification_key:'predictive:'+d.id+':'+txt(p.primary_type||'watch'),device_id:d.id,branch_id:d.branch_id||null,category:'predictive',severity:p.level==='high'?'critical':p.level==='medium'?'warning':'info',title:'تنبيه استباقي — '+d.name,message:(p.signals||[]).slice(0,3).join(' '),metadata:{type:p.primary_type||'watch',risk_score:p.risk_score,level:p.level,confidence:p.confidence,signals:p.signals||[],recommended_action:p.recommended_action||null,recommended_label:p.recommended_label||null,metrics:p.metrics||{}}});
  }
+ for(const m of maintenanceAlerts||[])add(m);
  const filter='&device_id=in.('+ids.map(enc).join(',')+')',existing=await rest(env,'attendance_notifications?select=*'+filter+'&order=last_seen_at.desc&limit=1000').catch(()=>[]);
  const existingMap=new Map((existing||[]).map(x=>[txt(x.notification_key),x])),desiredKeys=new Set(desired.map(x=>x.notification_key));
  for(const item of desired){
@@ -436,7 +437,7 @@ async function updateAttendanceIncident(env,me,body){
 }
 async function saveAttendanceIncidentSlaPolicy(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات SLA.'),{status:403});
- const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*',branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
+ const id=txt(body.id),category=['*','device_health','predictive','linking','maintenance'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*',branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
  const clamp=v=>Math.max(1,Math.min(10080,Math.round(Number(v)||1))),responseMinutes=clamp(body.response_minutes),resolutionMinutes=clamp(body.resolution_minutes);
  if(resolutionMinutes<responseMinutes)throw Object.assign(new Error('مدة الحل يجب أن تكون مساوية أو أكبر من مدة الاستجابة.'),{status:400});
  const payload={branch_id:branchId,category,severity,active:body.active!==false,response_minutes:responseMinutes,resolution_minutes:resolutionMinutes,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
@@ -518,6 +519,82 @@ async function verifyAttendanceIncidentMaintenance(env,me,body){
  await addIncidentEvent(env,incident,'maintenance_verified',actorId(me),actorName(me),patch.verification_note,{maintenance_id:before.id,recurrence_prevented:patch.recurrence_prevented,total_cost:before.total_cost});
  await audit(env,me,'attendance_incident_maintenance_verify','attendance_incident_maintenance',before.id,incident.branch_id,before,after,patch.verification_note);
  return {ok:true,maintenance:after};
+}
+
+function preventiveChecklist(value){
+ const arr=Array.isArray(value)?value:String(value||'').split(/\r?\n/);
+ return [...new Set(arr.map(x=>txt(x)).filter(Boolean))].slice(0,30).map(x=>x.slice(0,200));
+}
+function preventiveDueIso(value,fallbackDays=30){
+ if(!value)return new Date(Date.now()+Math.max(1,Number(fallbackDays)||30)*86400000).toISOString();
+ const s=txt(value),d=/^\d{4}-\d{2}-\d{2}$/.test(s)?new Date(s+'T09:00:00+03:00'):new Date(s);
+ if(!Number.isFinite(d.getTime()))throw Object.assign(new Error('موعد الصيانة القادمة غير صحيح.'),{status:400});
+ return d.toISOString();
+}
+function buildPreventiveMaintenanceAlerts(plans,devices,recentMaintenance,recentIncidentRows){
+ const nowMs=Date.now(),deviceMap=new Map((devices||[]).map(x=>[String(x.id),x])),alerts=[];
+ for(const p of plans||[]){
+  if(p.active===false)continue;
+  const dueMs=new Date(p.next_due_at).getTime();if(!Number.isFinite(dueMs))continue;
+  const lead=Math.max(0,Number(p.lead_days)||0),days=(dueMs-nowMs)/86400000;if(days>lead)continue;
+  const d=deviceMap.get(String(p.device_id));if(!d)continue;
+  const overdueDays=Math.max(0,Math.ceil((nowMs-dueMs)/86400000)),dueDays=Math.max(0,Math.ceil((dueMs-nowMs)/86400000));
+  const severity=days<-7?'critical':days<0?'warning':'info',message=days<0?'الصيانة الوقائية متأخرة '+overdueDays+' يوم.':'موعد الصيانة الوقائية خلال '+dueDays+' يوم.';
+  alerts.push({notification_key:'preventive_due:'+p.id,device_id:p.device_id,branch_id:p.branch_id||d.branch_id||null,category:'maintenance',severity,title:'صيانة وقائية — '+(p.title||d.name),message,metadata:{type:'preventive_due',plan_id:p.id,next_due_at:p.next_due_at,days_to_due:Math.round(days),frequency_days:p.frequency_days}});
+ }
+ const incidentMap=new Map((recentIncidentRows||[]).map(x=>[String(x.id),x])),groups=new Map();
+ for(const m of recentMaintenance||[]){
+  const incident=incidentMap.get(String(m.incident_id)),cause=txt(m.root_cause_category);if(!incident?.device_id||!cause||cause==='unknown')continue;
+  const key=String(incident.device_id)+'|'+cause,g=groups.get(key)||{device_id:incident.device_id,branch_id:incident.branch_id||null,cause,count:0,prevention:false,last_at:null};
+  g.count+=1;g.prevention=g.prevention||m.recurrence_prevented===true;if(!g.last_at||new Date(m.updated_at)>new Date(g.last_at))g.last_at=m.updated_at;groups.set(key,g);
+ }
+ for(const g of groups.values()){
+  const plan=(plans||[]).find(p=>String(p.device_id)===String(g.device_id)&&p.active!==false),threshold=Math.max(2,Number(plan?.recurrence_threshold)||3);
+  if(g.count<threshold||!g.prevention)continue;
+  const d=deviceMap.get(String(g.device_id));if(!d)continue;
+  alerts.push({notification_key:'maintenance_recurrence:'+g.device_id+':'+g.cause,device_id:g.device_id,branch_id:g.branch_id||d.branch_id||null,category:'maintenance',severity:g.count>=threshold+1?'critical':'warning',title:'تكرار سبب عطل — '+d.name,message:'تكرر نفس السبب الجذري '+g.count+' مرات رغم تسجيل إجراء لمنع التكرار.',metadata:{type:'root_cause_recurrence',root_cause_category:g.cause,count:g.count,threshold,last_at:g.last_at,plan_id:plan?.id||null}});
+ }
+ return alerts;
+}
+async function savePreventiveMaintenancePlan(env,me,body){
+ if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة خطط الصيانة الوقائية.'),{status:403});
+ const id=txt(body.id),deviceId=txt(body.device_id);if(!deviceId)throw Object.assign(new Error('حدد جهاز البصمة.'),{status:400});
+ const device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});
+ if(!elevated(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
+ const frequency=Math.max(1,Math.min(365,Math.round(Number(body.frequency_days)||30))),lead=Math.max(0,Math.min(90,Math.round(Number(body.lead_days)||7))),threshold=Math.max(2,Math.min(10,Math.round(Number(body.recurrence_threshold)||3))),windowDays=Math.max(30,Math.min(365,Math.round(Number(body.recurrence_window_days)||90))),checklist=preventiveChecklist(body.checklist);
+ const title=txt(body.title)||('صيانة دورية — '+(device.name||device.serial_number)),nextDue=preventiveDueIso(body.next_due_at,frequency),staffId=txt(body.assigned_staff_id);let staff=null;
+ if(staffId){staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!staff||staff.status==='موقوف')throw Object.assign(new Error('الموظف المسؤول غير متاح.'),{status:400});if(!elevated(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(device.branch_id))throw Object.assign(new Error('الموظف المسؤول خارج نطاق الفرع.'),{status:403})}
+ const now=new Date().toISOString(),payload={branch_id:device.branch_id||null,device_id:device.id,title,active:body.active!==false,frequency_days:frequency,lead_days:lead,checklist,assigned_staff_id:staff?.id||null,assigned_staff_name:staff?.name||null,vendor_name:txt(body.vendor_name)||null,next_due_at:nextDue,recurrence_window_days:windowDays,recurrence_threshold:threshold,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
+ let before=null,after=null;
+ if(id){
+  before=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('خطة الصيانة خارج نطاق الفرع.'),{status:403});
+  after=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ }else{
+  after=(await rest(env,'attendance_preventive_maintenance_plans',{method:'POST',body:{...payload,plan_key:'pm-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),created_by:actorId(me)||actorName(me)||null,created_at:now},prefer:'return=representation'}))?.[0]||null;
+ }
+ if(!after)throw Object.assign(new Error('تعذر حفظ خطة الصيانة الوقائية.'),{status:500});
+ await audit(env,me,before?'attendance_preventive_plan_update':'attendance_preventive_plan_create','attendance_preventive_maintenance_plan',after.id,device.branch_id,before,after,txt(body.reason)||'إدارة خطة صيانة وقائية');
+ return {ok:true,plan:after};
+}
+async function completePreventiveMaintenance(env,me,body){
+ if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لتنفيذ الصيانة الوقائية.'),{status:403});
+ const id=txt(body.plan_id),plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
+ const checklist=preventiveChecklist(plan.checklist),results=body.checklist_results&&typeof body.checklist_results==='object'&&!Array.isArray(body.checklist_results)?body.checklist_results:{};const missing=checklist.filter(x=>results[x]!==true);
+ if(missing.length)throw Object.assign(new Error('أكمل جميع بنود قائمة الفحص قبل اعتماد الصيانة.'),{status:409});
+ const now=new Date(),nowIso=now.toISOString(),staffId=txt(body.performed_by_staff_id)||txt(plan.assigned_staff_id);let staff=null;if(staffId)staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;
+ const run=(await rest(env,'attendance_preventive_maintenance_runs',{method:'POST',body:{plan_id:plan.id,device_id:plan.device_id,branch_id:plan.branch_id||null,due_at:plan.next_due_at,status:'completed',started_at:body.started_at||nowIso,completed_at:nowIso,performed_by_staff_id:staff?.id||null,performed_by_name:staff?.name||actorName(me)||null,checklist_results:results,findings:txt(body.findings)||null,action_taken:txt(body.action_taken)||null,total_cost:maintenanceNumber(body.total_cost),linked_incident_id:txt(body.linked_incident_id)||null,created_by:actorId(me)||actorName(me)||null,created_at:nowIso,updated_at:nowIso},prefer:'return=representation'}))?.[0]||null;if(!run)throw Object.assign(new Error('تعذر تسجيل تنفيذ الصيانة.'),{status:500});
+ const nextDue=new Date(now.getTime()+Math.max(1,Number(plan.frequency_days)||30)*86400000).toISOString(),after=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(plan.id),{method:'PATCH',body:{last_completed_at:nowIso,next_due_at:nextDue,updated_by:actorId(me)||actorName(me)||null,updated_at:nowIso},prefer:'return=representation'}))?.[0]||plan;
+ await audit(env,me,'attendance_preventive_maintenance_completed','attendance_preventive_maintenance_run',run.id,plan.branch_id,null,run,'تنفيذ الصيانة الوقائية');
+ return {ok:true,run,plan:after};
+}
+async function skipPreventiveMaintenance(env,me,body){
+ if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لتخطي دورة الصيانة.'),{status:403});
+ const id=txt(body.plan_id),reason=txt(body.reason);if(!reason)throw Object.assign(new Error('اكتب سبب تخطي دورة الصيانة.'),{status:400});
+ const plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
+ const now=new Date(),nowIso=now.toISOString(),run=(await rest(env,'attendance_preventive_maintenance_runs',{method:'POST',body:{plan_id:plan.id,device_id:plan.device_id,branch_id:plan.branch_id||null,due_at:plan.next_due_at,status:'skipped',skip_reason:reason,performed_by_name:actorName(me)||null,created_by:actorId(me)||actorName(me)||null,created_at:nowIso,updated_at:nowIso},prefer:'return=representation'}))?.[0]||null;
+ const nextDue=new Date(now.getTime()+Math.max(1,Number(plan.frequency_days)||30)*86400000).toISOString(),after=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(plan.id),{method:'PATCH',body:{next_due_at:nextDue,updated_by:actorId(me)||actorName(me)||null,updated_at:nowIso},prefer:'return=representation'}))?.[0]||plan;
+ await audit(env,me,'attendance_preventive_maintenance_skipped','attendance_preventive_maintenance_run',run?.id||plan.id,plan.branch_id,null,run||{reason},reason);
+ return {ok:true,run,plan:after};
 }
 
 async function saveAttendanceEscalationRule(env,me,body){
@@ -1364,7 +1441,14 @@ async function attendanceState(env,me,url){
   devicePredictiveAlerts.push({device_id:device.id,risk_score:risk,level,tone,label,confidence,primary_type:primary,signals,recommended_action:recommendedAction,recommended_label:recommendedLabel,metrics:{failures_24h:fail24,failures_7d:fail7,failures_previous_7d:failPrev7,outages_7d:outage7,outages_previous_7d:outagePrev7,downtime_7d_seconds:downtime7,availability_30d:hist.availability_pct??null,last_log_age_seconds:logAge},evaluated_at:new Date(nowMs).toISOString()});
  }
  devicePredictiveAlerts.sort((x,y)=>Number(y.risk_score)-Number(x.risk_score)||String(x.device_id).localeCompare(String(y.device_id)));
- const rawNotifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts);
+ const deviceIds=(devices||[]).map(x=>x.id).filter(Boolean),pmDeviceFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
+ const preventiveMaintenancePlans=deviceIds.length?await rest(env,'attendance_preventive_maintenance_plans?select=*'+pmDeviceFilter+'&order=next_due_at.asc&limit=1000').catch(()=>[]):[],pmPlanIds=preventiveMaintenancePlans.map(x=>x.id).filter(Boolean);
+ const preventiveMaintenanceRuns=pmPlanIds.length?await rest(env,'attendance_preventive_maintenance_runs?plan_id=in.('+pmPlanIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=2000').catch(()=>[]):[];
+ const recurrenceCutoff=new Date(Date.now()-365*86400000).toISOString(),recentMaintenanceForRecurrence=await rest(env,'attendance_incident_maintenance?select=id,incident_id,root_cause_category,recurrence_prevented,updated_at&updated_at=gte.'+enc(recurrenceCutoff)+'&order=updated_at.desc&limit=3000').catch(()=>[]),recurrenceIncidentIds=[...new Set((recentMaintenanceForRecurrence||[]).map(x=>x.incident_id).filter(Boolean))];
+ const recentIncidentRows=recurrenceIncidentIds.length?await rest(env,'attendance_incidents?id=in.('+recurrenceIncidentIds.map(enc).join(',')+')&select=id,device_id,branch_id,started_at&limit=3000').catch(()=>[]):[];
+ const scopedRecentIncidents=(recentIncidentRows||[]).filter(x=>!branchId||txt(x.branch_id)===txt(branchId)),scopedIncidentIds=new Set(scopedRecentIncidents.map(x=>String(x.id))),scopedRecentMaintenance=(recentMaintenanceForRecurrence||[]).filter(x=>scopedIncidentIds.has(String(x.incident_id)));
+ const preventiveMaintenanceAlerts=buildPreventiveMaintenanceAlerts(preventiveMaintenancePlans,devices,scopedRecentMaintenance,scopedRecentIncidents);
+ const rawNotifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts,preventiveMaintenanceAlerts);
  const allEscalationRules=await rest(env,'attendance_notification_escalation_rules?select=*&order=created_at.asc').catch(()=>[]);
  const escalationRules=(allEscalationRules||[]).filter(r=>!r.branch_id||!branchId||txt(r.branch_id)===txt(branchId));
  const notifications=await applyAttendanceEscalation(env,rawNotifications,escalationRules),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0,level1:0,level2:0,level3:0};
@@ -1388,11 +1472,15 @@ async function attendanceState(env,me,url){
  const causeMap=new Map(),maintenanceDeviceCost=new Map();let maintenanceCost30d=0,maintenanceCount30d=0,maintenanceVerified=0,preventionCount=0;
  for(const m of incidentMaintenance||[]){const incident=incidents.find(x=>String(x.id)===String(m.incident_id)),updatedMs=new Date(m.updated_at||m.created_at||0).getTime(),cost=maintenanceNumber(m.total_cost);if(m.verified_at)maintenanceVerified+=1;if(m.recurrence_prevented)preventionCount+=1;if(updatedMs>=monthCutoff){maintenanceCost30d+=cost;maintenanceCount30d+=1;const key=txt(m.root_cause_category)||'unknown';causeMap.set(key,(causeMap.get(key)||0)+1);if(incident?.device_id)maintenanceDeviceCost.set(String(incident.device_id),(maintenanceDeviceCost.get(String(incident.device_id))||0)+cost)}}
  const maintenanceAnalytics={total_cost_30d:Number(maintenanceCost30d.toFixed(2)),maintenance_count_30d:maintenanceCount30d,verified_count:maintenanceVerified,prevention_count:preventionCount,top_causes:[...causeMap.entries()].map(([root_cause_category,count])=>({root_cause_category,count})).sort((a,b)=>b.count-a.count).slice(0,5),top_cost_devices:[...maintenanceDeviceCost.entries()].map(([device_id,total_cost])=>({device_id,total_cost:Number(total_cost.toFixed(2))})).sort((a,b)=>b.total_cost-a.total_cost).slice(0,5)};
+ const pmNow=Date.now(),pmMonthCutoff=pmNow-30*86400000,preventiveMaintenanceAnalytics={active_plans:0,due_soon:0,overdue:0,completed_30d:0,skipped_30d:0,total_cost_30d:0,recurrence_alerts:preventiveMaintenanceAlerts.filter(x=>x.metadata?.type==='root_cause_recurrence').length};
+ for(const p of preventiveMaintenancePlans||[]){if(p.active===false)continue;preventiveMaintenanceAnalytics.active_plans+=1;const due=new Date(p.next_due_at).getTime();if(Number.isFinite(due)){if(due<pmNow)preventiveMaintenanceAnalytics.overdue+=1;else if(due<=pmNow+Math.max(0,Number(p.lead_days)||0)*86400000)preventiveMaintenanceAnalytics.due_soon+=1}}
+ for(const r of preventiveMaintenanceRuns||[]){const t=new Date(r.completed_at||r.created_at||0).getTime();if(t<pmMonthCutoff)continue;if(r.status==='completed'){preventiveMaintenanceAnalytics.completed_30d+=1;preventiveMaintenanceAnalytics.total_cost_30d+=maintenanceNumber(r.total_cost)}else if(r.status==='skipped')preventiveMaintenanceAnalytics.skipped_30d+=1}
+ preventiveMaintenanceAnalytics.total_cost_30d=Number(preventiveMaintenanceAnalytics.total_cost_30d.toFixed(2));
  const watchdog=(await rest(env,'attendance_watchdog_runs?select=*&order=started_at.desc&limit=1').catch(()=>[]))?.[0]||null;
  const biometricScope=branchId?'&branch_id=eq.'+enc(branchId):'';
  const biometricProfiles=await rest(env,'attendance_biometric_profiles?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=2000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1764,6 +1852,9 @@ async function attendanceApi(request,env,ctx){
   if(action==='add_incident_maintenance_action')return json(await addAttendanceIncidentMaintenanceAction(env,me,body));
   if(action==='delete_incident_maintenance_action')return json(await deleteAttendanceIncidentMaintenanceAction(env,me,body));
   if(action==='verify_incident_maintenance')return json(await verifyAttendanceIncidentMaintenance(env,me,body));
+  if(action==='save_preventive_maintenance_plan')return json(await savePreventiveMaintenancePlan(env,me,body));
+  if(action==='complete_preventive_maintenance')return json(await completePreventiveMaintenance(env,me,body));
+  if(action==='skip_preventive_maintenance')return json(await skipPreventiveMaintenance(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
