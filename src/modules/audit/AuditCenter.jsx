@@ -7,6 +7,7 @@ import {has} from '../../lib/permissions.js';
 import {auditActionLabel,auditEntityLabel,normalizeAuditChanges} from '../../lib/audit-format.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
+import AgentMergeModal from './AgentMergeModal.jsx';
 
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
@@ -84,6 +85,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
  const [registryGroups,setRegistryGroups]=useState([]),[registrySummary,setRegistrySummary]=useState({}),[registryBusy,setRegistryBusy]=useState(false);
  const [employeeMergeOpen,setEmployeeMergeOpen]=useState(false),[employeeGroup,setEmployeeGroup]=useState(null),[employeeCanonicalId,setEmployeeCanonicalId]=useState(''),[employeeDuplicateId,setEmployeeDuplicateId]=useState(''),[employeePreview,setEmployeePreview]=useState(null),[employeePreviewBusy,setEmployeePreviewBusy]=useState(false),[employeeMergeBusy,setEmployeeMergeBusy]=useState(false),[employeeReason,setEmployeeReason]=useState(''),[employeeConfirm,setEmployeeConfirm]=useState('');
+ const [agentMergeGroup,setAgentMergeGroup]=useState(null);
 
  const bookingMap=useMemo(()=>new Map((data.bookings||[]).map(b=>[String(b.id),b])),[data.bookings]);
  const tripMap=useMemo(()=>new Map((data.trips||[]).map(t=>[String(t.id),t])),[data.trips]);
@@ -227,9 +229,9 @@ export default function AuditCenter({go,initialTab=''}) {
   {key:'type',label:'النوع',render:r=><Badge>{r.label}</Badge>},
   {key:'match',label:'سبب الاشتباه',render:r=><Badge tone="orange">{r.match}</Badge>},
   {key:'records',label:'السجلات',render:r=><div><strong>{r.records.length}</strong><div className="muted-small">{r.records.map(x=>x.name||x.full_name||x.company_name||x.agent_code||x.username||x.id).join(' · ')}</div></div>},
-  {key:'mode',label:'سياسة الدمج',render:r=><Badge tone="red">مراجعة فقط</Badge>},
-  {key:'warning',label:'سبب الإيقاف',render:r=>r.warning||'—'},
-  {key:'action',label:'',render:r=>r.entity_type==='staff_users'?<Button onClick={()=>go?.('/staff')}>فتح الموظفين</Button>:r.entity_type==='agents'?<Button onClick={()=>go?.('/partners')}>فتح الوكلاء</Button>:r.entity_type==='customer_profiles'?<Button onClick={()=>go?.('/crm')}>فتح CRM</Button>:'—'}
+  {key:'mode',label:'سياسة الدمج',render:r=>r.entity_type==='agents'?<Badge tone="green">Preview + دمج آمن</Badge>:<Badge tone="red">مراجعة فقط</Badge>},
+  {key:'warning',label:'ضوابط الدمج',render:r=>r.warning||'—'},
+  {key:'action',label:'',render:r=>r.entity_type==='staff_users'?<Button onClick={()=>go?.('/staff')}>فتح الموظفين</Button>:r.entity_type==='agents'?<Button variant="primary" onClick={()=>setAgentMergeGroup(r)}><GitMerge size={14}/> معاينة الدمج</Button>:r.entity_type==='customer_profiles'?<Button onClick={()=>go?.('/crm')}>فتح CRM</Button>:'—'}
  ];
 
  const selectedChanges=selectedAudit?normalizeAuditChanges(selectedAudit.metadata?.changes||[],{tripMap,branchMap}):[];
@@ -257,12 +259,12 @@ export default function AuditCenter({go,initialTab=''}) {
    <div className="stats-grid">
     <Card><div className="stat-card"><GitMerge/><div><span>تكرارات المسافرين</span><strong>{canReviewDuplicates?duplicateGroups.length:'—'}</strong><small>داخل نفس الحجز فقط</small></div></div></Card>
     <Card><div className="stat-card"><UsersRound/><div><span>تكرارات موظفي الحضور</span><strong>{canReviewAttendance?employeeGroups.length:'—'}</strong><small>نفس الفرع والبيئة فقط</small></div></div></Card>
-    <Card><div className="stat-card"><ShieldCheck/><div><span>تكرارات حساسة</span><strong>{canReviewRegistry?registryGroups.length:'—'}</strong><small>موظفون / وكلاء / عملاء — مراجعة فقط</small></div></div></Card>
+    <Card><div className="stat-card"><ShieldCheck/><div><span>تكرارات حساسة</span><strong>{canReviewRegistry?registryGroups.length:'—'}</strong><small>الوكلاء: دمج آمن · الموظفون والعملاء: مراجعة فقط</small></div></div></Card>
     <Card><div className="stat-card"><ShieldCheck/><div><span>قاعدة الدمج</span><strong>Merge ≠ Delete</strong><small>لا تنفيذ تلقائي إذا كانت العلاقات أو المالية حساسة</small></div></div></Card>
    </div>
    {canReviewDuplicates&&<Card><div className="card-title"><div><h3>مسافرون مكررون داخل نفس الحجز</h3><small>المطابقة القوية: نفس الهوية، أو نفس الاسم والجوال. يتوقف الدمج عند تعارض مقعد أو تسكين.</small></div><Badge tone={duplicateGroups.length?'orange':'green'}>{duplicateGroups.length}</Badge></div>{duplicateGroups.length?<Table preferenceKey="passenger-duplicate-candidates" defaultPageSize={25} rows={duplicateGroups} columns={dupCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات مسافرين مكررة داخل نفس الحجز ضمن نطاقك.</div>}</Card>}
    {canReviewAttendance&&<Card><div className="card-title"><div><h3>موظفو حضور مشتبه بتكرارهم</h3><small>المطابقة: نفس حساب الموظف، أو نفس الهوية، أو نفس الاسم والجوال. قبل الدمج يتم فحص الدوام وقرارات المخالفات والروابط والحركات.</small></div><Badge tone={employeeGroups.length?'orange':'green'}>{employeeBusy?'…':employeeGroups.length}</Badge></div>{employeeBusy&&!employeeGroups.length?<Loading text="جاري فحص تكرارات الموظفين..."/>:employeeGroups.length?<Table preferenceKey="attendance-employee-duplicate-candidates" defaultPageSize={25} rows={employeeGroups} columns={employeeCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات موظفين مكررة ضمن نطاقك.</div>}</Card>}
-   {canReviewRegistry&&<Card><div className="card-title"><div><h3>تكرارات حساسة — مراجعة قبل الدمج</h3><small>يفحص حسابات الموظفين والوكلاء والعملاء. لا يسمح بالدمج التلقائي هنا لأن الحسابات والصلاحيات والأرصدة والهوية الخارجية تحتاج معاينة متخصصة أولًا.</small></div><div className="finance-actions"><Badge tone={registryGroups.length?'orange':'green'}>{registryBusy?'…':registryGroups.length}</Badge>{registrySummary?.agents>0&&<Badge>وكلاء {registrySummary.agents}</Badge>}{registrySummary?.staff>0&&<Badge>موظفون {registrySummary.staff}</Badge>}{registrySummary?.customers>0&&<Badge>عملاء {registrySummary.customers}</Badge>}</div></div>{registryBusy&&!registryGroups.length?<Loading text="جاري فحص التكرارات الحساسة..."/>:registryGroups.length?<Table preferenceKey="sensitive-duplicate-review" defaultPageSize={25} rows={registryGroups} columns={registryCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد تكرارات قوية في الكيانات الحساسة ضمن النطاق الحالي.</div>}</Card>}
+   {canReviewRegistry&&<Card><div className="card-title"><div><h3>تكرارات حساسة — مراجعة ودمج موجّه</h3><small>الوكلاء يدعمون الآن Preview مالي وتشغيلي ودمجًا آمنًا بعد فحص الرصيد والتوزيعات والتطابق القانوني. حسابات الموظفين والعملاء تظل مراجعة فقط.</small></div><div className="finance-actions"><Badge tone={registryGroups.length?'orange':'green'}>{registryBusy?'…':registryGroups.length}</Badge>{registrySummary?.agents>0&&<Badge>وكلاء {registrySummary.agents}</Badge>}{registrySummary?.staff>0&&<Badge>موظفون {registrySummary.staff}</Badge>}{registrySummary?.customers>0&&<Badge>عملاء {registrySummary.customers}</Badge>}</div></div>{registryBusy&&!registryGroups.length?<Loading text="جاري فحص التكرارات الحساسة..."/>:registryGroups.length?<Table preferenceKey="sensitive-duplicate-review" defaultPageSize={25} rows={registryGroups} columns={registryCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد تكرارات قوية في الكيانات الحساسة ضمن النطاق الحالي.</div>}</Card>}
    {canReviewDuplicates&&<Card><div className="card-title"><div><h3>سجل العميل المتكرر عبر حجوزات مختلفة</h3><small>هذه ليست أخطاء افتراضيًا؛ نفس الشخص قد يسافر أكثر من مرة، لذلك لا يسمح النظام بدمجها.</small></div><Badge>{repeatGroups.length}</Badge></div>{repeatGroups.length?<Table preferenceKey="repeat-passengers" defaultPageSize={25} rows={repeatGroups} columns={repeatCols}/>:<div className="empty">لا توجد هويات متكررة عبر حجوزات مختلفة.</div>}</Card>}
   </>}
 
@@ -298,5 +300,7 @@ export default function AuditCenter({go,initialTab=''}) {
     <div className="modal-actions" style={{gridColumn:'1/-1'}}><Button type="button" onClick={()=>setEmployeeMergeOpen(false)} disabled={employeeMergeBusy}>إلغاء</Button>{canMergeAttendance&&<Button variant="primary" type="submit" disabled={employeeMergeBusy||employeePreviewBusy||!employeePreview?.can_merge||employeeReason.trim().length<5||employeeConfirm!==String(employeePreview?.canonical?.employee_code||'')}><GitMerge size={15}/>{employeeMergeBusy?'جاري الدمج...':'تنفيذ الدمج الآمن'}</Button>}</div>
    </form>}
   </Modal>
+
+  <AgentMergeModal group={agentMergeGroup} onClose={()=>setAgentMergeGroup(null)} onMerged={async out=>{setNotice(`تم دمج الوكيل المكرر داخل ${out?.result?.agent_code||'السجل الأساسي'} مع نقل الحجوزات والتوزيعات والـQuotas وحفظ أثر الدمج.`);setAgentMergeGroup(null);await loadRegistryDuplicates();if(canAudit)await loadAudit();}}/>
  </>;
 }
