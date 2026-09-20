@@ -15,7 +15,7 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance({initialTab=''}){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}

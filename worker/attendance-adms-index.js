@@ -77,6 +77,41 @@ function historyQueryCommand(strategy,start,end){
  if(strategy==='range_iso')return 'DATA QUERY ATTLOG StartTime='+String(start).replace(' ','T')+'\tEndTime='+String(end).replace(' ','T');
  return 'DATA QUERY ATTLOG StartTime='+start+'\tEndTime='+end;
 }
+function ageSeconds(value){if(!value)return null;const n=(Date.now()-new Date(value).getTime())/1000;return Number.isFinite(n)?Math.max(0,Math.round(n)):null}
+function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
+ const seen=device?.last_command_poll_at||device?.last_seen_at||null,seenAge=ageSeconds(seen),lastLog=latestLog?.occurred_at||null,lastReceived=latestLog?.received_at||null,logAge=ageSeconds(lastLog);
+ const recent=(deviceCommands||[]).slice().sort((x,y)=>Number(y.id||0)-Number(x.id||0)),latestCommand=recent[0]||null,pending=recent.filter(x=>x.status==='queued'||x.status==='sent').length;
+ const profile=device?.metadata?.history_profile||{},issues=[];let severity=0,label='سليم',tone='green',connection='online';
+ if(device?.status!=='active'){severity=1;label='موقوف';tone='gray';connection='disabled';issues.push('الجهاز موقوف من إعدادات النظام.')}
+ else if(seenAge==null||seenAge>1800){severity=3;label='غير متصل';tone='red';connection='offline';issues.push('لا يوجد اتصال حديث من الجهاز خلال آخر 30 دقيقة.')}
+ else if(seenAge>180){severity=Math.max(severity,1);label='يحتاج متابعة';tone='orange';connection='recent';issues.push('اتصال الجهاز ليس لحظيًا؛ آخر اتصال منذ أكثر من 3 دقائق.')}
+ if(latestCommand?.status==='failed'&&ageSeconds(latestCommand.completed_at||latestCommand.updated_at||latestCommand.created_at)<=3600){
+  severity=Math.max(severity,2);label=severity>=3?'غير متصل':'يحتاج متابعة';tone=severity>=3?'red':'orange';issues.push('آخر أمر للجهاز فشل'+(latestCommand.result_code!=null?' (Code '+latestCommand.result_code+')':'')+'.');
+ }
+ if(Number(unlinkedCount)>0){severity=Math.max(severity,1);if(severity<3){label='يحتاج متابعة';tone='orange'}issues.push(String(unlinkedCount)+(unlinkedTruncated?'+':'')+' حركة تحتاج ربط موظف.')}
+ if(device?.metadata?.force_attlog_replay){severity=Math.max(severity,1);if(severity<3){label='جاري معالجة';tone='orange'}issues.push('إعادة إرسال سجل الحضور التاريخي قيد التنفيذ.')}
+ if(!lastLog)issues.push('لم يستقبل النظام أي حركة حضور من هذا الجهاز حتى الآن.');
+ else if(logAge!=null&&logAge>72*3600){severity=Math.max(severity,1);if(severity<3){label='يحتاج متابعة';tone='orange'}issues.push('لا توجد حركة حضور جديدة منذ أكثر من 72 ساعة.')}
+ const compat=profile.preferred_mode==='push_replay'?'push_replay':profile.preferred_mode==='data_query'?'data_query':'auto';
+ return {device_id:device?.id||null,severity,tone,label,connection,connection_age_seconds:seenAge,last_seen_at:seen,last_log_at:lastLog,last_received_at:lastReceived,unlinked_count:Number(unlinkedCount)||0,unlinked_truncated:!!unlinkedTruncated,pending_commands:pending,last_command_type:latestCommand?.command_type||null,last_command_status:latestCommand?.status||null,last_command_at:latestCommand?.completed_at||latestCommand?.updated_at||latestCommand?.created_at||null,last_command_code:latestCommand?.result_code??null,compatibility_mode:compat,compatibility_strategy:profile.preferred_strategy||null,issues};
+}
+async function updateDeviceInfoFromInfoCommand(env,cmd,raw,rc){
+ if(!cmd?.device_id||!['sync_info','diagnostic_info'].includes(cmd.command_type))return;
+ const rows=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]),device=rows?.[0]||null;
+ if(!device)return;
+ const now=new Date().toISOString(),meta={...(device.metadata||{})},info=rc===0?parseDeviceInfo(raw):{};
+ const diag={...(meta.last_diagnostic||{}),checked_at:now,status:rc===0?'success':'failed',result_code:rc,command_id:cmd.id};
+ if(rc===0){diag.platform=txt(info.platform)||meta.platform||null;diag.ip_address=txt(info.ipaddress)||meta.ip_address||null;diag.mac=txt(info.mac)||meta.mac||null;diag.main_time=txt(info.maintime)||null;diag.free_flash_size=safeInt(info.freeflashsize);diag.flash_size=safeInt(info.flashsize);diag.transaction_count=safeInt(info.transactioncount);diag.user_count=safeInt(info.usercount)}
+ const patch={updated_at:now,metadata:{...meta,last_diagnostic:diag}};
+ if(rc===0){
+  const fw=txt(info.fwversion||info.firmware),pv=txt(info.pushversion),dn=txt(info.devicename),platform=txt(info.platform),ip=txt(info.ipaddress),mac=txt(info.mac);
+  if(fw)patch.firmware=fw;if(pv)patch.push_version=pv;if(dn)patch.device_name=dn;
+  const uc=safeInt(info.usercount),fc=safeInt(info.fpcount),face=safeInt(info.facecount),tc=safeInt(info.transactioncount);
+  if(uc!=null)patch.reported_user_count=uc;if(fc!=null)patch.reported_fp_count=fc;if(face!=null)patch.reported_face_count=face;if(tc!=null)patch.reported_transaction_count=tc;
+  patch.metadata={...patch.metadata,platform:platform||meta.platform||null,ip_address:ip||meta.ip_address||null,mac:mac||meta.mac||null};
+ }
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});
+}
 
 async function upsertDeviceUsers(env,device,serial,userRows,sourceTable){
  if(!userRows?.length)return 0;
@@ -155,6 +190,7 @@ async function completeDeviceCommand(env,body){
   const now=new Date().toISOString();
   const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
   const cmd=rows?.[0];
+  if(cmd&&['sync_info','diagnostic_info'].includes(cmd.command_type))await updateDeviceInfoFromInfoCommand(env,cmd,raw,rc).catch(()=>{});
   if(cmd?.command_type==='history_attlog'&&rc===0){
    const devices=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]);
    const device=devices?.[0]||null,strategy=txt(cmd?.metadata?.history_strategy)||'range_space';
@@ -305,6 +341,25 @@ async function queueDeviceSync(env,me,body){
  const created=await rest(env,'attendance_device_commands',{method:'POST',body:commands,prefer:'return=representation'});
  await audit(env,me,'attendance_device_sync_requested','attendance_device',device.id,device.branch_id,null,{commands:commands.map(x=>x.command_type)},'سحب بيانات الجهاز والموظفين وسجل الحضور');
  return {ok:true,queued:true,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[]};
+}
+async function diagnoseDevice(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لتشخيص أجهزة البصمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const [latestLogs,commands,unlinkedRows,pending]=await Promise.all([
+  rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&select=occurred_at,received_at&order=occurred_at.desc&limit=1').catch(()=>[]),
+  rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&select=id,command_type,status,result_code,created_at,updated_at,completed_at&order=id.desc&limit=20').catch(()=>[]),
+  rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&attendance_employee_id=is.null&staff_user_id=is.null&employee_name=is.null&select=id&limit=5001').catch(()=>[]),
+  rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.diagnostic_info&status=in.(queued,sent)&select=id&limit=1').catch(()=>[])
+ ]);
+ const unlinkedCount=Math.min((unlinkedRows||[]).length,5000),unlinkedTruncated=(unlinkedRows||[]).length>5000;
+ const before=deviceHealthSnapshot(device,latestLogs?.[0]||null,commands||[],unlinkedCount,unlinkedTruncated);
+ let queued=false,created=[];
+ if(!pending?.length){
+  created=await queueCommands(env,device,me,[{type:'diagnostic_info',command:'INFO',metadata:{diagnostic:true,requested_at:new Date().toISOString()}}]);
+  queued=true;
+ }
+ await audit(env,me,'attendance_device_diagnostic_requested','attendance_device',device.id,device.branch_id,null,{queued,health:before},'تشخيص صحة جهاز البصمة');
+ return {ok:true,queued,health:before,command_id:created?.[0]?.id||pending?.[0]?.id||null,message:queued?'تم بدء تشخيص الجهاز واختبار اتصال INFO. ستتحدث النتيجة تلقائيًا.':'يوجد تشخيص للجهاز قيد التنفيذ بالفعل.'};
 }
 
 function userUpdateCommand(pin,data){
@@ -711,6 +766,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,result_body,command_text,metadata,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
+ const latestDeviceLogs=deviceIds.length?await Promise.all(deviceIds.map(async id=>({device_id:id,row:(await rest(env,'attendance_raw_logs?device_id=eq.'+enc(id)+'&select=occurred_at,received_at&order=occurred_at.desc&limit=1').catch(()=>[]))?.[0]||null}))):[];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
  const unlinkedMap=new Map();
  for(const row of unlinkedRows||[]){
@@ -719,7 +775,11 @@ async function attendanceState(env,me,url){
   else{old.count+=1;if(row.occurred_at&&(!old.oldest_at||new Date(row.occurred_at)<new Date(old.oldest_at)))old.oldest_at=row.occurred_at;if(row.occurred_at&&(!old.newest_at||new Date(row.occurred_at)>new Date(old.newest_at)))old.newest_at=row.occurred_at;if(row.received_at&&(!old.last_received_at||new Date(row.received_at)>new Date(old.last_received_at)))old.last_received_at=row.received_at}
  }
  const unlinkedGroups=[...unlinkedMap.values()].sort((x,y)=>Number(y.count||0)-Number(x.count||0)||String(x.device_pin).localeCompare(String(y.device_pin))),unlinkedTotal=unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0);
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const latestLogMap=new Map((latestDeviceLogs||[]).map(x=>[String(x.device_id),x.row])),commandMap=new Map(),unlinkedByDevice=new Map();
+ for(const c of commands||[]){const k=String(c.device_id),arr=commandMap.get(k)||[];arr.push(c);commandMap.set(k,arr)}
+ for(const x of unlinkedGroups){const k=String(x.device_id);unlinkedByDevice.set(k,(unlinkedByDevice.get(k)||0)+Number(x.count||0))}
+ const deviceHealth=(devices||[]).map(device=>deviceHealthSnapshot(device,latestLogMap.get(String(device.id))||null,commandMap.get(String(device.id))||[],unlinkedByDevice.get(String(device.id))||0,(unlinkedRows||[]).length>=5000));
+ return {ok:true,devices,deviceHealth,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -805,6 +865,7 @@ async function attendanceApi(request,env,ctx){
   const body=await request.json().catch(()=>({})),action=txt(body.action);
   if(action==='report')return json(await attendanceReport(env,me,body));
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
+  if(action==='diagnose_device')return json(await diagnoseDevice(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
   if(action==='import_historical_attendance')return json(await importHistoricalAttendance(env,me,body));
   if(action==='save_device_shift_template')return json(await saveDeviceShiftTemplate(env,me,body));
