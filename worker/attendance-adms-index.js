@@ -60,7 +60,10 @@ async function touchDevice(env,device,request,url,extra={}){
  patch.metadata=meta;
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:patch,prefer:'return=minimal'});
 }
-function handshake(serial){return ['GET OPTION FROM: '+serial,'Stamp=9999','OpStamp=9999','ATTLOGStamp=9999','OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n')}
+function handshake(serial,device){
+ const replay=!!device?.metadata?.force_attlog_replay,attStamp=replay?'0':'9999';
+ return ['GET OPTION FROM: '+serial,'Stamp='+attStamp,'OpStamp=9999','ATTLOGStamp='+attStamp,'OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n');
+}
 
 async function upsertDeviceUsers(env,device,serial,userRows,sourceTable){
  if(!userRows?.length)return 0;
@@ -98,10 +101,22 @@ async function finalizeEmployeeDeleteGroup(env,groupId){
  }
  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'success',success_count:success.length,failed_count:0,result_summary:{deleted_from_devices:success.length},completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
 }
+async function queueAttendanceReplay(env,device,createdBy,sourceCommandId){
+ if(!device?.id)return false;
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog_replay&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
+ if(pending?.length)return false;
+ const now=new Date().toISOString(),deviceMeta={...(device.metadata||{}),force_attlog_replay:true,history_replay_requested_at:now,history_replay_source_command_id:sourceCommandId||null};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:deviceMeta,updated_at:now},prefer:'return=minimal'});
+ await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:device.id,command_type:'history_attlog_replay',command_text:'CHECK',metadata:{history_strategy:'stamp_zero_check',source_command_id:sourceCommandId||null},created_by:createdBy||null},prefer:'return=minimal'});
+ return true;
+}
 async function queueHistoricalFallback(env,cmd,rc){
  if(!cmd||cmd.command_type!=='history_attlog'||rc!==-3)return false;
  const strategy=txt(cmd?.metadata?.history_strategy)||'range_space';
- if(strategy==='plain')return false;
+ if(strategy==='plain'){
+  const rows=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]);
+  return await queueAttendanceReplay(env,rows?.[0]||null,cmd.created_by||null,cmd.id);
+ }
  const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(cmd.device_id)+'&command_type=eq.history_attlog&status=in.(queued,sent)&select=id,metadata&order=id.desc&limit=20').catch(()=>[]);
  let nextStrategy,command;
  if(strategy==='range_space'){
@@ -167,7 +182,7 @@ async function admsRequest(request,env){
 
  if(request.method==='GET'&&url.pathname==='/iclock/cdata'){
    await touchDevice(env,device,request,url).catch(()=>{});
-   return plain(handshake(serial));
+   return plain(handshake(serial,device));
  }
  if(request.method==='GET'&&url.pathname==='/iclock/getrequest'){
    await touchDevice(env,device,request,url).catch(()=>{});
@@ -178,7 +193,7 @@ async function admsRequest(request,env){
  if((request.method==='GET'||request.method==='POST')&&url.pathname==='/iclock/registry'){
    const body=request.method==='POST'?await request.text():'',info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   return plain(request.method==='GET'?handshake(serial):'OK');
+   return plain(request.method==='GET'?handshake(serial,device):'OK');
  }
  if(request.method==='POST'&&url.pathname==='/iclock/devicecmd'){
    const body=await request.text();
@@ -189,7 +204,19 @@ async function admsRequest(request,env){
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
-   if(table==='ATTLOG'){const n=await storeAttendanceLogs(env,device,serial,request,body);if(n){await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch')}return plain('OK')}
+   if(table==='ATTLOG'){
+    const n=await storeAttendanceLogs(env,device,serial,request,body);
+    if(n){
+     await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');
+     await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch');
+     await markSyncComplete(env,device,'history_attlog_replay','Historical ATTLOG replay received: '+n+' records in this batch');
+     if(device?.metadata?.force_attlog_replay){
+      const now=new Date().toISOString(),meta={...(device.metadata||{}),force_attlog_replay:false,history_replay_completed_at:now,history_replay_last_batch:n};
+      await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+     }
+    }
+    return plain('OK');
+   }
    if(table==='USERINFO'||table==='OPERLOG'){
      const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}
      return plain('OK')
@@ -441,15 +468,23 @@ async function importHistoricalAttendance(env,me,body){
  if(!canManageDevices(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة الأجهزة وربط البصمة لاستيراد الحركات القديمة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
  const linkedPins=await relinkDeviceHistory(env,device);
- const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
- let queued=false;
+ const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=in.(history_attlog,history_attlog_replay)&status=in.(queued,sent)&select=id,command_type&limit=1').catch(()=>[]);
+ const failedPlain=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog&status=eq.failed&result_code=eq.-3&select=id,metadata,created_at&order=id.desc&limit=12').catch(()=>[]);
+ const pushOnly=(failedPlain||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain');
+ let queued=false,replay=false;
  if(!existing?.length){
-  const now=deviceLocalNow();
-  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range_space',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
-  queued=true;
+  if(pushOnly){
+   const sourceId=failedPlain.find(x=>txt(x?.metadata?.history_strategy)==='plain')?.id||null;
+   queued=await queueAttendanceReplay(env,device,actorId(me)||actorName(me)||null,sourceId);
+   replay=queued;
+  }else{
+   const now=deviceLocalNow();
+   await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range_space',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
+   queued=true;
+  }
  }
- await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
- return {ok:true,queued,linked_pins:linkedPins,message:queued?'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.':'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
+ await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued,replay,push_only:pushOnly},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
+ return {ok:true,queued,replay,push_only:pushOnly,linked_pins:linkedPins,message:queued?(replay?'هذا الجهاز لا يدعم طلب ATTLOG المباشر؛ تم تفعيل إعادة إرسال السجل عبر Push وإعادة ضبط ختم الحضور مؤقتًا.':'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.'):'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
 }
 
 async function saveEmployeeCalendarRule(env,me,body){

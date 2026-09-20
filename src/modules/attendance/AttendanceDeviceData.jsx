@@ -12,15 +12,16 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
-function cmdName(v,meta){const s=meta?.history_strategy;return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
+function cmdName(v,meta){const s=meta?.history_strategy;return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='history_attlog_replay'?'الحركات القديمة — إعادة إرسال':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
 function cmdReason(c){
  if(c?.status!=='failed')return '';
  const code=Number(c?.result_code),s=c?.metadata?.history_strategy;
  if(c?.command_type==='history_attlog'&&code===-3){
-  if(s==='plain')return 'الجهاز رفض كل طرق قراءة السجل المتاحة حاليًا (Code -3).';
+  if(s==='plain')return 'الجهاز لا يدعم DATA QUERY لسجل الحضور (Code -3). النظام ينتقل تلقائيًا لطريقة إعادة الإرسال عبر Push.';
   if(s==='range_iso')return 'الجهاز رفض صيغة الوقت البديلة أيضًا (Code -3). النظام يجرب طلب السجل بدون فترة زمنية.';
   return 'الجهاز رفض صيغة الفترة الأولى (Code -3). النظام يجرب تلقائيًا صيغة وقت متوافقة أخرى.';
  }
+ if(c?.command_type==='history_attlog_replay'&&c?.status==='failed')return 'فشل أمر CHECK الخاص بإعادة إرسال سجل الحضور. رمز الجهاز: '+String(c?.result_code??'—');
  return c?.result_code==null?'تعذر تنفيذ الأمر ولم يرسل الجهاز رمز نتيجة.':'رمز نتيجة الجهاز: '+String(c.result_code);
 }
 const blankUser={device_id:'',device_pin:'',name:'',privilege:0,card_number:'',group_no:'1',timezone_raw:'0000000100000000',verify_mode:0};
