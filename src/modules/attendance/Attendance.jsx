@@ -15,18 +15,19 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance({initialTab=''}){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
 
- const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],employees=state.employees||[],users=state.users||[];
+ const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[];
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
- const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=logs.filter(x=>!x.attendance_employee_id&&!x.staff_user_id&&!x.employee_name).length,onlineCount=devices.filter(online).length;
+ const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
+ const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length;
 
  const tabs=useMemo(()=>[
   {id:'overview',label:'نظرة عامة',icon:LayoutDashboard},
@@ -73,6 +74,13 @@ export default function Attendance({initialTab=''}){
   {key:'env',label:'البيئة',render:r=>r.data_environment==='production'?<Badge tone="green">فعلي</Badge>:<Badge tone="orange">تدريب</Badge>},
   {key:'link',label:'',render:r=>state.permissions?.manage_links&&!r.attendance_employee_id?<Button onClick={()=>addLink({device_id:r.device_id,device_pin:r.device_pin})}><Link2 size={14}/> ربط</Button>:'—'}
  ];
+ const unlinkedCols=[
+  {key:'pin',label:'PIN غير مربوط',render:r=>{const du=deviceUserMap.get(String(r.device_id)+'|'+String(r.device_pin));return <div><strong dir="ltr">{r.device_pin}</strong><div className="muted-small">{du?.name?('اسم الجهاز: '+du.name):'لا يوجد اسم مسحوب من الجهاز'}</div></div>}},
+  {key:'device',label:'الجهاز',render:r=><div><strong>{deviceMap.get(String(r.device_id))?.name||r.serial_number}</strong><div className="muted-small">{branchMap.get(String(r.branch_id))||'—'}</div></div>},
+  {key:'count',label:'عدد الحركات',render:r=><Badge tone="orange">{r.count}</Badge>},
+  {key:'range',label:'الفترة',render:r=><div><div>{fmtDate(r.oldest_at)}</div><div className="muted-small">حتى {fmtDate(r.newest_at)}</div></div>},
+  {key:'action',label:'',render:r=>state.permissions?.manage_links?<Button variant="primary" onClick={()=>addLink({device_id:r.device_id,device_pin:r.device_pin})}><Link2 size={14}/> ربط كل الحركات</Button>:'—'}
+ ];
 
  const actions=<><Button onClick={load} disabled={loading}><RefreshCw size={16}/> تحديث</Button>{activeTab==='links'&&state.permissions?.manage_links&&<Button variant="primary" onClick={()=>addLink()} disabled={!devices.length}><Link2 size={16}/> ربط موظف</Button>}{activeTab==='devices'&&state.permissions?.manage_devices&&<Button variant="primary" onClick={addDevice}><Plus size={16}/> إضافة جهاز</Button>}</>;
 
@@ -88,7 +96,7 @@ export default function Attendance({initialTab=''}){
 
   {activeTab==='employees'&&<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
   {activeTab==='devices'&&<><AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice}/><Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><Table preferenceKey="attendance-devices" defaultPageSize={25} rows={devices} columns={deviceCols}/></Card></>}
-  {activeTab==='links'&&<><Card><div className="card-title"><h3>ربط أرقام الأجهزة بالموظفين</h3><Badge>{links.length}</Badge></div><Table preferenceKey="attendance-links" defaultPageSize={25} rows={links} columns={linkCols}/></Card><Card><div className="card-title"><h3>الحركات المستلمة</h3><Badge>{logs.length}</Badge></div><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={logs} columns={logCols}/></Card></>}
+  {activeTab==='links'&&<><Card><div className="card-title"><div><h3>حركات تحتاج ربط موظف</h3><small>كل PIN يظهر مرة واحدة. عند ربطه بموظف يتم ربط جميع حركاته القديمة تلقائيًا بدون حذف سجل البصمات.</small></div><Badge tone={unlinked?'orange':'green'}>{unlinked}</Badge></div>{state.unlinkedTruncated&&<div className="training-banner">القائمة كبيرة جدًا؛ المعروض ملخص لأول 5000 حركة غير مرتبطة.</div>}{unlinkedGroups.length?<Table preferenceKey="attendance-unlinked-groups" defaultPageSize={25} rows={unlinkedGroups} columns={unlinkedCols}/>:<div className="success-note"><ShieldCheck size={16}/> كل الحركات المستلمة مرتبطة بموظفين.</div>}</Card><Card><div className="card-title"><h3>ربط أرقام الأجهزة بالموظفين</h3><Badge>{links.length}</Badge></div><Table preferenceKey="attendance-links" defaultPageSize={25} rows={links} columns={linkCols}/></Card><Card><div className="card-title"><h3>الحركات المستلمة</h3><Badge>{logs.length}</Badge></div><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={logs} columns={logCols}/></Card></>}
   {activeTab==='reports'&&state.permissions?.reports&&<AttendanceReports state={state} onError={setError} onNotice={setNotice}/>}
   {activeTab==='policies'&&state.permissions?.manage_policies&&<AttendancePolicies state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
 

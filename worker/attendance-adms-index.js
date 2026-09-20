@@ -64,6 +64,19 @@ function handshake(serial,device){
  const replay=!!device?.metadata?.force_attlog_replay,attStamp=replay?'0':'9999';
  return ['GET OPTION FROM: '+serial,'Stamp='+attStamp,'OpStamp=9999','ATTLOGStamp='+attStamp,'OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n');
 }
+async function saveHistoryProfile(env,device,patch){
+ if(!device?.id)return null;
+ const now=new Date().toISOString(),meta=device.metadata&&typeof device.metadata==='object'&&!Array.isArray(device.metadata)?device.metadata:{},old=meta.history_profile&&typeof meta.history_profile==='object'&&!Array.isArray(meta.history_profile)?meta.history_profile:{};
+ const profile={...old,...patch,updated_at:now},metadata={...meta,history_profile:profile};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ device.metadata=metadata;
+ return profile;
+}
+function historyQueryCommand(strategy,start,end){
+ if(strategy==='plain')return 'DATA QUERY ATTLOG';
+ if(strategy==='range_iso')return 'DATA QUERY ATTLOG StartTime='+String(start).replace(' ','T')+'\tEndTime='+String(end).replace(' ','T');
+ return 'DATA QUERY ATTLOG StartTime='+start+'\tEndTime='+end;
+}
 
 async function upsertDeviceUsers(env,device,serial,userRows,sourceTable){
  if(!userRows?.length)return 0;
@@ -105,8 +118,9 @@ async function queueAttendanceReplay(env,device,createdBy,sourceCommandId){
  if(!device?.id)return false;
  const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog_replay&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
  if(pending?.length)return false;
- const now=new Date().toISOString(),deviceMeta={...(device.metadata||{}),force_attlog_replay:true,history_replay_requested_at:now,history_replay_source_command_id:sourceCommandId||null};
+ const now=new Date().toISOString(),oldProfile=device?.metadata?.history_profile&&typeof device.metadata.history_profile==='object'?device.metadata.history_profile:{},deviceMeta={...(device.metadata||{}),force_attlog_replay:true,history_replay_requested_at:now,history_replay_source_command_id:sourceCommandId||null,history_profile:{...oldProfile,preferred_mode:'push_replay',supports_data_query:false,last_probe_code:-3,last_probe_at:now,updated_at:now}};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:deviceMeta,updated_at:now},prefer:'return=minimal'});
+ device.metadata=deviceMeta;
  await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:device.id,command_type:'history_attlog_replay',command_text:'CHECK',metadata:{history_strategy:'stamp_zero_check',source_command_id:sourceCommandId||null},created_by:createdBy||null},prefer:'return=minimal'});
  return true;
 }
@@ -123,7 +137,7 @@ async function queueHistoricalFallback(env,cmd,rc){
   if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='range_iso'))return false;
   const start=txt(cmd?.metadata?.requested_start)||'2000-01-01 00:00:00',end=txt(cmd?.metadata?.requested_end)||deviceLocalNow();
   nextStrategy='range_iso';
-  command='DATA QUERY ATTLOG StartTime='+start.replace(' ','T')+'\tEndTime='+end.replace(' ','T');
+  command=historyQueryCommand('range_iso',start,end);
  }else{
   if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain'))return false;
   nextStrategy='plain';
@@ -141,6 +155,11 @@ async function completeDeviceCommand(env,body){
   const now=new Date().toISOString();
   const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
   const cmd=rows?.[0];
+  if(cmd?.command_type==='history_attlog'&&rc===0){
+   const devices=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]);
+   const device=devices?.[0]||null,strategy=txt(cmd?.metadata?.history_strategy)||'range_space';
+   if(device)await saveHistoryProfile(env,device,{preferred_mode:'data_query',supports_data_query:true,preferred_strategy:strategy,last_success_at:now,last_result_code:0});
+  }
   if(cmd?.command_type==='history_attlog'&&rc===-3)await queueHistoricalFallback(env,cmd,rc).catch(()=>false);
   if(cmd?.command_type==='delete_employee_user'&&cmd.operation_group_id)groups.add(String(cmd.operation_group_id));
  }
@@ -211,8 +230,9 @@ async function admsRequest(request,env){
      await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch');
      await markSyncComplete(env,device,'history_attlog_replay','Historical ATTLOG replay received: '+n+' records in this batch');
      if(device?.metadata?.force_attlog_replay){
-      const now=new Date().toISOString(),meta={...(device.metadata||{}),force_attlog_replay:false,history_replay_completed_at:now,history_replay_last_batch:n};
+      const now=new Date().toISOString(),oldProfile=device?.metadata?.history_profile&&typeof device.metadata.history_profile==='object'?device.metadata.history_profile:{},meta={...(device.metadata||{}),force_attlog_replay:false,history_replay_completed_at:now,history_replay_last_batch:n,history_profile:{...oldProfile,preferred_mode:'push_replay',supports_data_query:false,last_success_at:now,last_received_batch:n,updated_at:now}};
       await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+      device.metadata=meta;
      }
     }
     return plain('OK');
@@ -470,21 +490,22 @@ async function importHistoricalAttendance(env,me,body){
  const linkedPins=await relinkDeviceHistory(env,device);
  const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=in.(history_attlog,history_attlog_replay)&status=in.(queued,sent)&select=id,command_type&limit=1').catch(()=>[]);
  const failedPlain=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.history_attlog&status=eq.failed&result_code=eq.-3&select=id,metadata,created_at&order=id.desc&limit=12').catch(()=>[]);
- const pushOnly=(failedPlain||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain');
- let queued=false,replay=false;
+ const profile=device?.metadata?.history_profile&&typeof device.metadata.history_profile==='object'?device.metadata.history_profile:{},pushOnly=profile.preferred_mode==='push_replay'||(failedPlain||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain');
+ let queued=false,replay=false,strategy=txt(profile.preferred_strategy)||'range_space';
+ if(!['range_space','range_iso','plain'].includes(strategy))strategy='range_space';
  if(!existing?.length){
   if(pushOnly){
    const sourceId=failedPlain.find(x=>txt(x?.metadata?.history_strategy)==='plain')?.id||null;
    queued=await queueAttendanceReplay(env,device,actorId(me)||actorName(me)||null,sourceId);
    replay=queued;
   }else{
-   const now=deviceLocalNow();
-   await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range_space',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
+   const now=deviceLocalNow(),start='2000-01-01 00:00:00';
+   await queueCommands(env,device,me,[{type:'history_attlog',command:historyQueryCommand(strategy,start,now),metadata:{history_strategy:strategy,requested_start:start,requested_end:now,profile_reused:profile.preferred_mode==='data_query'}}]);
    queued=true;
   }
  }
- await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued,replay,push_only:pushOnly},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
- return {ok:true,queued,replay,push_only:pushOnly,linked_pins:linkedPins,message:queued?(replay?'هذا الجهاز لا يدعم طلب ATTLOG المباشر؛ تم تفعيل إعادة إرسال السجل عبر Push وإعادة ضبط ختم الحضور مؤقتًا.':'تم ربط الحركات الموجودة وطلب كامل سجل الحضور القديم من الجهاز.'):'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
+ await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued,replay,push_only:pushOnly,preferred_mode:profile.preferred_mode||null,preferred_strategy:strategy},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
+ return {ok:true,queued,replay,push_only:pushOnly,preferred_mode:profile.preferred_mode||null,preferred_strategy:strategy,linked_pins:linkedPins,message:queued?(replay?'تم استخدام ملف توافق الجهاز: إعادة إرسال السجل عبر Push بدون إعادة تجربة أوامر غير مدعومة.':'تم استخدام طريقة السحب المتوافقة مع الجهاز لطلب الحركات القديمة.'):'تم ربط الحركات الموجودة، ويوجد طلب استيراد تاريخي قيد التنفيذ بالفعل.'};
 }
 
 async function saveEmployeeCalendarRule(env,me,body){
@@ -671,10 +692,11 @@ async function resetAttendanceViolationDecision(env,me,body){
 
 async function attendanceState(env,me,url){
  const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
- const [devices,links,logs,employees,users,branches,shiftPeriods,deleteRequests,calendarRules,policies]=await Promise.all([
+ const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,deleteRequests,calendarRules,policies]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
   rest(env,'attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at&data_environment=eq.'+enc(mode)+logFilter+'&order=occurred_at.desc&limit=500'),
+  rest(env,'attendance_raw_logs?select=device_id,serial_number,branch_id,device_pin,occurred_at,received_at&data_environment=eq.'+enc(mode)+logFilter+'&attendance_employee_id=is.null&staff_user_id=is.null&employee_name=is.null&order=occurred_at.desc&limit=5000'),
   rest(env,'attendance_employees?select=*&data_environment=eq.'+enc(mode)+empFilter+'&order=name.asc'),
   rest(env,'staff_users?select=id,name,username,role,branch_id,status&status=neq.%D9%85%D9%88%D9%82%D9%88%D9%81'+userFilter+'&order=name.asc'),
   rest(env,'branches'+branchFilter),
@@ -690,7 +712,14 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
- return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const unlinkedMap=new Map();
+ for(const row of unlinkedRows||[]){
+  const key=String(row.device_id||'')+'|'+txt(row.device_pin),old=unlinkedMap.get(key);
+  if(!old)unlinkedMap.set(key,{key,device_id:row.device_id,serial_number:row.serial_number,branch_id:row.branch_id,device_pin:txt(row.device_pin),count:1,oldest_at:row.occurred_at,newest_at:row.occurred_at,last_received_at:row.received_at||null});
+  else{old.count+=1;if(row.occurred_at&&(!old.oldest_at||new Date(row.occurred_at)<new Date(old.oldest_at)))old.oldest_at=row.occurred_at;if(row.occurred_at&&(!old.newest_at||new Date(row.occurred_at)>new Date(old.newest_at)))old.newest_at=row.occurred_at;if(row.received_at&&(!old.last_received_at||new Date(row.received_at)>new Date(old.last_received_at)))old.last_received_at=row.received_at}
+ }
+ const unlinkedGroups=[...unlinkedMap.values()].sort((x,y)=>Number(y.count||0)-Number(x.count||0)||String(x.device_pin).localeCompare(String(y.device_pin))),unlinkedTotal=unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0);
+ return {ok:true,devices,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
