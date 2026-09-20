@@ -1,10 +1,10 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {AlertTriangle,Armchair,BusFront,CheckCircle2,ClipboardCheck,Fingerprint,Hotel,RefreshCw,Search,ShieldAlert,UserCog,Users,WalletCards,Wrench} from 'lucide-react';
+import {AlertTriangle,BusFront,CheckCircle2,ClipboardCheck,Fingerprint,RefreshCw,Search,ShieldAlert,Users,WalletCards,Wrench} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import {has} from '../../lib/permissions.js';
-import {bookingFinanceNumbers,bookingFinancialState} from '../../lib/bookingFinance.js';
+import {bookingFinancialState} from '../../lib/bookingFinance.js';
 import {Badge,Button,Card,ErrorBox,Input,Loading,Select,Table} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import {money,tripDisplay} from '../../lib/format.js';
@@ -35,19 +35,18 @@ export default function QualityCenter({go}){
  const canFinance=has(user,'finance')||has(user,'payments')||has(user,'expenses')||has(user,'reports');
  const canAttendance=['attendance_view','attendance_reports','attendance_manage_employees','attendance_manage_devices','attendance_manage_links','attendance_review_violations','attendance_close_month'].some(k=>has(user,k));
  const canStaff=has(user,'manageUsers')||has(user,'managePermissions');
- const canTasks=has(user,'tasks')||has(user,'crm')||user?.role==='مدير عام'||user?.role==='developer'||user?.permissions?.all;
+ const canTasks=has(user,'tasks')||user?.role==='مدير عام'||user?.role==='developer'||user?.permissions?.all;
 
  const [refunds,setRefunds]=useState({byId:{},byNo:{}});
- const [seatData,setSeatData]=useState(null),[housingData,setHousingData]=useState(null),[attendance,setAttendance]=useState(null),[taskData,setTaskData]=useState({tasks:[]});
+ const [seatData,setSeatData]=useState(null),[attendance,setAttendance]=useState(null),[taskData,setTaskData]=useState({tasks:[]});
  const [loading,setLoading]=useState(true),[error,setError]=useState(''),[sourceErrors,setSourceErrors]=useState([]),[notice,setNotice]=useState(''),[busy,setBusy]=useState('');
  const [query,setQuery]=useState(''),[severity,setSeverity]=useState('all');
 
  async function load(){
   setLoading(true);setError('');const errors=[];
   const jobs=[refresh().catch(e=>errors.push('البيانات الأساسية: '+e.message))];
-  if(canFinance||canBookings)jobs.push(api.bookingRefundSummaries().then(x=>setRefunds({byId:x?.by_booking_id||{},byNo:x?.by_booking_number||{}})).catch(e=>errors.push('البيانات المالية: '+e.message)));
+  if(canFinance)jobs.push(api.bookingRefundSummaries().then(x=>setRefunds({byId:x?.by_booking_id||{},byNo:x?.by_booking_number||{}})).catch(e=>errors.push('البيانات المالية: '+e.message)));
   if(canSeats)jobs.push(api.module('seats').then(setSeatData).catch(e=>errors.push('المقاعد: '+e.message)));
-  if(canHousing)jobs.push(api.module('housing').then(setHousingData).catch(e=>errors.push('التسكين: '+e.message)));
   if(canAttendance)jobs.push(api.attendance().then(setAttendance).catch(e=>errors.push('الحضور: '+e.message)));
   if(canTasks)jobs.push(api.module('tasks').then(setTaskData).catch(e=>errors.push('المهام: '+e.message)));
   await Promise.all(jobs);setSourceErrors(errors);setLoading(false);
@@ -57,7 +56,6 @@ export default function QualityCenter({go}){
  const refundedFor=b=>Number(refunds.byId?.[String(b?.id||'')]||refunds.byNo?.[String(b?.booking_number||'')]||0);
  const tripMap=useMemo(()=>new Map((data.trips||[]).map(t=>[String(t.id),t])),[data.trips]);
  const bookingMap=useMemo(()=>new Map((data.bookings||[]).map(b=>[String(b.id),b])),[data.bookings]);
- const passengerMap=useMemo(()=>new Map((data.passengers||[]).map(p=>[String(p.id),p])),[data.passengers]);
  const branchMap=useMemo(()=>new Map((data.branches||[]).map(b=>[String(b.id),b.name||b.id])),[data.branches]);
  const activeBookings=useMemo(()=>(data.bookings||[]).filter(b=>!inactiveBooking(b)),[data.bookings]);
  const bookingIds=useMemo(()=>new Set(activeBookings.map(b=>String(b.id))),[activeBookings]);
@@ -74,7 +72,7 @@ export default function QualityCenter({go}){
     const trip=tripMap.get(String(b.trip_id)),days=dayDiff(trip?.departure_date);
     const no=String(b.booking_number||b.id);
     if(!text(b.customer_name)||!text(b.customer_phone)){
-      const missing=[!text(b.customer_name)?'اسم العميل':'الجوال'].filter(Boolean).join(' و ');
+      const missing=[!text(b.customer_name)?'اسم العميل':'',!text(b.customer_phone)?'الجوال':''].filter(Boolean).join(' و ');
       out.push(issue('booking-contact-'+b.id,'bookings','medium','بيانات حجز ناقصة',`${no} · ناقص ${missing}`,`/bookings/${encodeURIComponent(no)}`,{branch_id:b.branch_id,entity:no}));
     }
     const f=bookingFinancialState(b,refundedFor(b));
@@ -124,10 +122,11 @@ export default function QualityCenter({go}){
   }
 
   if(canSeats){
+   const assignedPassengerIds=new Set((seatData?.seat_assignments||[]).filter(a=>lower(a.status)==='assigned'&&a.passenger_id).map(a=>String(a.passenger_id)));
    for(const p of activePassengers){
     const b=bookingMap.get(String(p.booking_id)),t=tripMap.get(String(b?.trip_id));if(!b||!t)continue;
     const days=dayDiff(t.departure_date);if(days===null||days<0||days>3)continue;
-    if(!p.seat_id&&!text(p.seat_number)){
+    if(!assignedPassengerIds.has(String(p.id))&&!p.seat_id&&!text(p.seat_number)){
       out.push(issue('seat-'+p.id,'operations',days<=1?'critical':'high','مسافر بدون مقعد قبل الرحلة',`${p.full_name||'مسافر'} · حجز ${b.booking_number||''} · الرحلة خلال ${days} يوم`,`/seats?trip=${encodeURIComponent(t.id)}`,{branch_id:b.branch_id,entity:p.full_name||p.id}));
     }
    }
@@ -181,7 +180,7 @@ export default function QualityCenter({go}){
   }
 
   return out.sort((a,b)=>(severityRank[a.severity]??9)-(severityRank[b.severity]??9)||a.title.localeCompare(b.title,'ar'));
- },[canBookings,canFinance,canTrips,canSeats,canHousing,canAttendance,canStaff,activeBookings,activePassengers,tripMap,bookingMap,seatData,housingData,attendance,data.users,refunds,branchMap,upcomingTrips]);
+ },[canBookings,canFinance,canTrips,canSeats,canHousing,canAttendance,canStaff,activeBookings,activePassengers,tripMap,bookingMap,seatData,attendance,data.users,refunds,branchMap,upcomingTrips]);
 
  const tabs=useMemo(()=>[
   {id:'all',label:'كل الاستثناءات',icon:ShieldAlert,badge:issues.length||null},
