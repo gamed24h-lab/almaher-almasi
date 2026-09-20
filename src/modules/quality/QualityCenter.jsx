@@ -12,7 +12,7 @@ import {money,tripDisplay} from '../../lib/format.js';
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
 const inactiveBooking=b=>['cancelled','canceled','deleted','refunded'].includes(lower(b?.status));
-const inactivePassenger=p=>['cancelled','canceled','deleted','refunded','removed'].includes(lower(p?.status));
+const inactivePassenger=p=>['cancelled','canceled','deleted','refunded','removed','merged'].includes(lower(p?.status));
 const severityRank={critical:0,high:1,medium:2,low:3};
 const severityLabel={critical:'حرج',high:'عالي',medium:'متوسط',low:'منخفض'};
 const severityTone={critical:'red',high:'orange',medium:'blue',low:'green'};
