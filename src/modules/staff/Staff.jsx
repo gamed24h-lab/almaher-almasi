@@ -7,6 +7,8 @@ import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../c
 import RecordTimeline from '../../components/RecordTimeline.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import {ID_STUDIO_PERMISSIONS,ID_STUDIO_PERMISSION_KEYS} from '../id-studio/permissions.js';
 
@@ -54,11 +56,22 @@ export default function Staff({initialTab=''}){
  const [accountFilter,setAccountFilter]=useState({q:'',branch:'',role:'',mode:'',status:''});
  const [approvalFilter,setApprovalFilter]=useState({q:'',requester:''});
  const [reviewFilter,setReviewFilter]=useState({q:'',severity:''});
+ const [accountRules,setAccountRules]=useState([]),[accountRuleMode,setAccountRuleMode]=useState('all');
  const branches=data.branches||[],users=data.users||[];const isDeveloper=String(user?.role||'').toLowerCase()==='developer';const actorRank=rankOf(user?.role);
  const canEditPermissions=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.managePermissions;const canManageUsers=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.manageUsers;const canApprovePermissionChanges=isDeveloper||user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.managePermissions||!!user?.permissions?.approvals;
  const branchMap=useMemo(()=>Object.fromEntries(branches.map(b=>[String(b.id),b.name||b.branch_name||b.id])),[branches]);const userMap=useMemo(()=>Object.fromEntries(users.map(u=>[String(u.id),u])),[users]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
  const roleOptions=useMemo(()=>[...new Set(users.map(u=>String(u.role||'موظف')).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[users]);
+ const accountRuleFields=useMemo(()=>[
+  {key:'name',label:'اسم الموظف',get:r=>r.name},
+  {key:'username',label:'اسم المستخدم',get:r=>r.username},
+  {key:'phone',label:'الجوال',get:r=>r.phone},
+  {key:'branch',label:'الفرع',options:branchOptions,get:r=>String(r.branch_id||'')},
+  {key:'role',label:'الدور',options:roleOptions,get:r=>String(r.role||'موظف')},
+  {key:'mode',label:'وضع الحساب',options:[{value:'training',label:'تدريب'},{value:'production',label:'تشغيل فعلي'}],get:r=>modeOf(r)},
+  {key:'status',label:'الحالة',options:[{value:'active',label:'نشط'},{value:'inactive',label:'موقوف'}],get:r=>String(r.status||'نشط').includes('موق')?'inactive':'active'},
+  {key:'permissionCount',label:'عدد الصلاحيات',type:'number',get:r=>Object.entries(r.permissions||{}).filter(([k,v])=>!k.startsWith('_')&&!!v).length}
+ ],[branchOptions,roleOptions]);
  const filteredUsers=useMemo(()=>users.filter(r=>{
   const f=accountFilter||{},status=String(r.status||'نشط');
   return (!f.branch||String(r.branch_id||'')===String(f.branch))
@@ -66,7 +79,7 @@ export default function Staff({initialTab=''}){
    &&(!f.mode||modeOf(r)===f.mode)
    &&(!f.status||(f.status==='active'?!status.includes('موق'):status.includes('موق')))
    &&matchesListQuery(f.q,r.name,r.username,r.phone,r.role,branchMap[String(r.branch_id)]||'',modeOf(r),status);
- }),[users,accountFilter,branchMap]);
+ }),[users,accountFilter,branchMap,accountRules,accountRuleFields,accountRuleMode]);
  const requesterOptions=useMemo(()=>[...new Set(approvals.map(a=>String(a.requested_by||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:userMap[v]?.name||v})),[approvals,userMap]);
  const isIDPerm=k=>ID_STUDIO_PERMISSION_KEYS.includes(k);const canGrant=k=>canEditPermissions&&(isDeveloper||(isIDPerm(k)?!!user?.permissions?.[k]:user?.role==='مدير عام'||user?.permissions?.all||!!user?.permissions?.[k]));const visibleHrPerms=canEditPermissions?GENERAL_PERMS.filter(([k])=>HR_PERMISSION_KEYS.has(k)&&canGrant(k)):[];const visibleGeneralPerms=canEditPermissions?GENERAL_PERMS.filter(([k])=>!HR_PERMISSION_KEYS.has(k)&&canGrant(k)):[];const visibleIdStudioPerms=canEditPermissions?ID_STUDIO_PERMISSIONS.filter(([k])=>canGrant(k)):[];const allowedRoles=canEditPermissions?ROLES.filter(r=>isDeveloper||rankOf(r)<=actorRank):['موظف'];const pendingPermissionApprovals=approvals.filter(x=>x.request_type==='staff_permission_change'&&x.status==='pending');
  const moduleTabs=useMemo(()=>[
@@ -93,7 +106,7 @@ export default function Staff({initialTab=''}){
  const reviewCols=[{key:'severity',label:'الخطورة',render:r=><Badge tone={r.severity==='critical'||r.severity==='high'?'red':'orange'}>{r.severity==='critical'?'حرجة':r.severity==='high'?'عالية':'متوسطة'}</Badge>},{key:'user_name',label:'الموظف',render:r=>r.user_name||'—'},{key:'title',label:'الملاحظة',render:r=><strong>{r.title}</strong>},{key:'details',label:'التفاصيل',render:r=>r.details||'—'}];
  const actions=<><Button onClick={()=>{refresh();loadApprovals();if(review||activeTab==='review')loadReview()}}><RefreshCw size={16}/> تحديث</Button>{activeTab==='review'&&canEditPermissions&&<Button onClick={loadReview} disabled={reviewBusy}><ShieldCheck size={16}/>{reviewBusy?'جاري الفحص...':'تشغيل الفحص الآن'}</Button>}{(canManageUsers||canEditPermissions)&&<Button variant="primary" onClick={add}><Plus size={16}/> موظف جديد</Button>}</>;
  return <><ModuleShell title="الموظفون والصلاحيات" subtitle="إدارة الحسابات والموافقات ومراجعة الصلاحيات من أقسام مستقلة" icon={UserCog} tabs={moduleTabs} activeTab={activeTab} onTabChange={id=>{setActiveTab(id);if(id==='review'&&!review)loadReview()}} actions={actions} breadcrumbs={[{label:'الموارد البشرية'},{label:moduleTabs.find(x=>x.id===activeTab)?.label||'حسابات الموظفين'}]}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
- {activeTab==='accounts'&&<Card><div className="card-title"><div><h3>حسابات الموظفين</h3><small>بيانات الحساب والدور والفرع ووضع التشغيل.</small></div><Badge>{users.length}</Badge></div><SmartListFilters storageKey="staff-accounts-filters" search={accountFilter.q} onSearchChange={v=>setAccountFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالاسم أو اسم المستخدم أو الجوال أو الدور..." totalCount={users.length} resultCount={filteredUsers.length} onReset={()=>setAccountFilter({q:'',branch:'',role:'',mode:'',status:''})} filters={[
+ {activeTab==='accounts'&&<Card><div className="card-title"><div><h3>حسابات الموظفين</h3><small>بيانات الحساب والدور والفرع ووضع التشغيل.</small></div><Badge>{users.length}</Badge></div><SmartListFilters storageKey="staff-accounts-filters" search={accountFilter.q} onSearchChange={v=>setAccountFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالاسم أو اسم المستخدم أو الجوال أو الدور..." totalCount={users.length} resultCount={filteredUsers.length} onReset={()=>{setAccountFilter({q:'',branch:'',role:'',mode:'',status:''});setAccountRules([]);setAccountRuleMode('all')}} advanced={{getValue:()=>({rules:accountRules,mode:accountRuleMode}),onApply:v=>{setAccountRules(Array.isArray(v?.rules)?v.rules:[]);setAccountRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={accountRuleFields} rules={accountRules} mode={accountRuleMode} onRulesChange={setAccountRules} onModeChange={setAccountRuleMode}/>}} filters={[
  {key:'branch',label:'الفرع',value:accountFilter.branch,onChange:v=>setAccountFilter(x=>({...x,branch:v})),options:branchOptions},
  {key:'role',label:'الدور',value:accountFilter.role,onChange:v=>setAccountFilter(x=>({...x,role:v})),options:roleOptions},
  {key:'mode',label:'وضع الحساب',value:accountFilter.mode,onChange:v=>setAccountFilter(x=>({...x,mode:v})),options:[{value:'training',label:'تدريب'},{value:'production',label:'تشغيل فعلي'}]},

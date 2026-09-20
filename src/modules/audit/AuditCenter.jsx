@@ -11,6 +11,8 @@ import AgentMergeModal from './AgentMergeModal.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
 import {DATE_PRESET_OPTIONS,dateKeyInTimeZone,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
@@ -84,6 +86,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes'),[auditBranch,setAuditBranch]=useState(''),[auditActor,setAuditActor]=useState(''),[auditDatePreset,setAuditDatePreset]=useState(''),[auditFromDate,setAuditFromDate]=useState(''),[auditToDate,setAuditToDate]=useState('');
  const [selectedAudit,setSelectedAudit]=useState(null);
+ const [auditRules,setAuditRules]=useState([]),[auditRuleMode,setAuditRuleMode]=useState('all');
  const [mergeOpen,setMergeOpen]=useState(false),[mergeGroup,setMergeGroup]=useState(null),[canonicalId,setCanonicalId]=useState(''),[duplicateId,setDuplicateId]=useState(''),[preview,setPreview]=useState(null),[previewBusy,setPreviewBusy]=useState(false),[mergeBusy,setMergeBusy]=useState(false),[mergeReason,setMergeReason]=useState(''),[confirmNo,setConfirmNo]=useState('');
  const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
  const [registryGroups,setRegistryGroups]=useState([]),[registrySummary,setRegistrySummary]=useState({}),[registryBusy,setRegistryBusy]=useState(false);
@@ -131,6 +134,16 @@ export default function AuditCenter({go,initialTab=''}) {
 
  const auditBranchOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
  const auditActorOptions=useMemo(()=>[...new Map(auditRows.map(r=>[String(r.actor_id||r.actor_name||'').trim(),{value:String(r.actor_id||r.actor_name||'').trim(),label:r.actor_name||r.actor_id||'النظام'}]).filter(([k])=>k)).values()].sort((a,b)=>a.label.localeCompare(b.label,'ar')),[auditRows]);
+ const auditRuleFields=useMemo(()=>[
+  {key:'actor',label:'المستخدم',options:auditActorOptions,get:r=>String(r.actor_id||r.actor_name||'')},
+  {key:'branch',label:'الفرع',options:auditBranchOptions,get:r=>String(r.branch_id||'')},
+  {key:'category',label:'التصنيف',options:Object.entries(categoryLabel).map(([value,label])=>({value,label})),get:r=>auditCategory(r)},
+  {key:'action',label:'العملية',get:r=>auditActionLabel(r.action)},
+  {key:'entityType',label:'نوع الكيان',get:r=>auditEntityLabel(r.entity_type)},
+  {key:'entityId',label:'رقم السجل',get:r=>r.entity_id},
+  {key:'actorRole',label:'دور المستخدم',get:r=>r.actor_role},
+  {key:'createdAt',label:'وقت العملية',type:'date',get:r=>r.created_at}
+ ],[auditActorOptions,auditBranchOptions]);
  const filteredAudit=useMemo(()=>{
   return auditRows.filter(r=>{
    if(auditMode==='changes'&&readOnlyAudit(r.action))return false;
@@ -259,7 +272,7 @@ export default function AuditCenter({go,initialTab=''}) {
     <Card><div className="stat-card"><ShieldCheck/><div><span>أمان وصلاحيات</span><strong>{auditCounts.security}</strong><small>تغييرات وموافقات</small></div></div></Card>
     <Card><div className="stat-card"><Activity/><div><span>مالية</span><strong>{auditCounts.finance}</strong><small>تحصيل واسترداد ومصروفات</small></div></div></Card>
    </div>
-   <Card><SmartListFilters storageKey="audit-center-filters" search={q} onSearchChange={setQ} searchPlaceholder="ابحث باسم المستخدم أو العملية أو الكيان أو رقم السجل..." totalCount={auditRows.length} resultCount={filteredAudit.length} onReset={()=>{setQ('');setCategory('all');setAuditMode('changes');setAuditBranch('');setAuditActor('');setAuditDatePreset('');setAuditFromDate('');setAuditToDate('')}} filters={[
+   <Card><SmartListFilters storageKey="audit-center-filters" search={q} onSearchChange={setQ} searchPlaceholder="ابحث باسم المستخدم أو العملية أو الكيان أو رقم السجل..." totalCount={auditRows.length} resultCount={filteredAudit.length} onReset={()=>{setQ('');setCategory('all');setAuditMode('changes');setAuditBranch('');setAuditActor('');setAuditDatePreset('');setAuditFromDate('');setAuditToDate('');setAuditRules([]);setAuditRuleMode('all')}} advanced={{getValue:()=>({rules:auditRules,mode:auditRuleMode}),onApply:v=>{setAuditRules(Array.isArray(v?.rules)?v.rules:[]);setAuditRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={auditRuleFields} rules={auditRules} mode={auditRuleMode} onRulesChange={setAuditRules} onModeChange={setAuditRuleMode}/>}} filters={[
     {key:'category',label:'القسم',value:category==='all'?'':category,onChange:v=>setCategory(v||'all'),options:[{value:'security',label:'أمان وصلاحيات'},{value:'operations',label:'تشغيل وحجوزات'},{value:'finance',label:'مالية'},{value:'hr',label:'HR وحضور'},{value:'system',label:'نظام'}]},
     {key:'mode',label:'نوع الحركة',value:auditMode==='changes'?'':auditMode,onChange:v=>setAuditMode(v||'changes'),options:[{value:'all',label:'كل الحركات التقنية'}],allLabel:'التغييرات المهمة فقط'},
     {key:'branch',label:'الفرع',value:auditBranch,onChange:setAuditBranch,options:auditBranchOptions},
