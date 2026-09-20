@@ -137,12 +137,14 @@ async function auditList(request,env){
   const actionFilter=low(q.get('action'));
   const entityType=low(q.get('entity_type'));
   const entityId=txt(q.get('entity_id'));
+  const entityIds=new Set(txt(q.get('entity_ids')).split(',').map(txt).filter(Boolean));
   const actorNeedle=low(q.get('actor'));
   const from=q.get('from')?timeMs(q.get('from')):0;
   const to=q.get('to')?timeMs(q.get('to')):0;
   if(actionFilter)rows=rows.filter(x=>low(x.action).includes(actionFilter));
   if(entityType)rows=rows.filter(x=>low(x.entity_type)===entityType);
   if(entityId)rows=rows.filter(x=>txt(x.entity_id)===entityId||txt(x.metadata?.canonical_id)===entityId||txt(x.metadata?.duplicate_id)===entityId);
+  if(entityIds.size)rows=rows.filter(x=>entityIds.has(txt(x.entity_id))||entityIds.has(txt(x.metadata?.canonical_id))||entityIds.has(txt(x.metadata?.duplicate_id)));
   if(actorNeedle)rows=rows.filter(x=>[x.actor_name,x.actor_id,x.actor_role].some(v=>low(v).includes(actorNeedle)));
   if(from)rows=rows.filter(x=>timeMs(x.created_at)>=from);
   if(to)rows=rows.filter(x=>timeMs(x.created_at)<=to);
