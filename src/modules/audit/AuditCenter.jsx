@@ -72,7 +72,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const {user}=useAuth();
  const {data,refresh}=useAppData();
  const canAudit=elevated(user)||has(user,'auditLog')||has(user,'managePermissions');
- const canReviewDuplicates=elevated(user)||has(user,'viewBookings')||has(user,'editBookings')||has(user,'editPassenger');
+ const canReviewDuplicates=elevated(user)||has(user,'editBookings')||has(user,'editPassenger');
  const canMerge=elevated(user)||has(user,'editBookings')||has(user,'editPassenger');
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes');
@@ -209,8 +209,8 @@ export default function AuditCenter({go,initialTab=''}) {
   <Modal open={!!selectedAudit} onClose={()=>setSelectedAudit(null)} title="تفاصيل حركة النظام" wide>
    {selectedAudit&&<div className="form-grid">
     <Card><div className="detail-grid"><div><span>العملية</span><strong>{auditActionLabel(selectedAudit.action)}</strong></div><div><span>الوقت</span><strong>{dateTime(selectedAudit.created_at)}</strong></div><div><span>المستخدم</span><strong>{selectedAudit.actor_name||selectedAudit.actor_id||'النظام'}</strong></div><div><span>الدور</span><strong>{selectedAudit.actor_role||'—'}</strong></div><div><span>الكيان</span><strong>{auditEntityLabel(selectedAudit.entity_type)}</strong></div><div><span>المعرّف</span><strong>{selectedAudit.entity_id||'—'}</strong></div></div></Card>
-    {selectedChanges.length>0&&<Card style={{gridColumn:'1/-1'}}><div className="card-title"><h3>قبل / بعد</h3><Badge>{selectedChanges.length}</Badge></div><Table rows={selectedChanges} columns={[{key:'label',label:'البيان'},{key:'before',label:'قبل'},{key:'after',label:'بعد'}]}/></Card>}
-    <Card style={{gridColumn:'1/-1'}}><div className="card-title"><h3>تفاصيل المصدر</h3></div><div className="detail-grid"><div><span>المصدر</span><strong>{selectedMeta.source||'—'}</strong></div><div><span>المسار</span><strong dir="ltr">{selectedMeta.path||'—'}</strong></div><div><span>الجدول</span><strong>{selectedMeta.table||'—'}</strong></div><div><span>الحالة</span><strong>{selectedMeta.status||'—'}</strong></div>{selectedMeta.reason&&<div><span>السبب</span><strong>{selectedMeta.reason}</strong></div>}</div></Card>
+    {selectedChanges.length>0&&<div style={{gridColumn:'1/-1'}}><Card><div className="card-title"><h3>قبل / بعد</h3><Badge>{selectedChanges.length}</Badge></div><Table rows={selectedChanges} columns={[{key:'label',label:'البيان'},{key:'before',label:'قبل'},{key:'after',label:'بعد'}]}/></Card></div>}
+    <div style={{gridColumn:'1/-1'}}><Card><div className="card-title"><h3>تفاصيل المصدر</h3></div><div className="detail-grid"><div><span>المصدر</span><strong>{selectedMeta.source||'—'}</strong></div><div><span>المسار</span><strong dir="ltr">{selectedMeta.path||'—'}</strong></div><div><span>الجدول</span><strong>{selectedMeta.table||'—'}</strong></div><div><span>الحالة</span><strong>{selectedMeta.status||'—'}</strong></div>{selectedMeta.reason&&<div><span>السبب</span><strong>{selectedMeta.reason}</strong></div>}</div></Card></div>
     <div className="modal-actions" style={{gridColumn:'1/-1'}}><Button onClick={()=>setSelectedAudit(null)}>إغلاق</Button>{sourcePath(selectedAudit)&&<Button variant="primary" onClick={()=>{const p=sourcePath(selectedAudit);setSelectedAudit(null);go?.(p)}}><Wrench size={15}/> فتح المصدر</Button>}</div>
    </div>}
   </Modal>
