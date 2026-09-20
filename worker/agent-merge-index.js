@@ -29,7 +29,7 @@ async function rpc(env,name,body){
 const sovereign=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'||u.permissions?.all===true);
 const globalScope=u=>!!u&&(sovereign(u)||u.permissions?.allBranches===true);
 const canReviewRegistry=u=>!!u&&(globalScope(u)||u.permissions?.auditLog===true||u.permissions?.managePermissions===true);
-const canReviewAgents=u=>!!u&&(canReviewRegistry(u)||u.permissions?.agents===true||u.permissions?.finance===true||u.permissions?.suppliers===true);
+const canReviewAgents=u=>!!u&&(canReviewRegistry(u)||u.permissions?.agents===true||u.permissions?.finance===true);
 const canMergeAgents=u=>!!u&&(sovereign(u)||(u.permissions?.editBookings===true&&u.permissions?.finance===true));
 
 function agentMatch(a,b){
