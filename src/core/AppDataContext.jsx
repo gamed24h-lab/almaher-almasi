@@ -9,7 +9,7 @@ const LICENSE_RE=/\[ALMAHER_BRANCH_LICENSE:([^\]]*)\]/i;
 const branchLicense=b=>text(b?.license_number||b?.license_no||b?.travel_license_number||b?.travel_license_no)||text(text(b?.notes).match(LICENSE_RE)?.[1]);
 const naturalCollator=new Intl.Collator('ar',{numeric:true,sensitivity:'base'});
 const bookingDisplayNumber=b=>text(b?.booking_number)||text(b?.booking_no)||text(b?.code)||text(b?.reference)||text(b?.id);
-const inactivePassenger=p=>['cancelled','canceled','refunded','deleted','removed','ملغي'].includes(text(p?.status).toLowerCase());
+const inactivePassenger=p=>['cancelled','canceled','refunded','deleted','removed','merged','ملغي'].includes(text(p?.status).toLowerCase());
 function normalizeBootstrap(raw){
  const x=raw&&typeof raw==='object'?raw:{};
  const branches=Array.isArray(x.branches)?x.branches.map(b=>({...b,license_number:branchLicense(b)})):[];
