@@ -98,6 +98,16 @@ async function finalizeEmployeeDeleteGroup(env,groupId){
  }
  await rest(env,'attendance_employee_delete_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'success',success_count:success.length,failed_count:0,result_summary:{deleted_from_devices:success.length},completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
 }
+async function queueHistoricalFallback(env,cmd,rc){
+ if(!cmd||cmd.command_type!=='history_attlog'||rc!==-3)return false;
+ const strategy=txt(cmd?.metadata?.history_strategy);
+ if(strategy==='plain')return false;
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(cmd.device_id)+'&command_type=eq.history_attlog&status=in.(queued,sent)&select=id,metadata&order=id.desc&limit=20').catch(()=>[]);
+ if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain'))return false;
+ const metadata={...(cmd.metadata||{}),history_strategy:'plain',fallback_from_command_id:cmd.id,fallback_reason:'device_return_-3'};
+ await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:cmd.device_id,command_type:'history_attlog',command_text:'DATA QUERY ATTLOG',metadata,created_by:cmd.created_by||null},prefer:'return=minimal'});
+ return true;
+}
 async function completeDeviceCommand(env,body){
  const raw=String(body||''),lines=raw.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),groups=new Set();
  for(const line of lines){
@@ -105,7 +115,9 @@ async function completeDeviceCommand(env,body){
   if(!id)continue;
   const now=new Date().toISOString();
   const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
-  const cmd=rows?.[0];if(cmd?.command_type==='delete_employee_user'&&cmd.operation_group_id)groups.add(String(cmd.operation_group_id));
+  const cmd=rows?.[0];
+  if(cmd?.command_type==='history_attlog'&&rc===-3)await queueHistoricalFallback(env,cmd,rc).catch(()=>false);
+  if(cmd?.command_type==='delete_employee_user'&&cmd.operation_group_id)groups.add(String(cmd.operation_group_id));
  }
  for(const groupId of groups)await finalizeEmployeeDeleteGroup(env,groupId);
 }
@@ -423,7 +435,7 @@ async function importHistoricalAttendance(env,me,body){
  let queued=false;
  if(!existing?.length){
   const now=deviceLocalNow();
-  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now}]);
+  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
   queued=true;
  }
  await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
@@ -629,7 +641,7 @@ async function attendanceState(env,me,url){
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
  const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
    rest(env,'attendance_device_users?select=id,device_id,serial_number,device_pin,name,privilege,card_number,group_no,timezone_raw,verify_mode,data_environment,source_table,first_seen_at,last_seen_at'+inFilter+'&order=device_pin.asc'),
-   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
+   rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,result_body,command_text,metadata,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
  ]):[[],[],[]];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));

@@ -12,7 +12,15 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
-function cmdName(v){return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?'الحركات القديمة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
+function cmdName(v,meta){return v==='sync_info'?'معلومات الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(meta?.history_strategy==='plain'?'الحركات القديمة — بديل':'الحركات القديمة'):v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
+function cmdReason(c){
+ if(c?.status!=='failed')return '';
+ const code=Number(c?.result_code);
+ if(c?.command_type==='history_attlog'&&code===-3){
+  return c?.metadata?.history_strategy==='plain'?'الجهاز رفض أيضًا طريقة السحب البديلة (Code -3).':'الجهاز رفض صيغة طلب السجل المحددة بالمدة (Code -3). النظام يجرب الطريقة البديلة تلقائيًا.';
+ }
+ return c?.result_code==null?'تعذر تنفيذ الأمر ولم يرسل الجهاز رمز نتيجة.':'رمز نتيجة الجهاز: '+String(c.result_code);
+}
 const blankUser={device_id:'',device_pin:'',name:'',privilege:0,card_number:'',group_no:'1',timezone_raw:'0000000100000000',verify_mode:0};
 const blankShift={id:'',device_id:'',name:'',start_time:'08:00',end_time:'17:00',grace_minutes:10,sequence_no:1,active:true,notes:''};
 
@@ -90,7 +98,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice})
   {key:'shifts',label:'فترات الدوام',render:d=>{const rows=shiftsByDevice.get(String(d.id))||[];return rows.length?<div style={{display:'grid',gap:2}}>{rows.slice(0,3).map(x=><span key={x.id} className="muted-small"><Clock3 size={12}/> {x.name}: {String(x.start_time).slice(0,5)} — {String(x.end_time).slice(0,5)}</span>)}{rows.length>3&&<span className="muted-small">+ {rows.length-3} فترات أخرى</span>}</div>:<Badge tone="orange">غير محددة</Badge>}},
   {key:'reported',label:'الموجود بالجهاز',render:d=><div><strong>{d.reported_user_count??'—'} موظف</strong><div className="muted-small">{d.reported_fp_count??'—'} قالب بصمة · {d.reported_face_count??'—'} وجه</div><div className="muted-small">{d.reported_transaction_count??'—'} حركة معلنة</div></div>},
   {key:'synced',label:'المسحوب للنظام',render:d=>{const us=usersByDevice.get(String(d.id))||[],imported=us.filter(u=>linkMap.get(String(d.id)+'|'+String(u.device_pin))?.attendance_employee_id).length;return <div><strong>{us.length} موظف مسحوب</strong><div className="muted-small">{imported} مستورد كموظف حضور</div></div>}},
-  {key:'command',label:'حالة آخر أوامر',render:d=>{const rows=(commandsByDevice.get(String(d.id))||[]).slice(0,4);return rows.length?<div style={{display:'grid',gap:4}}>{rows.map(c=><div key={c.id} style={{display:'flex',gap:6,alignItems:'center',justifyContent:'space-between'}}><span className="muted-small">{cmdName(c.command_type)}</span><Badge tone={c.status==='success'?'green':c.status==='failed'?'red':'orange'}>{cmdLabel(c.status)}</Badge></div>)}</div>:'—'}},
+  {key:'command',label:'حالة آخر أوامر',render:d=>{const rows=(commandsByDevice.get(String(d.id))||[]).slice(0,4);return rows.length?<div style={{display:'grid',gap:6}}>{rows.map(c=><div key={c.id} style={{display:'flex',gap:8,alignItems:'flex-start',justifyContent:'space-between'}}><div><span className="muted-small">{cmdName(c.command_type,c.metadata)}</span>{c.status==='failed'&&<div className="muted-small" style={{marginTop:2,maxWidth:260}}>{cmdReason(c)}</div>}</div><Badge tone={c.status==='success'?'green':c.status==='failed'?'red':'orange'}>{cmdLabel(c.status)}</Badge></div>)}</div>:'—'}},
   {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id,count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions">{state.permissions?.manage_devices&&<Button onClick={()=>openShifts(d)}><Clock3 size={15}/> فترات الدوام</Button>}{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><DownloadCloud size={15}/>{active?' جاري السحب...':' سحب بيانات الجهاز'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}{state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>importHistory(d)} disabled={historyBusy===d.id||active}><History size={15}/>{historyBusy===d.id?' جاري الاستيراد...':' استيراد الحركات القديمة'}</Button>}</div>}}
  ];
  const userCols=[
