@@ -10,6 +10,7 @@ import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import AgentMergeModal from './AgentMergeModal.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import {DATE_PRESET_OPTIONS,dateKeyInTimeZone,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
 
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
@@ -81,7 +82,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const canMergeAttendance=elevated(user)||has(user,'attendance_manage_employees');
  const canReviewRegistry=canAudit;
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
- const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes'),[auditBranch,setAuditBranch]=useState(''),[auditActor,setAuditActor]=useState('');
+ const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes'),[auditBranch,setAuditBranch]=useState(''),[auditActor,setAuditActor]=useState(''),[auditDatePreset,setAuditDatePreset]=useState(''),[auditFromDate,setAuditFromDate]=useState(''),[auditToDate,setAuditToDate]=useState('');
  const [selectedAudit,setSelectedAudit]=useState(null);
  const [mergeOpen,setMergeOpen]=useState(false),[mergeGroup,setMergeGroup]=useState(null),[canonicalId,setCanonicalId]=useState(''),[duplicateId,setDuplicateId]=useState(''),[preview,setPreview]=useState(null),[previewBusy,setPreviewBusy]=useState(false),[mergeBusy,setMergeBusy]=useState(false),[mergeReason,setMergeReason]=useState(''),[confirmNo,setConfirmNo]=useState('');
  const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
@@ -136,13 +137,15 @@ export default function AuditCenter({go,initialTab=''}) {
    if(category!=='all'&&auditCategory(r)!==category)return false;
    if(auditBranch&&String(r.branch_id||'')!==String(auditBranch))return false;
    if(auditActor&&String(r.actor_id||r.actor_name||'')!==String(auditActor))return false;
+   if(!isWithinDateRange(r.created_at,auditFromDate,auditToDate))return false;
    return matchesListQuery(q,r.actor_name,r.actor_role,r.actor_id,r.action,auditActionLabel(r.action),r.entity_type,auditEntityLabel(r.entity_type),r.entity_id,branchMap.get(String(r.branch_id))?.name,JSON.stringify(r.metadata||{}));
   });
- },[auditRows,q,category,auditMode,auditBranch,auditActor,branchMap]);
+ },[auditRows,q,category,auditMode,auditBranch,auditActor,auditFromDate,auditToDate,branchMap]);
 
+ function applyAuditDatePreset(v){setAuditDatePreset(v);if(!v){setAuditFromDate('');setAuditToDate('');return}if(v==='custom')return;const r=dateRangeForPreset(v);setAuditFromDate(r.from);setAuditToDate(r.to)}
  const auditCounts=useMemo(()=>({
   total:filteredAudit.length,
-  today:filteredAudit.filter(r=>String(r.created_at||'').slice(0,10)===new Date().toISOString().slice(0,10)).length,
+  today:filteredAudit.filter(r=>dateKeyInTimeZone(r.created_at)===dateKeyInTimeZone(new Date())).length,
   security:filteredAudit.filter(r=>auditCategory(r)==='security').length,
   finance:filteredAudit.filter(r=>auditCategory(r)==='finance').length
  }),[filteredAudit]);
@@ -256,11 +259,14 @@ export default function AuditCenter({go,initialTab=''}) {
     <Card><div className="stat-card"><ShieldCheck/><div><span>أمان وصلاحيات</span><strong>{auditCounts.security}</strong><small>تغييرات وموافقات</small></div></div></Card>
     <Card><div className="stat-card"><Activity/><div><span>مالية</span><strong>{auditCounts.finance}</strong><small>تحصيل واسترداد ومصروفات</small></div></div></Card>
    </div>
-   <Card><SmartListFilters storageKey="audit-center-filters" search={q} onSearchChange={setQ} searchPlaceholder="ابحث باسم المستخدم أو العملية أو الكيان أو رقم السجل..." totalCount={auditRows.length} resultCount={filteredAudit.length} onReset={()=>{setQ('');setCategory('all');setAuditMode('changes');setAuditBranch('');setAuditActor('')}} filters={[
+   <Card><SmartListFilters storageKey="audit-center-filters" search={q} onSearchChange={setQ} searchPlaceholder="ابحث باسم المستخدم أو العملية أو الكيان أو رقم السجل..." totalCount={auditRows.length} resultCount={filteredAudit.length} onReset={()=>{setQ('');setCategory('all');setAuditMode('changes');setAuditBranch('');setAuditActor('');setAuditDatePreset('');setAuditFromDate('');setAuditToDate('')}} filters={[
     {key:'category',label:'القسم',value:category==='all'?'':category,onChange:v=>setCategory(v||'all'),options:[{value:'security',label:'أمان وصلاحيات'},{value:'operations',label:'تشغيل وحجوزات'},{value:'finance',label:'مالية'},{value:'hr',label:'HR وحضور'},{value:'system',label:'نظام'}]},
     {key:'mode',label:'نوع الحركة',value:auditMode==='changes'?'':auditMode,onChange:v=>setAuditMode(v||'changes'),options:[{value:'all',label:'كل الحركات التقنية'}],allLabel:'التغييرات المهمة فقط'},
     {key:'branch',label:'الفرع',value:auditBranch,onChange:setAuditBranch,options:auditBranchOptions},
-    {key:'actor',label:'المستخدم',value:auditActor,onChange:setAuditActor,options:auditActorOptions}
+    {key:'actor',label:'المستخدم',value:auditActor,onChange:setAuditActor,options:auditActorOptions},
+    {key:'datePreset',label:'الفترة',value:auditDatePreset,onChange:applyAuditDatePreset,options:DATE_PRESET_OPTIONS},
+    {key:'fromDate',label:'من تاريخ',value:auditFromDate,onChange:v=>{setAuditFromDate(v);setAuditDatePreset(v||auditToDate?'custom':'')},render:()=> <Input type="date" value={auditFromDate} onChange={e=>{setAuditFromDate(e.target.value);setAuditDatePreset(e.target.value||auditToDate?'custom':'')}}/>},
+    {key:'toDate',label:'إلى تاريخ',value:auditToDate,onChange:v=>{setAuditToDate(v);setAuditDatePreset(auditFromDate||v?'custom':'')},render:()=> <Input type="date" value={auditToDate} onChange={e=>{setAuditToDate(e.target.value);setAuditDatePreset(auditFromDate||e.target.value?'custom':'')}}/>}
    ]}/></Card>
    <Card><div className="card-title"><div><h3>الخط الزمني للنظام</h3><small>يجمع سجل النشاط العام مع سجل التدقيق التفصيلي. العمليات التي سجلت Snapshot تعرض قبل/بعد تلقائيًا.</small></div><div className="finance-actions"><Badge tone="green">تفصيلي {auditSummary?.sources?.detailed||0}</Badge><Badge>عام {auditSummary?.sources?.activity||0}</Badge></div></div><Table preferenceKey="audit-center" defaultPageSize={25} rows={filteredAudit} columns={auditCols}/></Card>
   </>)}

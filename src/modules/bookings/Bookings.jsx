@@ -10,6 +10,7 @@ import {has} from '../../lib/permissions.js';
 import {bookingFinanceNumbers,bookingFinancialState} from '../../lib/bookingFinance.js';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import {DATE_PRESET_OPTIONS,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
 
 const num=v=>Number(v||0);
 const lower=v=>String(v??'').trim().toLowerCase();
@@ -24,7 +25,7 @@ function timelineValue(v){
 
 export default function Bookings({go,query=''}){
  const {user}=useAuth();const {data,refresh}=useAppData();
- const [q,setQ]=useState(query),[status,setStatus]=useState('active'),[tripId,setTripId]=useState(''),[branchId,setBranchId]=useState(''),[financial,setFinancial]=useState('all'),[sort,setSort]=useState('newest');
+ const [q,setQ]=useState(query),[status,setStatus]=useState('active'),[tripId,setTripId]=useState(''),[branchId,setBranchId]=useState(''),[financial,setFinancial]=useState('all'),[sort,setSort]=useState('newest'),[datePreset,setDatePreset]=useState(''),[fromDate,setFromDate]=useState(''),[toDate,setToDate]=useState('');
  const [timeline,setTimeline]=useState(null),[timelineBusy,setTimelineBusy]=useState(false),[timelineError,setTimelineError]=useState('');
  const [cancelTarget,setCancelTarget]=useState(null),[cancelQuote,setCancelQuote]=useState(null),[cancelReason,setCancelReason]=useState(''),[cancelOther,setCancelOther]=useState(''),[cancelMode,setCancelMode]=useState(''),[cancelRefundMethod,setCancelRefundMethod]=useState('cash'),[cancelBusy,setCancelBusy]=useState(false),[cancelError,setCancelError]=useState('');
  const [statusTarget,setStatusTarget]=useState(null),[statusValue,setStatusValue]=useState('confirmed'),[statusBusy,setStatusBusy]=useState(false),[statusError,setStatusError]=useState('');
@@ -44,6 +45,7 @@ export default function Bookings({go,query=''}){
      if(status!=='all'&&status!=='active'&&st!==status)return false;
      if(tripId&&String(b.trip_id)!==String(tripId)&&String(b.return_trip_id)!==String(tripId))return false;
      if(branchId&&String(b.branch_id)!==String(branchId))return false;
+     if(!isWithinDateRange(b.created_at||b.booking_date||b.created_on,fromDate,toDate))return false;
      const fs=bookingFinancialState(b,refundedFor(b)).code;
      if(financial!=='all'&&fs!==financial)return false;
      if(!String(s||'').trim())return true;
@@ -52,7 +54,7 @@ export default function Bookings({go,query=''}){
    });
    out.sort((a,b)=>{if(sort==='oldest')return String(a.created_at||a.booking_number||'').localeCompare(String(b.created_at||b.booking_number||''));if(sort==='remaining')return bookingFinanceNumbers(b,refundedFor(b)).remaining-bookingFinanceNumbers(a,refundedFor(a)).remaining;return String(b.created_at||b.booking_number||'').localeCompare(String(a.created_at||a.booking_number||''))});
    return out;
- },[data.bookings,q,status,tripId,branchId,financial,sort,tripMap,passengerMap,refundSummary]);
+ },[data.bookings,q,status,tripId,branchId,financial,sort,datePreset,fromDate,toDate,tripMap,passengerMap,refundSummary]);
  const tripFilterOptions=useMemo(()=>(data.trips||[]).map(t=>({value:String(t.id),label:tripDisplay(t),searchText:[t.trip_code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date]})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.trips]);
  const branchFilterOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
  const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.gross+=f.gross;x.net+=f.netRaw;x.refunded+=f.refund;if(activeForFinance(b)){x.remaining+=f.remaining;x.credit+=f.credit}x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,gross:0,net:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
@@ -63,8 +65,9 @@ export default function Bookings({go,query=''}){
  ],[rows.length]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:bookings',moduleTabs,query?'bookings':'overview');
  useEffect(()=>{if(query)setActiveTab('bookings')},[query]);
- function clear(){setQ('');setStatus('active');setTripId('');setBranchId('');setFinancial('all');setSort('newest')}
- function applySavedView(v={}){setQ(v.q||'');setStatus(v.status||'active');setTripId(v.tripId||'');setBranchId(v.branchId||'');setFinancial(v.financial||'all');setSort(v.sort||'newest');setActiveTab('bookings')}
+ function applyBookingDatePreset(v){setDatePreset(v);if(!v){setFromDate('');setToDate('');return}if(v==='custom')return;const r=dateRangeForPreset(v);setFromDate(r.from);setToDate(r.to)}
+ function clear(){setQ('');setStatus('active');setTripId('');setBranchId('');setFinancial('all');setSort('newest');setDatePreset('');setFromDate('');setToDate('')}
+ function applySavedView(v={}){setQ(v.q||'');setStatus(v.status||'active');setTripId(v.tripId||'');setBranchId(v.branchId||'');setFinancial(v.financial||'all');setSort(v.sort||'newest');setDatePreset(v.datePreset||'');setFromDate(v.fromDate||'');setToDate(v.toDate||'');setActiveTab('bookings')}
  async function refreshAll(){await refresh();await loadRefundSummary()}
  function wa(b,e){e.stopPropagation();const href=`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(`شركة الماهر الماسي\nرقم الحجز: ${b.booking_number}\nالعميل: ${b.customer_name||''}`)}`;window.open(href,'_blank')}
  async function openTimeline(b,e){e?.stopPropagation();setTimeline({booking:b,events:[]});setTimelineBusy(true);setTimelineError('');try{const out=await api.bookingTimeline(b.booking_number);setTimeline({booking:out.booking||b,events:out.events||[],count:out.count||0})}catch(x){setTimelineError(x.message)}finally{setTimelineBusy(false)}}
@@ -90,6 +93,9 @@ export default function Bookings({go,query=''}){
     {key:'financial',label:'الحالة المالية',value:financial,onChange:setFinancial,options:[{value:'all',label:'كل الحالات المالية'},{value:'paid',label:'مسدد'},{value:'partial',label:'مدفوع جزئيًا'},{value:'unpaid',label:'غير مسدد'},{value:'credit',label:'رصيد للعميل'},{value:'refunded',label:'مسترد بالكامل'},{value:'no_value',label:'بدون قيمة'},{value:'mismatch',label:'عدم تطابق مالي'}]},
     {key:'tripId',label:'الرحلة',value:tripId,onChange:setTripId,options:tripFilterOptions},
     {key:'branchId',label:'الفرع',value:branchId,onChange:setBranchId,options:branchFilterOptions},
+    {key:'datePreset',label:'الفترة',value:datePreset,onChange:applyBookingDatePreset,options:DATE_PRESET_OPTIONS},
+    {key:'fromDate',label:'من تاريخ',value:fromDate,onChange:v=>{setFromDate(v);setDatePreset(v||toDate?'custom':'')},render:()=> <Input type="date" value={fromDate} onChange={e=>{setFromDate(e.target.value);setDatePreset(e.target.value||toDate?'custom':'')}}/>},
+    {key:'toDate',label:'إلى تاريخ',value:toDate,onChange:v=>{setToDate(v);setDatePreset(fromDate||v?'custom':'')},render:()=> <Input type="date" value={toDate} onChange={e=>{setToDate(e.target.value);setDatePreset(fromDate||e.target.value?'custom':'')}}/>},
     {key:'sort',label:'الترتيب',value:sort,onChange:setSort,options:[{value:'newest',label:'الأحدث أولًا'},{value:'oldest',label:'الأقدم أولًا'},{value:'remaining',label:'الأعلى متبقيًا'}]}
    ]}/>
    <div className="table-summary"><span>الحجوزات: <b>{rows.length}</b></span><span><UsersRound size={14}/> المسافرون: <b>{totals.passengers}</b></span><span>الإجمالي: <b>{money(totals.total)}</b></span><span>التحصيل التاريخي: <b>{money(totals.gross)}</b></span><span>المحصل الصافي: <b>{money(totals.net)}</b></span><span>المسترد: <b>{money(totals.refunded)}</b></span><span>المتبقي: <b>{money(totals.remaining)}</b></span>{totals.credit>0&&<span>رصيد العملاء: <b>{money(totals.credit)}</b></span>}</div>
