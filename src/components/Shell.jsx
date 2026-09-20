@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {LayoutDashboard,BusFront,MapPinned,ClipboardList,Users,Hotel,Armchair,Truck,WalletCards,Receipt,ScanLine,HeartHandshake,FileText,BellRing,RotateCcw,ShieldCheck,ShieldAlert,Activity,BarChart3,Code2,LogOut,PanelRightClose,PanelRightOpen,Search,Globe2,Building2,Handshake,CheckSquare2,ChevronDown,Palette,Fingerprint,Menu,X,BriefcaseBusiness,Settings2,UserRoundCog,Layers3} from 'lucide-react';
+import {LayoutDashboard,BusFront,MapPinned,ClipboardList,Users,Hotel,Armchair,Truck,WalletCards,Receipt,ScanLine,HeartHandshake,FileText,BellRing,RotateCcw,ShieldCheck,ShieldAlert,Activity,BarChart3,Code2,LogOut,PanelRightClose,PanelRightOpen,Search,Globe2,Building2,Handshake,CheckSquare2,ChevronDown,Palette,Fingerprint,Menu,X,BriefcaseBusiness,Settings2,UserRoundCog,Layers3,HandCoins} from 'lucide-react';
 import {useAuth} from '../core/AuthContext.jsx';
 import {useAppData} from '../core/AppDataContext.jsx';
 import {useLanguage} from '../core/LanguageContext.jsx';
@@ -25,6 +25,7 @@ const items=[
  {p:'/refunds',key:'refunds',Icon:Receipt,perms:['refunds','refund_request','refund_approve','refund_complete'],group:'finance'},
  {p:'/wallets',key:'wallets',Icon:WalletCards,perms:['payments','refunds','viewBookings'],group:'finance'},
  {p:'/partners',key:'partners',Icon:Handshake,perms:['finance','agents','suppliers'],group:'finance'},
+ {p:'/collections',key:'agentCollections',Icon:HandCoins,perms:['finance','payments','reports','allBranchesFinance'],group:'finance'},
  {p:'/staff',key:'staff',Icon:Users,perms:['manageUsers','managePermissions'],group:'hr'},
  {p:'/attendance',key:'attendance',Icon:Fingerprint,perms:['attendance_view','attendance_manage_devices','attendance_manage_links','attendance_manage_employees','attendance_manage_biometrics','attendance_manage_schedules','attendance_manage_policies','attendance_review_violations','attendance_close_month','attendance_reopen_month','attendance_delete_employees','attendance_reports'],group:'hr'},
  {p:'/id-studio',key:'idStudio',Icon:ShieldCheck,perms:['id_studio_access'],group:'hr'},
@@ -63,7 +64,7 @@ export default function Shell({children,route,go}){
  const bookingMap=useMemo(()=>new Map((data.bookings||[]).map(b=>[String(b.id),b])),[data.bookings]);
  const searchResults=useMemo(()=>{const k=text(q).trim();if(k.length<2)return[];const out=[];for(const b of data.bookings||[]){if([b.booking_number,b.customer_name,b.customer_phone,b.customer_identity].some(v=>text(v).includes(k)))out.push({key:`b-${b.id}`,title:`${t('booking')} ${b.booking_number}`,sub:`${b.customer_name||''} · ${b.customer_phone||''}`,path:`/bookings/${encodeURIComponent(b.booking_number)}`})}for(const p of data.passengers||[]){if([p.full_name,p.identity_number,p.phone,p.nationality].some(v=>text(v).includes(k))){const b=bookingMap.get(String(p.booking_id));out.push({key:`p-${p.id}`,title:`${t('passenger')} — ${p.full_name||''}`,sub:`${p.identity_number||''}${b?.booking_number?` · ${t('booking')} ${b.booking_number}`:''}`,path:b?`/bookings/${encodeURIComponent(b.booking_number)}`:'/passengers'})}}for(const tr of data.trips||[]){if([tr.trip_code,tr.code,tr.name,tr.from_city,tr.origin,tr.to_city,tr.destination,tr.departure_date].some(v=>text(v).includes(k)))out.push({key:`t-${tr.id}`,title:`${t('trip')} ${tr.trip_code||tr.code||''}`,sub:`${tr.from_city||tr.origin||''} ← ${tr.to_city||tr.destination||''} · ${tr.departure_date||''}`,path:`/trips/${encodeURIComponent(tr.id)}`})}return out.slice(0,10)},[q,data,bookingMap,t]);
 
- const labelFor=x=>x.key==='destinations'?'إدارة الوجهات':x.key==='wallets'?'محافظ العملاء':x.key==='attendance'?'الحضور والبصمة':x.key==='idStudio'?'بطاقات ID':x.key==='workflow'?'مركز الإجراءات':x.key==='qualityCenter'?'جودة البيانات':x.key==='auditCenter'?'السجل والتكرارات':t(x.key);
+ const labelFor=x=>x.key==='agentCollections'?'تحصيل الوكلاء':x.key==='destinations'?'إدارة الوجهات':x.key==='wallets'?'محافظ العملاء':x.key==='attendance'?'الحضور والبصمة':x.key==='idStudio'?'بطاقات ID':x.key==='workflow'?'مركز الإجراءات':x.key==='qualityCenter'?'جودة البيانات':x.key==='auditCenter'?'السجل والتكرارات':t(x.key);
  const grouped=useMemo(()=>groups.map(g=>({...g,items:visible.filter(x=>x.group===g.id)})).filter(g=>g.items.length),[visible]);
  const mobilePrimary=useMemo(()=>{const priority=['/','/bookings','/operations','/attendance'];const selected=[];for(const p of priority){const x=visible.find(v=>v.p===p);if(x)selected.push(x)}for(const x of visible){if(selected.length>=4)break;if(!selected.some(a=>a.p===x.p)&&!['/developer','/customer'].includes(x.p))selected.push(x)}return selected.slice(0,4)},[visible]);
 
