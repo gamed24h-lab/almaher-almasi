@@ -845,8 +845,8 @@ async function attendanceState(env,me,url){
  const historySummaryMap=new Map(deviceHealthHistory.map(x=>[String(x.device_id),x])),dayMs=86400000,devicePredictiveAlerts=[];
  for(const device of devices||[]){
   if(device.status!=='active')continue;
-  const id=String(device.id),health=healthMap.get(id)||{},hist=historySummaryMap.get(id)||{},events=eventsMap.get(id)||[],profile=device?.metadata?.history_profile||{};
-  const expectedCompatibilityFailure=ev=>ev.event_type==='command_failed'&&Number(ev.result_code)===-3&&profile.preferred_mode==='push_replay'&&txt(ev?.metadata?.command_type)==='history_attlog';
+  const id=String(device.id),health=healthMap.get(id)||{},hist=historySummaryMap.get(id)||{},events=eventsMap.get(id)||[],profile=device?.metadata?.history_profile||{},pushReplayKnown=profile.preferred_mode==='push_replay'||!!device?.metadata?.history_replay_completed_at;
+  const expectedCompatibilityFailure=ev=>ev.event_type==='command_failed'&&Number(ev.result_code)===-3&&pushReplayKnown&&txt(ev?.metadata?.command_type)==='history_attlog';
   const operationalFailures=events.filter(ev=>ev.event_type==='command_failed'&&!expectedCompatibilityFailure(ev));
   const gaps=events.filter(ev=>ev.event_type==='disconnect_gap');
   const inWindow=(ev,from,to=nowMs)=>{const t=new Date(ev.started_at).getTime();return Number.isFinite(t)&&t>=from&&t<to};
