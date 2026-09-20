@@ -3,6 +3,8 @@ import {CalendarDays,Clock3,Plus,RefreshCw,Trash2,UploadCloud,Users} from 'lucid
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 
 const DAYS=[['0','الأحد'],['1','الاثنين'],['2','الثلاثاء'],['3','الأربعاء'],['4','الخميس'],['5','الجمعة'],['6','السبت']];
 const ALL_DAYS=[0,1,2,3,4,5,6];
@@ -18,6 +20,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState('');
  const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false);
  const deleteTimer=useRef(null);
+ const [listFilter,setListFilter]=useState({q:'',branch:'',department:'',status:'',device:''});
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
@@ -26,6 +29,18 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const linksMap=useMemo(()=>{const m=new Map();for(const l of links){if(!l.attendance_employee_id||!l.active)continue;const k=String(l.attendance_employee_id),a=m.get(k)||[];a.push(l);m.set(k,a)}return m},[links]);
  const deleteMap=useMemo(()=>{const m=new Map();for(const r of deleteRequests){const k=String(r.attendance_employee_id||'');if(k&&!m.has(k))m.set(k,r)}return m},[deleteRequests]);
  const rulesMap=useMemo(()=>{const m=new Map();for(const r of calendarRules){const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.start_date).localeCompare(String(x.start_date)));return m},[calendarRules]);
+
+ const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
+ const departmentOptions=useMemo(()=>[...new Set(employees.map(e=>String(e.department||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[employees]);
+ const employeeDeviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
+ const filteredEmployees=useMemo(()=>employees.filter(r=>{
+  const ls=linksMap.get(String(r.id))||[];
+  return (!listFilter.branch||String(r.branch_id)===String(listFilter.branch))
+   &&(!listFilter.department||String(r.department||'')===String(listFilter.department))
+   &&(!listFilter.status||String(r.status||'active')===String(listFilter.status))
+   &&(!listFilter.device||ls.some(l=>String(l.device_id)===String(listFilter.device)))
+   &&matchesListQuery(listFilter.q,r.employee_code,r.name,r.phone,r.national_id,r.department,r.job_title,branchMap.get(String(r.branch_id)),ls.map(l=>deviceMap.get(String(l.device_id))?.name));
+ }),[employees,listFilter,linksMap,branchMap,deviceMap]);
 
  const availableTemplates=useMemo(()=>{
   const branchDevices=new Set(devices.filter(d=>!form.branch_id||String(d.branch_id)===String(form.branch_id)).map(d=>String(d.id)));
@@ -157,7 +172,12 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const needsTime=['permission','overtime','work_override'].includes(ruleForm.rule_type);
  const needsGrace=ruleForm.rule_type==='work_override';
 
- return <><Card><div className="card-title"><div><h3><Users size={19}/> موظفو الحضور</h3><small>جدول أسبوعي مرن لكل موظف، مع دوام مؤقت وإجازات واستئذان وعمل إضافي حسب التاريخ.</small></div><div className="finance-actions"><Badge>{employees.length}</Badge>{state.permissions?.manage_employees&&<Button variant="primary" onClick={add}><Plus size={15}/> موظف جديد</Button>}</div></div><Table preferenceKey="attendance-employees" defaultPageSize={25} rows={employees} columns={cols}/><div className="success-note"><Trash2 size={16}/> حذف الموظف لا يحذف سجل حضوره القديم. إذا كان مربوطًا بجهاز بصمة، يُحذف من الجهاز أولًا ثم من النظام بعد التأكيد.</div></Card>
+ return <><Card><div className="card-title"><div><h3><Users size={19}/> موظفو الحضور</h3><small>جدول أسبوعي مرن لكل موظف، مع دوام مؤقت وإجازات واستئذان وعمل إضافي حسب التاريخ.</small></div><div className="finance-actions"><Badge>{employees.length}</Badge>{state.permissions?.manage_employees&&<Button variant="primary" onClick={add}><Plus size={15}/> موظف جديد</Button>}</div></div><><SmartListFilters storageKey="attendance-employees-filters" search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالاسم أو الكود أو الجوال أو الهوية أو القسم..." totalCount={employees.length} resultCount={filteredEmployees.length} onReset={()=>setListFilter({q:'',branch:'',department:'',status:'',device:''})} filters={[
+ {key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions},
+ {key:'department',label:'القسم',value:listFilter.department,onChange:v=>setListFilter(x=>({...x,department:v})),options:departmentOptions},
+ {key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:[{value:'active',label:'نشط'},{value:'inactive',label:'موقوف'}]},
+ {key:'device',label:'جهاز البصمة',value:listFilter.device,onChange:v=>setListFilter(x=>({...x,device:v})),options:employeeDeviceOptions}
+ ]}/><Table preferenceKey="attendance-employees" defaultPageSize={25} rows={filteredEmployees} columns={cols}/></><div className="success-note"><Trash2 size={16}/> حذف الموظف لا يحذف سجل حضوره القديم. إذا كان مربوطًا بجهاز بصمة، يُحذف من الجهاز أولًا ثم من النظام بعد التأكيد.</div></Card>
 
  <Modal open={open} onClose={()=>setOpen(false)} title={form.id?'تعديل موظف حضور':'إضافة موظف حضور'} wide><form onSubmit={save} className="form-grid">
   <Field label="اسم الموظف"><Input value={form.name||''} onChange={e=>setForm(x=>({...x,name:e.target.value}))} required/></Field>
