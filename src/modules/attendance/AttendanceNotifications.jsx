@@ -30,7 +30,7 @@ function deliveryStatus(v){
 const blankRule={id:'',branch_id:'',category:'*',severity:'warning',active:true,level1_minutes:0,level2_minutes:120,level3_minutes:240,level1_role:'الموارد البشرية',level2_role:'مدير فرع',level3_role:'مدير عام',whatsapp:false,email:false};
 const blankDeliverySettings={whatsapp_enabled:false,email_enabled:false,auto_dispatch:false,whatsapp_provider:'notification_jobs',email_provider:''};
 
-export default function AttendanceNotifications({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks}){
+export default function AttendanceNotifications({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks,onOpenPreventive}){
  const notifications=state.notifications||[],devices=state.devices||[],branches=state.branches||[],counts=state.notificationCounts||{},rules=state.escalationRules||[],events=state.escalationEvents||[],deliveries=state.deliveries||[],deliveryCounts=state.deliveryCounts||{},deliverySettings=state.deliverySettings||blankDeliverySettings,watchdog=state.watchdog||null;
  const [status,setStatus]=useState('open'),[severity,setSeverity]=useState('all'),[deviceId,setDeviceId]=useState('all'),[query,setQuery]=useState(''),[busy,setBusy]=useState('');
  const [rulesOpen,setRulesOpen]=useState(false),[ruleForm,setRuleForm]=useState(blankRule),[ruleBusy,setRuleBusy]=useState(false),[deliveryForm,setDeliveryForm]=useState(blankDeliverySettings),[deliveryBusy,setDeliveryBusy]=useState(false);
@@ -73,6 +73,7 @@ export default function AttendanceNotifications({state,onChanged,onError,onNotic
  }
  function openTarget(row){
   if(row.category==='linking'){onOpenLinks?.();return}
+  if(row.category==='maintenance'){onOpenPreventive?.();return}
   onOpenDevices?.();
  }
  function editRule(r){
