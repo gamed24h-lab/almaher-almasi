@@ -40,6 +40,21 @@ export default function Bookings({go,query=''}){
  async function loadRefundSummary(){try{const x=await api.bookingRefundSummaries();setRefundSummary({byId:x?.by_booking_id||{},byNo:x?.by_booking_number||{},loaded:true})}catch{setRefundSummary({byId:{},byNo:{},loaded:true})}}
  useEffect(()=>{loadRefundSummary()},[]);
  const refundedFor=b=>num(refundSummary.byId?.[String(b.id||'')])||num(refundSummary.byNo?.[String(b.booking_number||'')]);
+ const tripFilterOptions=useMemo(()=>(data.trips||[]).map(t=>({value:String(t.id),label:tripDisplay(t),searchText:[t.trip_code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date]})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.trips]);
+ const branchFilterOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
+ const bookingRuleFields=useMemo(()=>[
+  {key:'bookingNumber',label:'رقم الحجز',get:b=>b.booking_number},
+  {key:'customerName',label:'اسم العميل',get:b=>b.customer_name},
+  {key:'customerPhone',label:'جوال العميل',get:b=>b.customer_phone},
+  {key:'status',label:'حالة الحجز',options:[{value:'new',label:'جديد'},{value:'confirmed',label:'مؤكد'},{value:'pending',label:'قيد المراجعة'},{value:'cancelled',label:'ملغي'}],get:b=>lower(b.status)},
+  {key:'financial',label:'الحالة المالية',options:[{value:'paid',label:'مسدد'},{value:'partial',label:'مدفوع جزئيًا'},{value:'unpaid',label:'غير مسدد'},{value:'credit',label:'رصيد للعميل'},{value:'refunded',label:'مسترد بالكامل'},{value:'no_value',label:'بدون قيمة'},{value:'mismatch',label:'عدم تطابق مالي'}],get:b=>bookingFinancialState(b,refundedFor(b)).code},
+  {key:'branch',label:'الفرع',options:branchFilterOptions,get:b=>String(b.branch_id||'')},
+  {key:'trip',label:'الرحلة',options:tripFilterOptions,get:b=>String(b.trip_id||'')},
+  {key:'total',label:'إجمالي الحجز',type:'number',get:b=>bookingFinanceNumbers(b,refundedFor(b)).total},
+  {key:'remaining',label:'المبلغ المتبقي',type:'number',get:b=>bookingFinanceNumbers(b,refundedFor(b)).remaining},
+  {key:'passengers',label:'عدد المسافرين',type:'number',get:b=>(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length},
+  {key:'createdAt',label:'تاريخ إنشاء الحجز',type:'date',get:b=>b.created_at||b.booking_date||b.created_on}
+ ],[branchFilterOptions,tripFilterOptions,refundSummary,passengerMap]);
  const rows=useMemo(()=>{
    const s=q;
    const out=(data.bookings||[]).filter(b=>{
@@ -59,21 +74,6 @@ export default function Bookings({go,query=''}){
    out.sort((a,b)=>{if(sort==='oldest')return String(a.created_at||a.booking_number||'').localeCompare(String(b.created_at||b.booking_number||''));if(sort==='remaining')return bookingFinanceNumbers(b,refundedFor(b)).remaining-bookingFinanceNumbers(a,refundedFor(a)).remaining;return String(b.created_at||b.booking_number||'').localeCompare(String(a.created_at||a.booking_number||''))});
    return out;
  },[data.bookings,q,status,tripId,branchId,financial,sort,datePreset,fromDate,toDate,tripMap,passengerMap,refundSummary,bookingRules,bookingRuleFields,bookingRuleMode]);
- const tripFilterOptions=useMemo(()=>(data.trips||[]).map(t=>({value:String(t.id),label:tripDisplay(t),searchText:[t.trip_code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date]})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.trips]);
- const branchFilterOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
- const bookingRuleFields=useMemo(()=>[
-  {key:'bookingNumber',label:'رقم الحجز',get:b=>b.booking_number},
-  {key:'customerName',label:'اسم العميل',get:b=>b.customer_name},
-  {key:'customerPhone',label:'جوال العميل',get:b=>b.customer_phone},
-  {key:'status',label:'حالة الحجز',options:[{value:'new',label:'جديد'},{value:'confirmed',label:'مؤكد'},{value:'pending',label:'قيد المراجعة'},{value:'cancelled',label:'ملغي'}],get:b=>lower(b.status)},
-  {key:'financial',label:'الحالة المالية',options:[{value:'paid',label:'مسدد'},{value:'partial',label:'مدفوع جزئيًا'},{value:'unpaid',label:'غير مسدد'},{value:'credit',label:'رصيد للعميل'},{value:'refunded',label:'مسترد بالكامل'},{value:'no_value',label:'بدون قيمة'},{value:'mismatch',label:'عدم تطابق مالي'}],get:b=>bookingFinancialState(b,refundedFor(b)).code},
-  {key:'branch',label:'الفرع',options:branchFilterOptions,get:b=>String(b.branch_id||'')},
-  {key:'trip',label:'الرحلة',options:tripFilterOptions,get:b=>String(b.trip_id||'')},
-  {key:'total',label:'إجمالي الحجز',type:'number',get:b=>bookingFinanceNumbers(b,refundedFor(b)).total},
-  {key:'remaining',label:'المبلغ المتبقي',type:'number',get:b=>bookingFinanceNumbers(b,refundedFor(b)).remaining},
-  {key:'passengers',label:'عدد المسافرين',type:'number',get:b=>(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length},
-  {key:'createdAt',label:'تاريخ إنشاء الحجز',type:'date',get:b=>b.created_at||b.booking_date||b.created_on}
- ],[branchFilterOptions,tripFilterOptions,refundSummary,passengerMap]);
 
  const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.gross+=f.gross;x.net+=f.netRaw;x.refunded+=f.refund;if(activeForFinance(b)){x.remaining+=f.remaining;x.credit+=f.credit}x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,gross:0,net:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
  const overview=useMemo(()=>{const list=(data.bookings||[]),active=list.filter(b=>!['cancelled','canceled','deleted','refunded'].includes(lower(b.status))),pending=active.filter(b=>lower(b.status)==='pending').length,confirmed=active.filter(b=>lower(b.status)==='confirmed').length,newCount=active.filter(b=>lower(b.status)==='new').length,mismatch=active.filter(b=>bookingFinancialState(b,refundedFor(b)).code==='mismatch').length,unpaid=active.filter(b=>['unpaid','partial'].includes(bookingFinancialState(b,refundedFor(b)).code)).length,remaining=active.reduce((n,b)=>n+bookingFinanceNumbers(b,refundedFor(b)).remaining,0);return {active:active.length,pending,confirmed,newCount,mismatch,unpaid,remaining}},[data.bookings,refundSummary]);
