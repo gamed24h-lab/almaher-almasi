@@ -8,6 +8,8 @@ import {auditActionLabel,auditEntityLabel,normalizeAuditChanges} from '../../lib
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import AgentMergeModal from './AgentMergeModal.jsx';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
@@ -79,7 +81,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const canMergeAttendance=elevated(user)||has(user,'attendance_manage_employees');
  const canReviewRegistry=canAudit;
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
- const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes');
+ const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes'),[auditBranch,setAuditBranch]=useState(''),[auditActor,setAuditActor]=useState('');
  const [selectedAudit,setSelectedAudit]=useState(null);
  const [mergeOpen,setMergeOpen]=useState(false),[mergeGroup,setMergeGroup]=useState(null),[canonicalId,setCanonicalId]=useState(''),[duplicateId,setDuplicateId]=useState(''),[preview,setPreview]=useState(null),[previewBusy,setPreviewBusy]=useState(false),[mergeBusy,setMergeBusy]=useState(false),[mergeReason,setMergeReason]=useState(''),[confirmNo,setConfirmNo]=useState('');
  const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
@@ -126,15 +128,17 @@ export default function AuditCenter({go,initialTab=''}) {
  const [tab,setTab]=useModuleTab('almaher:module:audit-center',tabs,initialTab||(canAudit?'activity':'duplicates'));
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setTab(initialTab)},[initialTab,tabs.length]);
 
+ const auditBranchOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
+ const auditActorOptions=useMemo(()=>[...new Map(auditRows.map(r=>[String(r.actor_id||r.actor_name||'').trim(),{value:String(r.actor_id||r.actor_name||'').trim(),label:r.actor_name||r.actor_id||'النظام'}]).filter(([k])=>k)).values()].sort((a,b)=>a.label.localeCompare(b.label,'ar')),[auditRows]);
  const filteredAudit=useMemo(()=>{
-  const needle=lower(q);
   return auditRows.filter(r=>{
    if(auditMode==='changes'&&readOnlyAudit(r.action))return false;
    if(category!=='all'&&auditCategory(r)!==category)return false;
-   if(!needle)return true;
-   return [r.actor_name,r.actor_role,r.action,r.entity_type,r.entity_id,branchMap.get(String(r.branch_id))?.name,JSON.stringify(r.metadata||{})].some(v=>lower(v).includes(needle));
+   if(auditBranch&&String(r.branch_id||'')!==String(auditBranch))return false;
+   if(auditActor&&String(r.actor_id||r.actor_name||'')!==String(auditActor))return false;
+   return matchesListQuery(q,r.actor_name,r.actor_role,r.actor_id,r.action,auditActionLabel(r.action),r.entity_type,auditEntityLabel(r.entity_type),r.entity_id,branchMap.get(String(r.branch_id))?.name,JSON.stringify(r.metadata||{}));
   });
- },[auditRows,q,category,auditMode,branchMap]);
+ },[auditRows,q,category,auditMode,auditBranch,auditActor,branchMap]);
 
  const auditCounts=useMemo(()=>({
   total:filteredAudit.length,
@@ -252,7 +256,12 @@ export default function AuditCenter({go,initialTab=''}) {
     <Card><div className="stat-card"><ShieldCheck/><div><span>أمان وصلاحيات</span><strong>{auditCounts.security}</strong><small>تغييرات وموافقات</small></div></div></Card>
     <Card><div className="stat-card"><Activity/><div><span>مالية</span><strong>{auditCounts.finance}</strong><small>تحصيل واسترداد ومصروفات</small></div></div></Card>
    </div>
-   <Card><div className="operation-filters"><div className="filterbar"><Search size={17}/><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="ابحث باسم المستخدم أو العملية أو رقم السجل"/></div><Select value={category} onChange={e=>setCategory(e.target.value)}><option value="all">كل الأقسام</option><option value="security">أمان وصلاحيات</option><option value="operations">تشغيل وحجوزات</option><option value="finance">مالية</option><option value="hr">HR وحضور</option><option value="system">نظام</option></Select><Select value={auditMode} onChange={e=>setAuditMode(e.target.value)}><option value="changes">التغييرات المهمة فقط</option><option value="all">كل الحركات التقنية</option></Select><Badge>{filteredAudit.length} حركة</Badge></div></Card>
+   <Card><SmartListFilters storageKey="audit-center-filters" search={q} onSearchChange={setQ} searchPlaceholder="ابحث باسم المستخدم أو العملية أو الكيان أو رقم السجل..." totalCount={auditRows.length} resultCount={filteredAudit.length} onReset={()=>{setQ('');setCategory('all');setAuditMode('changes');setAuditBranch('');setAuditActor('')}} filters={[
+    {key:'category',label:'القسم',value:category==='all'?'':category,onChange:v=>setCategory(v||'all'),options:[{value:'security',label:'أمان وصلاحيات'},{value:'operations',label:'تشغيل وحجوزات'},{value:'finance',label:'مالية'},{value:'hr',label:'HR وحضور'},{value:'system',label:'نظام'}]},
+    {key:'mode',label:'نوع الحركة',value:auditMode==='changes'?'':auditMode,onChange:v=>setAuditMode(v||'changes'),options:[{value:'all',label:'كل الحركات التقنية'}],allLabel:'التغييرات المهمة فقط'},
+    {key:'branch',label:'الفرع',value:auditBranch,onChange:setAuditBranch,options:auditBranchOptions},
+    {key:'actor',label:'المستخدم',value:auditActor,onChange:setAuditActor,options:auditActorOptions}
+   ]}/></Card>
    <Card><div className="card-title"><div><h3>الخط الزمني للنظام</h3><small>يجمع سجل النشاط العام مع سجل التدقيق التفصيلي. العمليات التي سجلت Snapshot تعرض قبل/بعد تلقائيًا.</small></div><div className="finance-actions"><Badge tone="green">تفصيلي {auditSummary?.sources?.detailed||0}</Badge><Badge>عام {auditSummary?.sources?.activity||0}</Badge></div></div><Table preferenceKey="audit-center" defaultPageSize={25} rows={filteredAudit} columns={auditCols}/></Card>
   </>)}
 
