@@ -346,7 +346,7 @@ async function runAttendanceWatchdog(env,source='scheduled'){
   const state=await attendanceState(env,systemActor,new URL('https://attendance-watchdog.internal/api/attendance'));
   const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),activeNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved').length,criticalNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&x.severity==='critical').length,activeEscalations=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&Number(x.escalation_level)>0).length;
   const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
-  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0)}},prefer:'return=minimal'}).catch(()=>{});
+  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0)}},prefer:'return=minimal'}).catch(()=>{});
   if(source==='scheduled'&&startedAt.getUTCMinutes()<5){const cutoff=new Date(startedAt.getTime()-30*86400000).toISOString();await rest(env,'attendance_watchdog_runs?started_at=lt.'+enc(cutoff),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{})}
   return summary;
  }catch(e){
@@ -360,6 +360,96 @@ async function runAttendanceWatchdogNow(env,me){
  const result=await runAttendanceWatchdog(env,'manual');
  await audit(env,me,'attendance_watchdog_manual_run','attendance_watchdog_run',result.run_id||'manual',null,null,result,'تشغيل مراقب تنبيهات الحضور يدويًا');
  return result;
+}
+
+function incidentPolicyScore(policy,notification){
+ if(!policy?.active)return -1;
+ if(policy.branch_id&&txt(policy.branch_id)!==txt(notification.branch_id))return -1;
+ if(policy.category!=='*'&&txt(policy.category)!==txt(notification.category))return -1;
+ if(policy.severity!=='*'&&txt(policy.severity)!==txt(notification.severity))return -1;
+ return (policy.branch_id?8:0)+(policy.category==='*'?0:4)+(policy.severity==='*'?0:2);
+}
+function selectIncidentPolicy(policies,notification){
+ return (policies||[]).map(p=>({p,score:incidentPolicyScore(p,notification)})).filter(x=>x.score>=0).sort((a,b)=>b.score-a.score||new Date(b.p.updated_at||b.p.created_at||0)-new Date(a.p.updated_at||a.p.created_at||0))[0]?.p||null;
+}
+function incidentKey(notification){return 'attendance:'+txt(notification.id)+':'+txt(notification.first_seen_at||notification.created_at)}
+async function addIncidentEvent(env,incident,eventType,actorIdValue,actorNameValue,note,metadata={}){
+ if(!incident?.id)return null;
+ const rows=await rest(env,'attendance_incident_events',{method:'POST',body:{incident_id:incident.id,event_type:eventType,actor_id:txt(actorIdValue)||null,actor_name:txt(actorNameValue)||null,note:txt(note)||null,metadata:metadata&&typeof metadata==='object'?metadata:{},created_at:new Date().toISOString()},prefer:'return=representation'}).catch(()=>[]);
+ return rows?.[0]||null;
+}
+async function reconcileAttendanceIncidents(env,notifications,policies){
+ const rows=Array.isArray(notifications)?notifications:[],ids=rows.map(x=>x.id).filter(Boolean);
+ if(!ids.length)return [];
+ const filter='&source_notification_id=in.('+ids.map(enc).join(',')+')',existing=await rest(env,'attendance_incidents?select=*'+filter+'&order=started_at.desc&limit=1000').catch(()=>[]);
+ const byKey=new Map((existing||[]).map(x=>[txt(x.incident_key),x])),now=new Date(),nowIso=now.toISOString(),out=[...(existing||[])];
+ for(const n of rows){
+  const key=incidentKey(n),old=byKey.get(key),policy=selectIncidentPolicy(policies,n),started=n.first_seen_at||n.created_at||nowIso,startMs=new Date(started).getTime(),responseMin=Math.max(0,Number(policy?.response_minutes??60)),resolutionMin=Math.max(responseMin,Number(policy?.resolution_minutes??480)),responseDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+responseMin*60000).toISOString(),resolutionDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+resolutionMin*60000).toISOString();
+  if(n.active){
+   if(!old){
+    const created=(await rest(env,'attendance_incidents',{method:'POST',body:{incident_key:key,source_notification_id:n.id,branch_id:n.branch_id||null,device_id:n.device_id||null,category:n.category||'device_health',severity:n.severity||'warning',title:n.title||'حادثة حضور',summary:n.message||null,status:'open',source_active:true,sla_policy_id:policy?.id||null,started_at:started,response_due_at:responseDue,resolution_due_at:resolutionDue,response_breached:now>new Date(responseDue),resolution_breached:now>new Date(resolutionDue),metadata:{notification_key:n.notification_key||null,escalation_level:n.escalation_level||0}},prefer:'return=representation'}).catch(()=>[]))?.[0]||null;
+    if(created){byKey.set(key,created);out.unshift(created);await addIncidentEvent(env,created,'opened','system:attendance-watchdog','Attendance Watchdog','تم فتح الحادثة تلقائيًا من تنبيه نشط.',{source_notification_id:n.id,severity:n.severity});}
+   }else{
+    const ackMs=old.acknowledged_at?new Date(old.acknowledged_at).getTime():null,resolvedMs=old.resolved_at?new Date(old.resolved_at).getTime():null,dueRespMs=new Date(responseDue).getTime(),dueResMs=new Date(resolutionDue).getTime();
+    const responseBreached=ackMs!=null?ackMs>dueRespMs:now.getTime()>dueRespMs,resolutionBreached=resolvedMs!=null?resolvedMs>dueResMs:now.getTime()>dueResMs;
+    const patch={source_active:true,severity:n.severity||old.severity,title:n.title||old.title,summary:n.message||old.summary,sla_policy_id:policy?.id||old.sla_policy_id||null,response_due_at:responseDue,resolution_due_at:resolutionDue,response_breached:responseBreached,resolution_breached:resolutionBreached,metadata:{...(old.metadata||{}),notification_key:n.notification_key||null,escalation_level:n.escalation_level||0},updated_at:nowIso};
+    await rest(env,'attendance_incidents?id=eq.'+enc(old.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});Object.assign(old,patch);
+   }
+  }else if(old&&old.source_active){
+   const duration=Math.max(0,Math.round((now.getTime()-(Number.isFinite(startMs)?startMs:now.getTime()))/1000)),patch={source_active:false,status:['resolved','closed'].includes(old.status)?old.status:'resolved',resolved_at:old.resolved_at||nowIso,resolved_by:old.resolved_by||'system:attendance-watchdog',resolution_reason:old.resolution_reason||'زالت الحالة الأصلية تلقائيًا',resolution_seconds:old.resolution_seconds??duration,resolution_breached:old.resolution_breached||now>new Date(old.resolution_due_at||resolutionDue),updated_at:nowIso};
+   await rest(env,'attendance_incidents?id=eq.'+enc(old.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});Object.assign(old,patch);await addIncidentEvent(env,old,'auto_resolved','system:attendance-watchdog','Attendance Watchdog','تم حل الحادثة تلقائيًا بعد زوال التنبيه الأصلي.',{source_notification_id:n.id});
+  }
+ }
+ return out.sort((a,b)=>new Date(b.started_at)-new Date(a.started_at));
+}
+async function updateAttendanceIncident(env,me,body){
+ const id=txt(body.id),op=txt(body.incident_action);if(!id)throw Object.assign(new Error('الحادثة غير محددة.'),{status:400});
+ const rows=await rest(env,'attendance_incidents?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الحادثة غير موجودة.'),{status:404});
+ if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الحادثة خارج نطاق الفرع.'),{status:403});
+ if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة الحادثة.'),{status:403});
+ const now=new Date(),nowIso=now.toISOString(),who=actorId(me)||actorName(me)||null,name=actorName(me)||who,startedMs=new Date(before.started_at).getTime(),patch={updated_at:nowIso},note=txt(body.note);
+ let eventType=op;
+ if(op==='acknowledge'){
+  if(!before.acknowledged_at){patch.acknowledged_at=nowIso;patch.acknowledged_by=who;patch.response_seconds=Math.max(0,Math.round((now.getTime()-startedMs)/1000));patch.response_breached=now>new Date(before.response_due_at||nowIso)}
+  if(before.status==='open')patch.status='acknowledged';
+  eventType='acknowledged';
+ }else if(op==='assign'){
+  const staffId=txt(body.owner_staff_id);if(!staffId)throw Object.assign(new Error('حدد المسؤول عن الحادثة.'),{status:400});
+  const staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,role,branch_id,status&limit=1'))?.[0]||null;if(!staff||staff.status==='موقوف')throw Object.assign(new Error('المسؤول المحدد غير متاح.'),{status:400});
+  if(!elevated(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(before.branch_id))throw Object.assign(new Error('المسؤول خارج نطاق الفرع.'),{status:403});
+  patch.owner_staff_id=staff.id;patch.owner_name=staff.name||staff.id;if(!['resolved','closed'].includes(before.status))patch.status='investigating';eventType='assigned';patch.metadata={...(before.metadata||{}),owner_role:staff.role||null};
+ }else if(op==='resolve'){
+  if(before.source_active)throw Object.assign(new Error('لا يمكن حل الحادثة بينما المشكلة الأصلية ما زالت نشطة. عالج السبب أولًا ثم سيغلقها المراقب تلقائيًا.'),{status:409});
+  patch.status='resolved';patch.resolved_at=before.resolved_at||nowIso;patch.resolved_by=who;patch.resolution_reason=note||before.resolution_reason||'تمت المعالجة';patch.resolution_seconds=before.resolution_seconds??Math.max(0,Math.round((now.getTime()-startedMs)/1000));patch.resolution_breached=before.resolution_breached||now>new Date(before.resolution_due_at||nowIso);eventType='resolved';
+ }else if(op==='close'){
+  if(before.status!=='resolved')throw Object.assign(new Error('يجب حل الحادثة أولًا قبل إغلاقها.'),{status:409});
+  patch.status='closed';patch.closed_at=nowIso;patch.closed_by=who;eventType='closed';
+ }else if(op==='note'){
+  eventType='note';
+ }else throw Object.assign(new Error('إجراء الحادثة غير صحيح.'),{status:400});
+ let after=before;
+ if(op!=='note')after=(await rest(env,'attendance_incidents?id=eq.'+enc(id),{method:'PATCH',body:patch,prefer:'return=representation'}))?.[0]||before;
+ await addIncidentEvent(env,after,eventType,who,name,note||null,{previous_status:before.status,status:after.status||before.status,owner_staff_id:after.owner_staff_id||null});
+ await audit(env,me,'attendance_incident_'+eventType,'attendance_incident',id,before.branch_id,before,after,note||'إدارة حادثة حضور');
+ return {ok:true,incident:after};
+}
+async function saveAttendanceIncidentSlaPolicy(env,me,body){
+ if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات SLA.'),{status:403});
+ const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*',branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
+ const clamp=v=>Math.max(1,Math.min(10080,Math.round(Number(v)||1))),responseMinutes=clamp(body.response_minutes),resolutionMinutes=clamp(body.resolution_minutes);
+ if(resolutionMinutes<responseMinutes)throw Object.assign(new Error('مدة الحل يجب أن تكون مساوية أو أكبر من مدة الاستجابة.'),{status:400});
+ const payload={branch_id:branchId,category,severity,active:body.active!==false,response_minutes:responseMinutes,resolution_minutes:resolutionMinutes,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ let before=null,after=null;
+ if(id){
+  before=(await rest(env,'attendance_incident_sla_policies?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('سياسة SLA غير موجودة.'),{status:404});if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('سياسة SLA خارج نطاق الفرع.'),{status:403});
+  after=(await rest(env,'attendance_incident_sla_policies?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ }else{
+  const key='custom-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  after=(await rest(env,'attendance_incident_sla_policies',{method:'POST',body:{...payload,policy_key:key,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
+ }
+ if(!after)throw Object.assign(new Error('تعذر حفظ سياسة SLA.'),{status:500});
+ await audit(env,me,before?'attendance_incident_sla_update':'attendance_incident_sla_create','attendance_incident_sla_policy',after.id,branchId,before,after,'إدارة سياسة SLA للحوادث');
+ return {ok:true,policy:after};
 }
 
 async function saveAttendanceEscalationRule(env,me,body){
@@ -1182,8 +1272,19 @@ async function attendanceState(env,me,url){
  const deliverySettings=await attendanceDeliverySettings(env),deliveries=await syncAttendanceEscalationDeliveries(env,notifications,escalationEvents,devices,branches,deliverySettings),deliveryCounts={ready:0,queued:0,sending:0,sent:0,delivered:0,read:0,failed:0,blocked:0,cancelled:0};
  for(const x of deliveries||[]){if(Object.prototype.hasOwnProperty.call(deliveryCounts,x.status))deliveryCounts[x.status]+=1}
  const sanitizedDeliveries=(deliveries||[]).map(x=>({...x,destination_masked:maskAttendanceDestination(x.channel,x.destination),destination:undefined}));
+ const allIncidentPolicies=await rest(env,'attendance_incident_sla_policies?select=*&order=created_at.asc').catch(()=>[]),incidentPolicies=(allIncidentPolicies||[]).filter(p=>!p.branch_id||!branchId||txt(p.branch_id)===txt(branchId));
+ const incidents=await reconcileAttendanceIncidents(env,notifications,incidentPolicies),incidentIds=incidents.map(x=>x.id).filter(Boolean),incidentEvents=incidentIds.length?await rest(env,'attendance_incident_events?incident_id=in.('+incidentIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=1000').catch(()=>[]):[];
+ const incidentCounts={open:0,acknowledged:0,investigating:0,resolved:0,closed:0,breached:0,critical:0,unassigned:0};
+ let responseSum=0,responseN=0,resolutionSum=0,resolutionN=0;const monthCutoff=Date.now()-30*86400000,deviceIncidentMap=new Map(),branchIncidentMap=new Map();
+ for(const x of incidents||[]){
+  if(Object.prototype.hasOwnProperty.call(incidentCounts,x.status))incidentCounts[x.status]+=1;
+  const active=!['resolved','closed'].includes(x.status);if(active&&(x.response_breached||x.resolution_breached))incidentCounts.breached+=1;if(active&&x.severity==='critical')incidentCounts.critical+=1;if(active&&!x.owner_staff_id)incidentCounts.unassigned+=1;
+  if(Number.isFinite(Number(x.response_seconds))){responseSum+=Number(x.response_seconds);responseN+=1}if(Number.isFinite(Number(x.resolution_seconds))){resolutionSum+=Number(x.resolution_seconds);resolutionN+=1}
+  if(new Date(x.started_at).getTime()>=monthCutoff){if(x.device_id)deviceIncidentMap.set(String(x.device_id),(deviceIncidentMap.get(String(x.device_id))||0)+1);if(x.branch_id)branchIncidentMap.set(String(x.branch_id),(branchIncidentMap.get(String(x.branch_id))||0)+1)}
+ }
+ const incidentAnalytics={avg_response_seconds:responseN?Math.round(responseSum/responseN):null,avg_resolution_seconds:resolutionN?Math.round(resolutionSum/resolutionN):null,top_devices:[...deviceIncidentMap.entries()].map(([device_id,count])=>({device_id,count})).sort((a,b)=>b.count-a.count).slice(0,5),top_branches:[...branchIncidentMap.entries()].map(([branch_id,count])=>({branch_id,count})).sort((a,b)=>b.count-a.count).slice(0,5)};
  const watchdog=(await rest(env,'attendance_watchdog_runs?select=*&order=started_at.desc&limit=1').catch(()=>[]))?.[0]||null;
- return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1295,6 +1396,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='save_delivery_settings')return json(await saveAttendanceDeliverySettings(env,me,body));
   if(action==='retry_notification_delivery')return json(await retryAttendanceDelivery(env,me,body));
   if(action==='run_watchdog')return json(await runAttendanceWatchdogNow(env,me));
+  if(action==='update_incident')return json(await updateAttendanceIncident(env,me,body));
+  if(action==='save_incident_sla_policy')return json(await saveAttendanceIncidentSlaPolicy(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
