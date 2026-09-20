@@ -189,6 +189,154 @@ async function applyAttendanceEscalation(env,notifications,rules){
  }
  return out;
 }
+async function attendanceDeliverySettings(env){
+ const rows=await rest(env,'attendance_notification_delivery_settings?id=eq.default&select=*&limit=1').catch(()=>[]);
+ return rows?.[0]||{id:'default',whatsapp_enabled:false,email_enabled:false,auto_dispatch:false,whatsapp_provider:'notification_jobs',email_provider:null};
+}
+function maskAttendanceDestination(channel,value){
+ const v=txt(value);if(!v)return '—';
+ if(channel==='email'){const i=v.indexOf('@');return i>1?v.slice(0,2)+'***'+v.slice(i):'***'}
+ const digits=v.replace(/\D/g,'');return digits.length>4?'***'+digits.slice(-4):'***';
+}
+async function normalizeAttendancePhone(env,value){
+ const v=txt(value);if(!v)return null;
+ const out=await rest(env,'rpc/normalize_notification_phone',{method:'POST',body:{p_phone:v}}).catch(()=>null);
+ return txt(out)||v;
+}
+async function resolveAttendanceEscalationRecipients(env,notification,roles){
+ const wanted=cleanEscalationRoles(roles);if(!wanted.length)return [];
+ const roleFilter='role=in.('+wanted.map(enc).join(',')+')';
+ const rows=await rest(env,'staff_users?select=id,name,phone,role,branch_id,status,security_meta&status=neq.%D9%85%D9%88%D9%82%D9%88%D9%81&'+roleFilter+'&order=name.asc').catch(()=>[]);
+ const branch=txt(notification?.branch_id),picked=[];
+ for(const role of wanted){
+  let candidates=(rows||[]).filter(x=>txt(x.role)===role);
+  if(role==='مدير فرع'&&branch)candidates=candidates.filter(x=>txt(x.branch_id)===branch);
+  else if(role==='الموارد البشرية'&&branch){
+   const scoped=candidates.filter(x=>!txt(x.branch_id)||txt(x.branch_id)===branch);
+   if(scoped.length)candidates=scoped;
+  }
+  for(const u of candidates){
+   if(picked.some(x=>txt(x.id)===txt(u.id)))continue;
+   picked.push({...u,email:txt(u?.security_meta?.email)||null});
+  }
+ }
+ return picked;
+}
+async function insertAttendanceDelivery(env,payload){
+ const rows=await rest(env,'attendance_notification_deliveries?on_conflict=delivery_key',{method:'POST',body:payload,prefer:'resolution=ignore-duplicates,return=representation'}).catch(()=>[]);
+ if(rows?.[0])return rows[0];
+ return (await rest(env,'attendance_notification_deliveries?delivery_key=eq.'+enc(payload.delivery_key)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+}
+async function queueAttendanceWhatsappJob(env,delivery,notification,device,branch){
+ if(!delivery||delivery.provider_job_id||!delivery.destination)return delivery;
+ const now=new Date().toISOString(),payload={
+  alert_title:notification.title||'تنبيه حضور',
+  alert_message:notification.message||'',
+  device_name:device?.name||'—',
+  branch_name:branch?.name||'—',
+  escalation_level:String(delivery.escalation_level||0),
+  first_seen_at:notification.first_seen_at||notification.created_at||now,
+  attendance_notification_id:notification.id,
+  attendance_delivery_id:delivery.id
+ };
+ const jobs=await rest(env,'notification_jobs',{method:'POST',body:{branch_id:notification.branch_id||null,event_type:'attendance_escalation',template_key:'attendance_escalation_alert',language_code:'ar',channel:'whatsapp',recipient_name:delivery.recipient_name||delivery.recipient_role||'مسؤول',recipient_phone:delivery.destination,scheduled_for:now,status:'pending',automatic:true,sent_by:'attendance-escalation',payload,target_scope:'attendance_alert',target_ref:notification.id,notification_direction:'operational'},prefer:'return=representation'}).catch(()=>[]);
+ const job=jobs?.[0]||null;if(!job)return delivery;
+ const patch={provider:'notification_jobs',provider_job_id:job.id,status:'queued',queued_at:now,error_text:null,updated_at:now};
+ await rest(env,'attendance_notification_deliveries?id=eq.'+enc(delivery.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});
+ return {...delivery,...patch};
+}
+async function syncAttendanceDeliveryProviderState(env,deliveries){
+ const ids=[...new Set((deliveries||[]).map(x=>x.provider_job_id).filter(Boolean))];if(!ids.length)return deliveries||[];
+ const jobs=await rest(env,'notification_jobs?id=in.('+ids.map(enc).join(',')+')&select=id,status,attempt_count,error_text,sent_at,delivered_at,read_at,last_error_code,provider_message_id,updated_at:created_at').catch(()=>[]);
+ const jobMap=new Map((jobs||[]).map(x=>[String(x.id),x])),now=new Date().toISOString(),out=[];
+ for(const d of deliveries||[]){
+  const j=jobMap.get(String(d.provider_job_id));if(!j){out.push(d);continue}
+  let status=d.status;
+  if(j.status==='delivered')status='delivered';
+  else if(j.status==='sent')status='sent';
+  else if(j.status==='failed')status='failed';
+  else if(j.status==='cancelled')status='cancelled';
+  else if(['processing','sending','claimed'].includes(j.status))status='sending';
+  else if(['pending','scheduled'].includes(j.status))status='queued';
+  if(j.read_at)status='read';
+  const patch={status,attempt_count:Number(j.attempt_count)||0,error_text:j.error_text||j.last_error_code||null,sent_at:j.sent_at||d.sent_at||null,delivered_at:j.delivered_at||d.delivered_at||null,read_at:j.read_at||d.read_at||null,failed_at:status==='failed'?(d.failed_at||now):null,metadata:{...(d.metadata||{}),provider_message_id:j.provider_message_id||null},updated_at:now};
+  if(status!==d.status||Number(patch.attempt_count)!==Number(d.attempt_count)||txt(patch.error_text)!==txt(d.error_text)||txt(patch.delivered_at)!==txt(d.delivered_at)||txt(patch.read_at)!==txt(d.read_at)){
+   await rest(env,'attendance_notification_deliveries?id=eq.'+enc(d.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});
+   out.push({...d,...patch});
+  }else out.push(d);
+ }
+ return out;
+}
+async function syncAttendanceEscalationDeliveries(env,notifications,events,devices,branches,settings){
+ const notificationMap=new Map((notifications||[]).map(x=>[String(x.id),x])),deviceMap=new Map((devices||[]).map(x=>[String(x.id),x])),branchMap=new Map((branches||[]).map(x=>[String(x.id),x]));
+ const notificationIds=(notifications||[]).map(x=>x.id).filter(Boolean),existing=notificationIds.length?await rest(env,'attendance_notification_deliveries?notification_id=in.('+notificationIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=1000').catch(()=>[]):[],existingMap=new Map((existing||[]).map(x=>[txt(x.delivery_key),x]));
+ const now=new Date().toISOString(),out=[...(existing||[])];
+ for(const ev of events||[]){
+  const n=notificationMap.get(String(ev.notification_id));if(!n||!n.active||n.status==='resolved')continue;
+  const recipients=await resolveAttendanceEscalationRecipients(env,n,ev.target_roles||[]),channels=ev.channels&&typeof ev.channels==='object'?ev.channels:{in_app:true,whatsapp:false,email:false};
+  for(const recipient of recipients){
+   const base={notification_id:n.id,escalation_event_id:ev.id,escalation_level:Number(ev.escalation_level)||0,recipient_staff_id:recipient.id,recipient_name:recipient.name||null,recipient_role:recipient.role||null,branch_id:n.branch_id||null,metadata:{notification_title:n.title,notification_category:n.category}};
+   if(channels.in_app!==false){
+    const key='attendance:'+ev.id+':'+recipient.id+':in_app';
+    if(!existingMap.has(key)){const row=await insertAttendanceDelivery(env,{...base,delivery_key:key,channel:'in_app',status:'delivered',provider:'attendance_center',delivered_at:now,created_at:now,updated_at:now});if(row){existingMap.set(key,row);out.unshift(row)}}
+   }
+   if(channels.whatsapp===true){
+    const key='attendance:'+ev.id+':'+recipient.id+':whatsapp',phone=await normalizeAttendancePhone(env,recipient.phone),old=existingMap.get(key);
+    let status='ready',error=null;
+    if(!settings?.whatsapp_enabled){status='blocked';error='قناة WhatsApp غير مفعلة من إعدادات تصعيد الحضور.'}
+    else if(!phone){status='blocked';error='لا يوجد رقم جوال للمستلم.'}
+    let row=old;
+    if(!row){row=await insertAttendanceDelivery(env,{...base,delivery_key:key,channel:'whatsapp',destination:phone,status,provider:settings?.whatsapp_provider||'notification_jobs',error_text:error,created_at:now,updated_at:now});if(row){existingMap.set(key,row);out.unshift(row)}}
+    else if(['blocked','ready'].includes(row.status)&&(txt(row.destination)!==txt(phone)||row.status!==status||txt(row.error_text)!==txt(error))){
+     const patch={destination:phone,status,error_text:error,provider:settings?.whatsapp_provider||'notification_jobs',updated_at:now};await rest(env,'attendance_notification_deliveries?id=eq.'+enc(row.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});Object.assign(row,patch);
+    }
+    if(row&&settings?.whatsapp_enabled&&settings?.auto_dispatch&&phone&&!row.provider_job_id&&['ready','blocked'].includes(row.status))row=await queueAttendanceWhatsappJob(env,{...row,status:'ready',destination:phone},n,deviceMap.get(String(n.device_id)),branchMap.get(String(n.branch_id)));
+   }
+   if(channels.email===true){
+    const key='attendance:'+ev.id+':'+recipient.id+':email',email=txt(recipient.email)||null,old=existingMap.get(key);
+    let status='ready',error=null;
+    if(!settings?.email_enabled){status='blocked';error='قناة البريد الإلكتروني غير مفعلة من إعدادات تصعيد الحضور.'}
+    else if(!email){status='blocked';error='لا يوجد بريد إلكتروني للمستلم.'}
+    else if(!settings?.email_provider){status='blocked';error='مزود البريد الإلكتروني غير مضبوط بعد.'}
+    if(!old){const row=await insertAttendanceDelivery(env,{...base,delivery_key:key,channel:'email',destination:email,status,provider:settings?.email_provider||null,error_text:error,created_at:now,updated_at:now});if(row){existingMap.set(key,row);out.unshift(row)}}
+   }
+  }
+ }
+ for(const n of notifications||[]){
+  if(n.active&&n.status!=='resolved')continue;
+  for(const d of out.filter(x=>String(x.notification_id)===String(n.id)&&!['delivered','read','sent','failed','cancelled'].includes(x.status))){
+   if(d.provider_job_id)await rest(env,'notification_jobs?id=eq.'+enc(d.provider_job_id)+'&status=in.(pending,scheduled)',{method:'PATCH',body:{status:'cancelled',error_text:'تم إلغاء التنبيه قبل الإرسال'},prefer:'return=minimal'}).catch(()=>{});
+   const patch={status:'cancelled',error_text:'تم حل التنبيه قبل الإرسال',updated_at:now};await rest(env,'attendance_notification_deliveries?id=eq.'+enc(d.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});Object.assign(d,patch);
+  }
+ }
+ return syncAttendanceDeliveryProviderState(env,out);
+}
+async function saveAttendanceDeliverySettings(env,me,body){
+ if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قنوات تصعيد التنبيهات.'),{status:403});
+ const before=(await rest(env,'attendance_notification_delivery_settings?id=eq.default&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ const patch={whatsapp_enabled:body.whatsapp_enabled===true,email_enabled:body.email_enabled===true,auto_dispatch:body.auto_dispatch===true,whatsapp_provider:txt(body.whatsapp_provider)||'notification_jobs',email_provider:txt(body.email_provider)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ const after=(await rest(env,'attendance_notification_delivery_settings?id=eq.default',{method:'PATCH',body:patch,prefer:'return=representation'}))?.[0]||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ إعدادات قنوات التنبيه.'),{status:500});
+ await audit(env,me,'attendance_delivery_settings_update','attendance_notification_delivery_settings','default',null,before,after,'إعداد قنوات تصعيد تنبيهات الحضور');
+ return {ok:true,settings:after};
+}
+async function retryAttendanceDelivery(env,me,body){
+ if(!canManagePolicies(me)&&!canManageDevices(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإعادة محاولة إرسال التنبيه.'),{status:403});
+ const id=txt(body.id),rows=await rest(env,'attendance_notification_deliveries?id=eq.'+enc(id)+'&select=*&limit=1'),delivery=rows?.[0]||null;if(!delivery)throw Object.assign(new Error('محاولة الإرسال غير موجودة.'),{status:404});
+ if(delivery.channel!=='whatsapp')throw Object.assign(new Error('إعادة المحاولة الآلية متاحة حاليًا لقناة WhatsApp فقط.'),{status:400});
+ const settings=await attendanceDeliverySettings(env);if(!settings.whatsapp_enabled)throw Object.assign(new Error('قناة WhatsApp غير مفعلة.'),{status:409});
+ if(!delivery.destination)throw Object.assign(new Error('لا يوجد رقم جوال صالح للمستلم.'),{status:409});
+ const n=(await rest(env,'attendance_notifications?id=eq.'+enc(delivery.notification_id)+'&select=*&limit=1'))?.[0]||null;if(!n)throw Object.assign(new Error('التنبيه الأصلي غير موجود.'),{status:404});
+ if(!n.active||n.status==='resolved')throw Object.assign(new Error('التنبيه تم حله ولا يحتاج إعادة إرسال.'),{status:409});
+ if(delivery.provider_job_id)await rest(env,'notification_jobs?id=eq.'+enc(delivery.provider_job_id)+'&status=in.(pending,scheduled,failed,cancelled)',{method:'PATCH',body:{status:'cancelled',error_text:'أعيدت المحاولة من مركز تنبيهات الحضور'},prefer:'return=minimal'}).catch(()=>{});
+ const cleared={provider_job_id:null,status:'ready',attempt_count:0,error_text:null,queued_at:null,sent_at:null,delivered_at:null,failed_at:null,read_at:null,updated_at:new Date().toISOString()};
+ await rest(env,'attendance_notification_deliveries?id=eq.'+enc(delivery.id),{method:'PATCH',body:cleared,prefer:'return=minimal'});
+ const device=(await rest(env,'attendance_devices?id=eq.'+enc(n.device_id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null,branch=(await rest(env,'branches?id=eq.'+enc(n.branch_id)+'&select=id,name&limit=1').catch(()=>[]))?.[0]||null;
+ const after=await queueAttendanceWhatsappJob(env,{...delivery,...cleared},n,device,branch);
+ await audit(env,me,'attendance_delivery_retry','attendance_notification_delivery',delivery.id,n.branch_id,delivery,after,'إعادة محاولة إرسال تنبيه حضور');
+ return {ok:true,delivery:after};
+}
+
 async function saveAttendanceEscalationRule(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قواعد تصعيد التنبيهات.'),{status:403});
  const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
@@ -1006,7 +1154,10 @@ async function attendanceState(env,me,url){
  const notifications=await applyAttendanceEscalation(env,rawNotifications,escalationRules),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0,level1:0,level2:0,level3:0};
  for(const n of notifications||[]){if(n.status==='new')notificationCounts.new+=1;else if(n.status==='seen')notificationCounts.seen+=1;else if(n.status==='resolved')notificationCounts.resolved+=1;if(n.active){notificationCounts.active+=1;if(n.severity==='critical')notificationCounts.critical+=1;if(Number(n.escalation_level)>=1)notificationCounts.level1+=1;if(Number(n.escalation_level)>=2)notificationCounts.level2+=1;if(Number(n.escalation_level)>=3)notificationCounts.level3+=1}}
  const notificationIds=(notifications||[]).map(x=>x.id).filter(Boolean),escalationEvents=notificationIds.length?await rest(env,'attendance_notification_escalation_events?notification_id=in.('+notificationIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=500').catch(()=>[]):[];
- return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const deliverySettings=await attendanceDeliverySettings(env),deliveries=await syncAttendanceEscalationDeliveries(env,notifications,escalationEvents,devices,branches,deliverySettings),deliveryCounts={ready:0,queued:0,sending:0,sent:0,delivered:0,read:0,failed:0,blocked:0,cancelled:0};
+ for(const x of deliveries||[]){if(Object.prototype.hasOwnProperty.call(deliveryCounts,x.status))deliveryCounts[x.status]+=1}
+ const sanitizedDeliveries=(deliveries||[]).map(x=>({...x,destination_masked:maskAttendanceDestination(x.channel,x.destination),destination:undefined}));
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1115,6 +1266,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
   if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
   if(action==='save_escalation_rule')return json(await saveAttendanceEscalationRule(env,me,body));
+  if(action==='save_delivery_settings')return json(await saveAttendanceDeliverySettings(env,me,body));
+  if(action==='retry_notification_delivery')return json(await retryAttendanceDelivery(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
