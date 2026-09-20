@@ -89,6 +89,7 @@ import './ticket-readability-final.css';
 import './ticket-a4-one-page-final.css';
 import './ticket-branch-license.css';
 import './ticket-logo-left.css';
+import './ui-v2.css';
 
 installBookingSaveRuntimeGuard();
 installBooking360SyncGuard();
