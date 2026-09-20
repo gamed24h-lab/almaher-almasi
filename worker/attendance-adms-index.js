@@ -688,10 +688,12 @@ async function admsRequest(request,env){
     return plain('OK');
    }
    if(table==='USERINFO'||table==='OPERLOG'){
+     if(table==='OPERLOG')await storeBiometricDiscovery(env,device,serial,body,table).catch(()=>({records:0}));
      const users=parseUserLines(body),n=await upsertDeviceUsers(env,device,serial,users,table);if(n){await markSyncComplete(env,device,'sync_users','USERINFO received: '+n+' users');await markSyncComplete(env,device,'verify_user','USERINFO verified: '+n+' users')}
      return plain('OK')
    }
-   if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'){
+   if(table==='FINGERTMP'||table==='BIODATA'||table==='FP'||table==='FACE'){
+     await storeBiometricDiscovery(env,device,serial,body,table).catch(()=>({records:0}));
      return plain('OK');
    }
    if(await storeProbePayload(env,device,serial,url,body))return plain('OK');
@@ -1339,9 +1341,122 @@ async function saveDevice(env,me,body){
 
 
 const FINGER_SLOTS=Object.freeze({
- right_thumb:0,right_index:1,right_middle:2,right_ring:3,right_little:4,
- left_thumb:5,left_index:6,left_middle:7,left_ring:8,left_little:9
+ left_little:0,left_ring:1,left_middle:2,left_index:3,left_thumb:4,
+ right_thumb:5,right_index:6,right_middle:7,right_ring:8,right_little:9
 });
+const SLOT_FINGERS=Object.freeze(Object.fromEntries(Object.entries(FINGER_SLOTS).map(([finger,slot])=>[String(slot),finger])));
+
+function parseProtocolVersion(value){
+ const m=txt(value).match(/(\d+)\.(\d+)\.(\d+)/);return m?[Number(m[1]),Number(m[2]),Number(m[3])]:null;
+}
+function protocolAtLeast(value,major,minor,patch){
+ const v=parseProtocolVersion(value);if(!v)return false;
+ return v[0]>major||(v[0]===major&&(v[1]>minor||(v[1]===minor&&v[2]>=patch)));
+}
+function templateFields(line,prefix){
+ const raw=String(line||'').trim(),p=String(prefix||'').trim();
+ if(!raw.toUpperCase().startsWith(p.toUpperCase()))return null;
+ const rest=raw.slice(p.length).trim(),out={};
+ for(const part of rest.split('\t')){
+  const i=part.indexOf('=');if(i<=0)continue;
+  const k=part.slice(0,i).trim().toLowerCase(),v=part.slice(i+1).trim();
+  if(k==='tmp'||k==='template'||k==='content'||k==='photo')continue;
+  out[k]=v;
+ }
+ return out;
+}
+function parseBiometricTemplateLines(body,tableName){
+ const table=txt(tableName).toUpperCase(),out=[];
+ for(const raw of String(body||'').split(/\r?\n/)){
+  const line=raw.trim();if(!line)continue;
+  let fields=null,type=null,slot=null;
+  if(/^FP\s/i.test(line)){fields=templateFields(line,'FP');type='finger';slot=safeInt(fields?.fid??fields?.fingerid)}
+  else if(/^FACE\s/i.test(line)){fields=templateFields(line,'FACE');type='face';slot=null}
+  else if(/^BIODATA\s/i.test(line)){
+   fields=templateFields(line,'BIODATA');const bioType=safeInt(fields?.type);
+   if(bioType===1){type='finger';slot=safeInt(fields?.no)}
+   else if(bioType===2||bioType===9){type='face';slot=null}
+   else continue;
+  }else if(table==='FINGERTMP'||table==='FP'){
+   fields=templateFields('FP '+line,'FP');type='finger';slot=safeInt(fields?.fid??fields?.fingerid)
+  }else if(table==='BIODATA'){
+   fields=templateFields('BIODATA '+line,'BIODATA');const bioType=safeInt(fields?.type);
+   if(bioType===1){type='finger';slot=safeInt(fields?.no)}
+   else if(bioType===2||bioType===9){type='face';slot=null}
+   else continue;
+  }else continue;
+  const pin=txt(fields?.pin),valid=safeInt(fields?.valid);
+  if(!pin||valid===0)continue;
+  if(type==='finger'&&(slot==null||slot<0||slot>9))continue;
+  out.push({pin,biometric_type:type,slot_no:type==='finger'?slot:null,finger_code:type==='finger'?SLOT_FINGERS[String(slot)]||null:null,valid:valid??1,index_no:safeInt(fields?.index),major_ver:safeInt(fields?.majorver),minor_ver:safeInt(fields?.minorver),format:safeInt(fields?.format),source_table:table||(/^BIODATA\s/i.test(line)?'BIODATA':'OPERLOG')});
+ }
+ return out;
+}
+async function storeBiometricDiscovery(env,device,serial,body,tableName){
+ const records=parseBiometricTemplateLines(body,tableName);if(!records.length)return {records:0,matched:0,unmatched:0};
+ const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=device_pin,attendance_employee_id,branch_id').catch(()=>[]);
+ const linkMap=new Map((links||[]).filter(x=>x.attendance_employee_id).map(x=>[txt(x.device_pin),x]));
+ const employeeIds=[...new Set(records.map(r=>linkMap.get(r.pin)?.attendance_employee_id).filter(Boolean))];
+ const existing=employeeIds.length?await rest(env,'attendance_biometric_profiles?attendance_employee_id=in.('+employeeIds.map(enc).join(',')+')&data_environment=eq.'+enc(device.data_environment||'training')+'&select=*').catch(()=>[]):[];
+ const existingMap=new Map((existing||[]).map(x=>[String(x.attendance_employee_id)+'|'+txt(x.biometric_key),x]));
+ const now=new Date().toISOString(),rows=[],seen=new Set();let matched=0,unmatched=0;
+ for(const r of records){
+  const link=linkMap.get(r.pin);if(!link?.attendance_employee_id){unmatched+=1;continue}
+  const key=r.biometric_type==='face'?'face':'finger:'+r.finger_code;
+  if(!key||key==='finger:null')continue;
+  const dedupe=String(link.attendance_employee_id)+'|'+key;if(seen.has(dedupe))continue;seen.add(dedupe);
+  const old=existingMap.get(dedupe)||null;
+  rows.push({
+   attendance_employee_id:link.attendance_employee_id,branch_id:link.branch_id||device.branch_id||null,source_device_id:device.id,device_pin:r.pin,
+   biometric_type:r.biometric_type,biometric_key:key,finger_code:r.finger_code||null,slot_no:r.slot_no??null,status:'active',
+   version:Math.max(1,Number(old?.version||1)),last_enrolled_at:old?.last_enrolled_at||null,last_sync_at:now,last_result_code:0,
+   data_environment:device.data_environment||'training',
+   metadata:{...(old?.metadata||{}),source:'device_import',device_imported_at:now,source_table:r.source_table||txt(tableName).toUpperCase()||null,template_valid:r.valid??1,template_index:r.index_no??null,major_ver:r.major_ver??null,minor_ver:r.minor_ver??null,format:r.format??null,raw_template_stored:false},
+   created_by:old?.created_by||'device_import',updated_by:'device:'+String(device.serial_number||device.id),created_at:old?.created_at||now,updated_at:now
+  });matched+=1;
+ }
+ if(rows.length)await rest(env,'attendance_biometric_profiles?on_conflict=attendance_employee_id%2Cbiometric_key%2Cdata_environment',{method:'POST',body:rows,prefer:'resolution=merge-duplicates,return=minimal'}).catch(()=>{});
+ const meta={...(device.metadata||{}),last_biometric_import_received_at:now,last_biometric_import_records:records.length,last_biometric_import_matched:matched,last_biometric_import_unmatched:unmatched,raw_biometric_templates_stored:false};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});device.metadata=meta;
+ const systemActor={id:'device:'+String(device.id),name:'جهاز البصمة',role:'system',permissions:{}};
+ await audit(env,systemActor,'attendance_biometrics_discovered','attendance_device',device.id,device.branch_id,null,{serial_number:serial,records:records.length,matched,unmatched,source_table:txt(tableName).toUpperCase(),raw_template_stored:false},'استيراد حالة البصمات الموجودة على الجهاز').catch(()=>{});
+ return {records:records.length,matched,unmatched};
+}
+async function importDeviceBiometrics(env,me,body){
+ if(!canManageBiometrics(me))throw Object.assign(new Error('لا توجد صلاحية مستقلة لاستيراد البصمات.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ if(device.status!=='active')throw Object.assign(new Error('جهاز البصمة موقوف.'),{status:409});
+ let path='attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=*';
+ if(txt(body.attendance_employee_id))path+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
+ const links=await rest(env,path).catch(()=>[]);
+ const unique=[...new Map((links||[]).filter(x=>txt(x.device_pin)&&x.attendance_employee_id).map(x=>[txt(x.device_pin),x])).values()];
+ if(!unique.length)throw Object.assign(new Error('لا يوجد موظفون مربوطون بهذا الجهاز لاستيراد بصماتهم.'),{status:400});
+ const batch='bio-import-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),modern=protocolAtLeast(device.push_version,2,2,14),commands=[];
+ if(modern){
+  const employee=txt(body.attendance_employee_id),pins=employee?unique.map(x=>safeDeviceText(x.device_pin,24)):[];
+  if(employee&&pins.length){
+   for(const pin of pins){
+    commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1\tPIN='+pin,metadata:{batch,pin,biometric_type:'finger',strategy:'biodata_pin'}});
+    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=2\tPIN='+pin,metadata:{batch,pin,biometric_type:'face',strategy:'biodata_pin'}});
+    commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9\tPIN='+pin,metadata:{batch,pin,biometric_type:'visible_face',strategy:'biodata_pin'}});
+   }
+  }else{
+   commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY BIODATA Type=1',metadata:{batch,biometric_type:'finger',strategy:'biodata_all'}});
+   commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=2',metadata:{batch,biometric_type:'face',strategy:'biodata_all'}});
+   commands.push({type:'biometric_import_face',command:'DATA QUERY BIODATA Type=9',metadata:{batch,biometric_type:'visible_face',strategy:'biodata_all'}});
+  }
+ }else{
+  for(const link of unique){
+   const pin=safeDeviceText(link.device_pin,24);
+   commands.push({type:'biometric_import_fingerprint',command:'DATA QUERY FINGERTMP PIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{batch,pin,attendance_employee_id:link.attendance_employee_id,biometric_type:'finger',strategy:'legacy_fingertmp'}});
+  }
+ }
+ const queued=await queueCommands(env,device,me,commands);
+ const now=new Date().toISOString(),meta={...(device.metadata||{}),last_biometric_import_requested_at:now,last_biometric_import_batch:batch,last_biometric_import_strategy:modern?'biodata':'legacy_fingertmp',last_biometric_import_command_count:commands.length,raw_biometric_templates_stored:false};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ await audit(env,me,'attendance_biometric_import_requested','attendance_device',device.id,device.branch_id,null,{batch,strategy:modern?'biodata':'legacy_fingertmp',commands:commands.length,linked_pins:unique.length,employee_id:txt(body.attendance_employee_id)||null},'طلب استيراد البصمات الموجودة على الجهاز');
+ return {ok:true,queued:true,batch,strategy:modern?'biodata':'legacy_fingertmp',commands:queued?.length||0,linked_pins:unique.length,message:'تم بدء استيراد البصمات الموجودة على الجهاز لـ '+unique.length+' موظف. القوالب الخام لن تُحفظ.'};
+}
 function biometricSpec(body){
  const type=txt(body.biometric_type)==='face'?'face':'finger';
  if(type==='face')return {biometric_type:'face',biometric_key:'face',finger_code:null,slot_no:null};
@@ -1470,6 +1585,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='push_employee_to_devices')return json(await pushEmployeeToDevices(env,me,body));
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='request_biometric_enrollment')return json(await requestBiometricEnrollment(env,me,body));
+  if(action==='import_device_biometrics')return json(await importDeviceBiometrics(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
   if(action==='save_attendance_policy')return json(await saveAttendancePolicy(env,me,body));
   if(action==='close_attendance_month')return json(await closeAttendanceMonth(env,me,body));
