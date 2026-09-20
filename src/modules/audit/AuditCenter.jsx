@@ -74,10 +74,14 @@ export default function AuditCenter({go,initialTab=''}) {
  const canAudit=elevated(user)||has(user,'auditLog')||has(user,'managePermissions');
  const canReviewDuplicates=elevated(user)||has(user,'editBookings')||has(user,'editPassenger');
  const canMerge=elevated(user)||has(user,'editBookings')||has(user,'editPassenger');
+ const canReviewAttendance=elevated(user)||has(user,'attendance_view')||has(user,'attendance_manage_employees');
+ const canMergeAttendance=elevated(user)||has(user,'attendance_manage_employees');
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes');
  const [selectedAudit,setSelectedAudit]=useState(null);
  const [mergeOpen,setMergeOpen]=useState(false),[mergeGroup,setMergeGroup]=useState(null),[canonicalId,setCanonicalId]=useState(''),[duplicateId,setDuplicateId]=useState(''),[preview,setPreview]=useState(null),[previewBusy,setPreviewBusy]=useState(false),[mergeBusy,setMergeBusy]=useState(false),[mergeReason,setMergeReason]=useState(''),[confirmNo,setConfirmNo]=useState('');
+ const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
+ const [employeeMergeOpen,setEmployeeMergeOpen]=useState(false),[employeeGroup,setEmployeeGroup]=useState(null),[employeeCanonicalId,setEmployeeCanonicalId]=useState(''),[employeeDuplicateId,setEmployeeDuplicateId]=useState(''),[employeePreview,setEmployeePreview]=useState(null),[employeePreviewBusy,setEmployeePreviewBusy]=useState(false),[employeeMergeBusy,setEmployeeMergeBusy]=useState(false),[employeeReason,setEmployeeReason]=useState(''),[employeeConfirm,setEmployeeConfirm]=useState('');
 
  const bookingMap=useMemo(()=>new Map((data.bookings||[]).map(b=>[String(b.id),b])),[data.bookings]);
  const tripMap=useMemo(()=>new Map((data.trips||[]).map(t=>[String(t.id),t])),[data.trips]);
@@ -96,11 +100,18 @@ export default function AuditCenter({go,initialTab=''}) {
   }catch(e){setError(e.message)}finally{setAuditBusy(false)}
  }
  useEffect(()=>{if(canAudit)loadAudit()},[]);
+ async function loadEmployeeDuplicates(){
+  if(!canReviewAttendance)return;
+  setEmployeeBusy(true);setError('');
+  try{const x=await api.admin({action:'attendance_employee_duplicates_list'});setEmployeeGroups(x.groups||[])}
+  catch(e){setError(e.message)}finally{setEmployeeBusy(false)}
+ }
+ useEffect(()=>{if(canReviewAttendance)loadEmployeeDuplicates()},[]);
 
  const tabs=useMemo(()=>[
   ...(canAudit?[{id:'activity',label:'سجل النشاط',icon:History,badge:auditRows.length||null}]:[]),
-  ...(canReviewDuplicates?[{id:'duplicates',label:'مراجعة التكرارات',icon:GitMerge,badge:duplicateGroups.length||null}]:[])
- ],[canAudit,canReviewDuplicates,auditRows.length,duplicateGroups.length]);
+  ...((canReviewDuplicates||canReviewAttendance)?[{id:'duplicates',label:'مراجعة التكرارات',icon:GitMerge,badge:(duplicateGroups.length+employeeGroups.length)||null}]:[])
+ ],[canAudit,canReviewDuplicates,canReviewAttendance,auditRows.length,duplicateGroups.length,employeeGroups.length]);
  const [tab,setTab]=useModuleTab('almaher:module:audit-center',tabs,initialTab||(canAudit?'activity':'duplicates'));
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setTab(initialTab)},[initialTab,tabs.length]);
 
@@ -175,13 +186,42 @@ export default function AuditCenter({go,initialTab=''}) {
   {key:'bookings',label:'الحجوزات',render:r=><div><strong>{r.booking_numbers.length}</strong><div className="muted-small">{r.booking_numbers.slice(0,6).join(' · ')}</div></div>},
   {key:'note',label:'التصنيف',render:()=> <Badge tone="green">عميل متكرر — لا يُدمج تلقائيًا</Badge>}
  ];
+ function openEmployeeMerge(g){
+  const canonical=g.records[0],duplicate=g.records[1];
+  setEmployeeGroup(g);setEmployeeCanonicalId(canonical.id);setEmployeeDuplicateId(duplicate.id);setEmployeeReason('');setEmployeeConfirm('');setEmployeePreview(null);setEmployeeMergeOpen(true);
+  previewEmployeePair(canonical.id,duplicate.id);
+ }
+ async function previewEmployeePair(cId,dId){
+  if(!cId||!dId||cId===dId){setEmployeePreview(null);return}
+  setEmployeePreviewBusy(true);setError('');
+  try{const x=await api.admin({action:'attendance_employee_duplicate_preview',canonical_id:cId,duplicate_id:dId});setEmployeePreview(x)}
+  catch(e){setEmployeePreview({can_merge:false,reasons:[e.message]})}finally{setEmployeePreviewBusy(false)}
+ }
+ async function mergeEmployeePair(e){
+  e.preventDefault();if(!employeePreview?.can_merge)return;
+  setEmployeeMergeBusy(true);setError('');
+  try{
+   const x=await api.admin({action:'attendance_employee_duplicate_merge',canonical_id:employeeCanonicalId,duplicate_id:employeeDuplicateId,reason:employeeReason,confirm_employee_code:employeeConfirm});
+   setNotice(`تم دمج سجل موظف الحضور المكرر في ${x?.result?.employee_code||employeePreview?.canonical?.employee_code||''} مع تحويل المراجع والاحتفاظ بأثر الدمج.`);
+   setEmployeeMergeOpen(false);await loadEmployeeDuplicates();if(canAudit)await loadAudit();
+  }catch(e2){setError(e2.message)}finally{setEmployeeMergeBusy(false)}
+ }
+ const employeeCols=[
+  {key:'code',label:'الموظف',render:r=><div><strong>{r.canonical?.employee_code||'—'}</strong><div className="muted-small">{r.records.map(x=>x.name||x.employee_code).join(' · ')}</div></div>},
+  {key:'match',label:'سبب الاشتباه',render:r=><Badge tone="orange">{r.match}</Badge>},
+  {key:'count',label:'السجلات',render:r=><strong>{r.records.length}</strong>},
+  {key:'identity',label:'الهوية / الجوال',render:r=>r.canonical?.national_id||r.canonical?.phone||'—'},
+  {key:'branch',label:'الفرع',render:r=>r.branch_id?(branchMap.get(String(r.branch_id))?.name||'—'):'—'},
+  {key:'action',label:'',render:r=><Button variant="primary" onClick={()=>openEmployeeMerge(r)}><GitMerge size={14}/> معاينة الدمج</Button>}
+ ];
 
  const selectedChanges=selectedAudit?normalizeAuditChanges(selectedAudit.metadata?.changes||[],{tripMap,branchMap}):[];
  const selectedMeta=selectedAudit?.metadata||{};
- const refTotal=obj=>Object.values(obj||{}).reduce((n,v)=>n+Number(v||0),0);
+ const refValue=v=>typeof v==='object'&&v!==null?Number(String(v.count||0).replace('+','')):Number(v||0);
+ const refTotal=obj=>Object.values(obj||{}).reduce((n,v)=>{const x=refValue(v);return n+(Number.isFinite(x)?x:0)},0);
 
  return <>
-  <ModuleShell title="سجل النشاط والتكرارات" subtitle="تتبع من غيّر ماذا ومتى، مع مراجعة آمنة للتكرارات داخل نفس الحجز دون خلط رحلات العميل السابقة" icon={Activity} tabs={tabs} activeTab={tab} onTabChange={setTab} actions={<>{tab==='activity'&&canAudit&&<Button onClick={loadAudit} disabled={auditBusy}><RefreshCw size={16}/> تحديث السجل</Button>}{tab==='duplicates'&&<Button onClick={()=>refresh()}><RefreshCw size={16}/> تحديث البيانات</Button>}</>} breadcrumbs={[{label:'الإدارة والمتابعة'},{label:'السجل والتكرارات'}]}/>
+  <ModuleShell title="Timeline / Audit Center" subtitle="من أنشأ السجل، من عدله، متى تغيّر، قبل/بعد، ودمج آمن للتكرارات بدل الحذف" icon={Activity} tabs={tabs} activeTab={tab} onTabChange={setTab} actions={<>{tab==='activity'&&canAudit&&<Button onClick={loadAudit} disabled={auditBusy}><RefreshCw size={16}/> تحديث السجل</Button>}{tab==='duplicates'&&<Button onClick={async()=>{await refresh();if(canReviewAttendance)await loadEmployeeDuplicates()}} disabled={employeeBusy}><RefreshCw size={16}/> تحديث التكرارات</Button>}</>} breadcrumbs={[{label:'الإدارة والمتابعة'},{label:'Audit Center'}]}/>
   <ErrorBox error={error}/>
   {notice&&<div className="success-note">{notice}</div>}
 
@@ -193,17 +233,18 @@ export default function AuditCenter({go,initialTab=''}) {
     <Card><div className="stat-card"><Activity/><div><span>مالية</span><strong>{auditCounts.finance}</strong><small>تحصيل واسترداد ومصروفات</small></div></div></Card>
    </div>
    <Card><div className="operation-filters"><div className="filterbar"><Search size={17}/><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="ابحث باسم المستخدم أو العملية أو رقم السجل"/></div><Select value={category} onChange={e=>setCategory(e.target.value)}><option value="all">كل الأقسام</option><option value="security">أمان وصلاحيات</option><option value="operations">تشغيل وحجوزات</option><option value="finance">مالية</option><option value="hr">HR وحضور</option><option value="system">نظام</option></Select><Select value={auditMode} onChange={e=>setAuditMode(e.target.value)}><option value="changes">التغييرات المهمة فقط</option><option value="all">كل الحركات التقنية</option></Select><Badge>{filteredAudit.length} حركة</Badge></div></Card>
-   <Card><div className="card-title"><div><h3>الخط الزمني للنظام</h3><small>سجل قراءة فقط. التفاصيل تُظهر التغييرات قبل/بعد عندما يكون المصدر قد سجلها.</small></div></div><Table preferenceKey="audit-center" defaultPageSize={25} rows={filteredAudit} columns={auditCols}/></Card>
+   <Card><div className="card-title"><div><h3>الخط الزمني للنظام</h3><small>يجمع سجل النشاط العام مع سجل التدقيق التفصيلي. العمليات التي سجلت Snapshot تعرض قبل/بعد تلقائيًا.</small></div><div className="finance-actions"><Badge tone="green">تفصيلي {auditSummary?.sources?.detailed||0}</Badge><Badge>عام {auditSummary?.sources?.activity||0}</Badge></div></div><Table preferenceKey="audit-center" defaultPageSize={25} rows={filteredAudit} columns={auditCols}/></Card>
   </>)}
 
-  {tab==='duplicates'&&canReviewDuplicates&&<>
+  {tab==='duplicates'&&(canReviewDuplicates||canReviewAttendance)&&<>
    <div className="stats-grid">
-    <Card><div className="stat-card"><GitMerge/><div><span>مرشحو دمج آمن</span><strong>{duplicateGroups.length}</strong><small>داخل نفس الحجز فقط</small></div></div></Card>
-    <Card><div className="stat-card"><UsersRound/><div><span>عملاء متكررون</span><strong>{repeatGroups.length}</strong><small>هويات ظهرت في حجوزات مختلفة</small></div></div></Card>
-    <Card><div className="stat-card"><ShieldCheck/><div><span>قاعدة الأمان</span><strong>نفس الحجز</strong><small>لا دمج بين رحلتين أو حجزين مختلفين</small></div></div></Card>
+    <Card><div className="stat-card"><GitMerge/><div><span>تكرارات المسافرين</span><strong>{canReviewDuplicates?duplicateGroups.length:'—'}</strong><small>داخل نفس الحجز فقط</small></div></div></Card>
+    <Card><div className="stat-card"><UsersRound/><div><span>تكرارات موظفي الحضور</span><strong>{canReviewAttendance?employeeGroups.length:'—'}</strong><small>نفس الفرع والبيئة فقط</small></div></div></Card>
+    <Card><div className="stat-card"><ShieldCheck/><div><span>قاعدة الدمج</span><strong>Merge ≠ Delete</strong><small>السجل المكرر يبقى كأثر مرتبط بالأساسي</small></div></div></Card>
    </div>
-   <Card><div className="card-title"><div><h3>مرشحو الدمج</h3><small>المطابقة القوية: نفس الهوية، أو نفس الاسم والجوال. الدمج الفعلي يتوقف إذا وجد تعارض مقعد أو تسكين.</small></div><Badge tone={duplicateGroups.length?'orange':'green'}>{duplicateGroups.length}</Badge></div>{duplicateGroups.length?<Table preferenceKey="passenger-duplicate-candidates" defaultPageSize={25} rows={duplicateGroups} columns={dupCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات مسافرين مكررة داخل نفس الحجز ضمن نطاقك.</div>}</Card>
-   <Card><div className="card-title"><div><h3>سجل العميل المتكرر عبر حجوزات مختلفة</h3><small>هذه ليست أخطاء افتراضيًا؛ نفس الشخص قد يسافر أكثر من مرة، لذلك لا يسمح النظام بدمجها.</small></div><Badge>{repeatGroups.length}</Badge></div>{repeatGroups.length?<Table preferenceKey="repeat-passengers" defaultPageSize={25} rows={repeatGroups} columns={repeatCols}/>:<div className="empty">لا توجد هويات متكررة عبر حجوزات مختلفة.</div>}</Card>
+   {canReviewDuplicates&&<Card><div className="card-title"><div><h3>مسافرون مكررون داخل نفس الحجز</h3><small>المطابقة القوية: نفس الهوية، أو نفس الاسم والجوال. يتوقف الدمج عند تعارض مقعد أو تسكين.</small></div><Badge tone={duplicateGroups.length?'orange':'green'}>{duplicateGroups.length}</Badge></div>{duplicateGroups.length?<Table preferenceKey="passenger-duplicate-candidates" defaultPageSize={25} rows={duplicateGroups} columns={dupCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات مسافرين مكررة داخل نفس الحجز ضمن نطاقك.</div>}</Card>}
+   {canReviewAttendance&&<Card><div className="card-title"><div><h3>موظفو حضور مشتبه بتكرارهم</h3><small>المطابقة: نفس حساب الموظف، أو نفس الهوية، أو نفس الاسم والجوال. قبل الدمج يتم فحص الدوام وقرارات المخالفات والروابط والحركات.</small></div><Badge tone={employeeGroups.length?'orange':'green'}>{employeeBusy?'…':employeeGroups.length}</Badge></div>{employeeBusy&&!employeeGroups.length?<Loading text="جاري فحص تكرارات الموظفين..."/>:employeeGroups.length?<Table preferenceKey="attendance-employee-duplicate-candidates" defaultPageSize={25} rows={employeeGroups} columns={employeeCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات موظفين مكررة ضمن نطاقك.</div>}</Card>}
+   {canReviewDuplicates&&<Card><div className="card-title"><div><h3>سجل العميل المتكرر عبر حجوزات مختلفة</h3><small>هذه ليست أخطاء افتراضيًا؛ نفس الشخص قد يسافر أكثر من مرة، لذلك لا يسمح النظام بدمجها.</small></div><Badge>{repeatGroups.length}</Badge></div>{repeatGroups.length?<Table preferenceKey="repeat-passengers" defaultPageSize={25} rows={repeatGroups} columns={repeatCols}/>:<div className="empty">لا توجد هويات متكررة عبر حجوزات مختلفة.</div>}</Card>}
   </>}
 
   <Modal open={!!selectedAudit} onClose={()=>setSelectedAudit(null)} title="تفاصيل حركة النظام" wide>
@@ -224,6 +265,18 @@ export default function AuditCenter({go,initialTab=''}) {
     <Field label="سبب الدمج"><Textarea value={mergeReason} onChange={e=>setMergeReason(e.target.value)} placeholder="مثال: تم إدخال نفس المسافر مرتين داخل الحجز" required/></Field>
     <Field label={'اكتب رقم الحجز للتأكيد: '+(preview?.booking?.booking_number||mergeGroup.booking_number)}><Input value={confirmNo} onChange={e=>setConfirmNo(e.target.value)} required/></Field>
     <div className="modal-actions" style={{gridColumn:'1/-1'}}><Button type="button" onClick={()=>setMergeOpen(false)} disabled={mergeBusy}>إلغاء</Button>{canMerge&&<Button variant="primary" type="submit" disabled={mergeBusy||previewBusy||!preview?.can_merge||mergeReason.trim().length<5||confirmNo!==String(preview?.booking?.booking_number||mergeGroup.booking_number)}><GitMerge size={15}/>{mergeBusy?'جاري الدمج...':'تنفيذ الدمج الآمن'}</Button>}</div>
+   </form>}
+  </Modal>
+
+  <Modal open={employeeMergeOpen} onClose={()=>!employeeMergeBusy&&setEmployeeMergeOpen(false)} title="معاينة دمج موظف حضور مكرر" wide>
+   {employeeGroup&&<form className="form-grid" onSubmit={mergeEmployeePair}>
+    <div className="warning-list" style={{gridColumn:'1/-1'}}><div><AlertTriangle size={16}/> لا يوجد حذف. السجل الأساسي يبقى فعالًا، والسجل المكرر يتحول إلى Inactive مرتبط بالأساسي مع حفظ سبب الدمج وكل المراجع المنقولة.</div></div>
+    <Field label="السجل الأساسي الذي سيبقى"><Select value={employeeCanonicalId} onChange={e=>{const v=e.target.value;setEmployeeCanonicalId(v);const other=employeeDuplicateId===v?employeeGroup.records.find(x=>x.id!==v)?.id:employeeDuplicateId;setEmployeeDuplicateId(other||'');setEmployeeConfirm('');previewEmployeePair(v,other||'')}}>{employeeGroup.records.map(p=><option key={p.id} value={p.id}>{p.employee_code} · {p.name} · {p.national_id||p.phone||p.id}</option>)}</Select></Field>
+    <Field label="السجل المكرر الذي سيُدمج"><Select value={employeeDuplicateId} onChange={e=>{setEmployeeDuplicateId(e.target.value);previewEmployeePair(employeeCanonicalId,e.target.value)}}>{employeeGroup.records.filter(p=>p.id!==employeeCanonicalId).map(p=><option key={p.id} value={p.id}>{p.employee_code} · {p.name} · {p.national_id||p.phone||p.id}</option>)}</Select></Field>
+    <div style={{gridColumn:'1/-1'}}>{employeePreviewBusy?<Loading text="جاري فحص الحركات والدوام والروابط والمخالفات..."/>:employeePreview&&<Card><div className="card-title"><div><h3>{employeePreview.can_merge?'جاهز للدمج':'لا يمكن الدمج حاليًا'}</h3><small>{employeePreview.match?.label||''}</small></div><Badge tone={employeePreview.can_merge?'green':'red'}>{employeePreview.can_merge?'آمن':'موقوف'}</Badge></div>{employeePreview.reasons?.length>0&&<div className="warning-list">{employeePreview.reasons.map((x,i)=><div key={i}><AlertTriangle size={15}/>{x}</div>)}</div>}<div className="detail-grid"><div><span>مراجع السجل الأساسي</span><strong>{refTotal(employeePreview.references?.canonical)}</strong></div><div><span>مراجع السجل المكرر</span><strong>{refTotal(employeePreview.references?.duplicate)}</strong></div><div><span>الموظف الأساسي</span><strong>{employeePreview.canonical?.employee_code||'—'}</strong></div><div><span>المطابقة</span><strong>{employeePreview.match?.label||'—'}</strong></div></div></Card>}</div>
+    <Field label="سبب الدمج"><Textarea value={employeeReason} onChange={e=>setEmployeeReason(e.target.value)} placeholder="مثال: تم إنشاء سجل حضور آخر لنفس الموظف عند استيراد جهاز البصمة" required/></Field>
+    <Field label={'اكتب رقم الموظف الأساسي للتأكيد: '+(employeePreview?.canonical?.employee_code||'')}><Input value={employeeConfirm} onChange={e=>setEmployeeConfirm(e.target.value)} required/></Field>
+    <div className="modal-actions" style={{gridColumn:'1/-1'}}><Button type="button" onClick={()=>setEmployeeMergeOpen(false)} disabled={employeeMergeBusy}>إلغاء</Button>{canMergeAttendance&&<Button variant="primary" type="submit" disabled={employeeMergeBusy||employeePreviewBusy||!employeePreview?.can_merge||employeeReason.trim().length<5||employeeConfirm!==String(employeePreview?.canonical?.employee_code||'')}><GitMerge size={15}/>{employeeMergeBusy?'جاري الدمج...':'تنفيذ الدمج الآمن'}</Button>}</div>
    </form>}
   </Modal>
  </>;
