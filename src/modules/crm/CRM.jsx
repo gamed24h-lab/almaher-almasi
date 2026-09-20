@@ -6,6 +6,8 @@ import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,PageHeader,Select,T
 import {dateTime,statusLabel,tripDisplay} from '../../lib/format.js';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 
 const s=v=>String(v??'');
 const low=v=>s(v).toLowerCase();
@@ -15,6 +17,7 @@ export default function CRM(){
  const {data:app}=useAppData();
  const [data,setData]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[modal,setModal]=useState(null),[tab,setTab]=useState('tickets');
  const [listFilter,setListFilter]=useState({q:'',status:'',priority:'',branch:'',source:''});
+ const [listRules,setListRules]=useState([]),[listRuleMode,setListRuleMode]=useState('all');
  async function load(){setError('');try{setData(await api.module('crm'))}catch(e){setError(e.message)}}
  useEffect(()=>{load()},[]);
  const bookings=app.bookings||[],trips=app.trips||[],branches=app.branches||[];
@@ -58,6 +61,16 @@ export default function CRM(){
  const priorityOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.priority).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
  const sourceOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.source_channel||r.source).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:s(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
+ const crmRuleFields=useMemo(()=>[
+  {key:'status',label:'الحالة',options:statusOptions,get:r=>s(r.status)},
+  {key:'priority',label:'الأولوية',options:priorityOptions,get:r=>s(r.priority)},
+  {key:'branch',label:'الفرع',options:branchOptions,get:r=>s(r.branch_id||bmap.get(s(r.booking_id))?.branch_id)},
+  {key:'source',label:'المصدر',options:sourceOptions,get:r=>s(r.source_channel||r.source)},
+  {key:'subject',label:'الموضوع / الاسم',get:r=>r.subject||r.title||r.name},
+  {key:'phone',label:'الجوال',get:r=>r.phone||bmap.get(s(r.booking_id))?.customer_phone},
+  {key:'assigned',label:'المسؤول',get:r=>r.assigned_to},
+  {key:'booking',label:'رقم الحجز',get:r=>bmap.get(s(r.booking_id))?.booking_number}
+ ],[statusOptions,priorityOptions,branchOptions,sourceOptions,bmap]);
  const filteredRows=useMemo(()=>rows.filter(r=>{
   if(listFilter.status&&s(r.status)!==listFilter.status)return false;
   if(listFilter.priority&&s(r.priority)!==listFilter.priority)return false;
@@ -70,8 +83,8 @@ export default function CRM(){
   <PageHeader title="CRM وخدمة العملاء" subtitle="الشكاوى، التقييمات، استعادة رضا العميل والمتابعة بعد الرحلة" actions={<><Button onClick={load}><RefreshCw size={16}/> تحديث</Button><Button onClick={()=>setModal('rating')}><Star size={16}/> تقييم بعد الرحلة</Button><Button variant="primary" onClick={()=>setModal('complaint')}><MessageSquarePlus size={16}/> تسجيل شكوى</Button></>}/>
   <ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#ecfdf3',color:'#166534',borderColor:'#bbf7d0'}}>{notice}</div>}
   <div className="stats-grid"><Mini icon={<TicketCheck/>} label="تذاكر مفتوحة" value={openTickets}/><Mini icon={<AlertTriangle/>} label="شكاوى" value={complaints.length}/><Mini icon={<UsersRound/>} label="متابعات رضا العميل" value={openRecovery}/><Mini icon={<CheckCircle2/>} label="مغلقة/محلولة" value={tickets.length-openTickets}/></div>
-  <div className="tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>{setTab(k);setListFilter({q:'',status:'',priority:'',branch:'',source:''})}}>{l}<span>{n}</span></button>)}</div>
-  {!data&&!error?<Loading/>:<Card><SmartListFilters storageKey={`crm-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالعميل أو الجوال أو الحجز أو الموضوع أو المسؤول..." totalCount={rows.length} resultCount={filteredRows.length} onReset={()=>setListFilter({q:'',status:'',priority:'',branch:'',source:''})} filters={[
+  <div className="tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>{setTab(k);setListFilter({q:'',status:'',priority:'',branch:'',source:''});setListRules([]);setListRuleMode('all')}}>{l}<span>{n}</span></button>)}</div>
+  {!data&&!error?<Loading/>:<Card><SmartListFilters storageKey={`crm-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالعميل أو الجوال أو الحجز أو الموضوع أو المسؤول..." totalCount={rows.length} resultCount={filteredRows.length} onReset={()=>{setListFilter({q:'',status:'',priority:'',branch:'',source:''});setListRules([]);setListRuleMode('all')}} advanced={{getValue:()=>({rules:listRules,mode:listRuleMode}),onApply:v=>{setListRules(Array.isArray(v?.rules)?v.rules:[]);setListRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={crmRuleFields} rules={listRules} mode={listRuleMode} onRulesChange={setListRules} onModeChange={setListRuleMode}/>}} filters={[
    {key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:statusOptions},
    ...(tab!=='leads'?[{key:'priority',label:'الأولوية',value:listFilter.priority,onChange:v=>setListFilter(x=>({...x,priority:v})),options:priorityOptions}]:[]),
    ...((tab==='tickets'||tab==='complaints')?[{key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions}]:[]),
