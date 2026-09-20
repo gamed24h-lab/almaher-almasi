@@ -13,7 +13,7 @@ const statusTone=s=>s==='success'?'green':s==='failed'?'red':s==='queued'||s==='
 function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 
 export default function AttendanceBiometrics({state,employee,onChanged,onError,onNotice,disabled=false}){
- const [open,setOpen]=useState(false),[busy,setBusy]=useState(false);
+ const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[importBusy,setImportBusy]=useState(false);
  const [form,setForm]=useState({biometric_type:'finger',finger_code:'right_index',device_id:'',overwrite_existing:true,retry_count:3,reason:''});
  const devices=state.devices||[],links=state.links||[],profiles=state.biometricProfiles||[],requests=state.biometricEnrollmentRequests||[];
  const deviceMap=useMemo(()=>new Map(devices.map(d=>[String(d.id),d])),[devices]);
@@ -55,13 +55,23 @@ export default function AttendanceBiometrics({state,employee,onChanged,onError,o
    await onChanged?.();
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
  }
+ async function importExisting(){
+  if(!form.device_id){onError?.('اختر الجهاز الذي توجد عليه بصمة الموظف.');return}
+  setImportBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'import_device_biometrics',device_id:form.device_id,attendance_employee_id:employee.id});
+   onNotice?.(out?.message||'تم بدء قراءة البصمات الموجودة للموظف من الجهاز.');
+   await onChanged?.();
+  }catch(err){onError?.(err.message)}finally{setImportBusy(false)}
+ }
 
  const profileCols=[
   {key:'kind',label:'البصمة',render:r=><div><strong>{r.biometric_type==='face'?'بصمة الوجه':fingerLabel(r.finger_code)}</strong><div className="muted-small">{r.biometric_type==='face'?'Face':('Finger · Slot '+r.slot_no)}</div></div>},
   {key:'device',label:'آخر جهاز تسجيل',render:r=>deviceMap.get(String(r.source_device_id))?.name||'—'},
   {key:'version',label:'الإصدار',render:r=><Badge>V{r.version||1}</Badge>},
   {key:'status',label:'الحالة',render:r=><Badge tone={r.status==='active'?'green':r.status==='error'?'red':'orange'}>{r.status==='active'?'نشطة':r.status==='disabled'?'معطلة':'مشكلة'}</Badge>},
-  {key:'date',label:'آخر تسجيل',render:r=>fmt(r.last_enrolled_at)}
+  {key:'source',label:'المصدر',render:r=>r.metadata?.source==='device_import'?<Badge tone="blue">مستوردة من الجهاز</Badge>:<Badge tone="green">مسجلة من النظام</Badge>},
+  {key:'date',label:'آخر تحديث',render:r=>fmt(r.last_enrolled_at||r.last_sync_at)}
  ];
  const requestCols=[
   {key:'kind',label:'الطلب',render:r=>r.biometric_type==='face'?'وجه':fingerLabel(r.finger_code)},
@@ -111,8 +121,9 @@ export default function AttendanceBiometrics({state,employee,onChanged,onError,o
       <Textarea value={form.reason} onChange={e=>setForm(x=>({...x,reason:e.target.value}))} placeholder={existing?'مثال: إعادة تسجيل بسبب ضعف القراءة':'ملاحظات التسجيل'}/>
      </Field>
      <div className="finance-actions" style={{gridColumn:'1/-1'}}>
-      <Button type="submit" variant="primary" disabled={busy||!linkedDevices.length}><Fingerprint size={15}/>{busy?' جاري إرسال الطلب...':existing?' تغيير البصمة':' تسجيل بصمة جديدة'}</Button>
-      <Button type="button" onClick={()=>onChanged?.()} disabled={busy}><RefreshCw size={15}/> تحديث الحالة</Button>
+      <Button type="submit" variant="primary" disabled={busy||importBusy||!linkedDevices.length}><Fingerprint size={15}/>{busy?' جاري إرسال الطلب...':existing?' تغيير البصمة':' تسجيل بصمة جديدة'}</Button>
+      <Button type="button" onClick={importExisting} disabled={importBusy||busy||!form.device_id}><RefreshCw size={15}/>{importBusy?' جاري طلب البصمات...':' استيراد الموجود من الجهاز'}</Button>
+      <Button type="button" onClick={()=>onChanged?.()} disabled={busy||importBusy}><RefreshCw size={15}/> تحديث الحالة</Button>
      </div>
      {!linkedDevices.length&&<div className="error-box" style={{gridColumn:'1/-1'}}>الموظف غير مربوط بأي جهاز بصمة. اربطه بجهاز وحدد PIN أولًا، وبعدها سيظهر الجهاز هنا.</div>}
      {form.biometric_type==='face'&&<div className="muted-small" style={{gridColumn:'1/-1'}}>تسجيل الوجه يعتمد على دعم موديل الجهاز لأمر Face Enrollment. إذا لم يدعمه الجهاز ستظهر العملية كفشل مع كود الجهاز بدون إنشاء سجل وجه مؤكد.</div>}
