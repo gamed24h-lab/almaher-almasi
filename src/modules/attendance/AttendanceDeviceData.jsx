@@ -14,7 +14,7 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
-function cmdName(v,meta){const s=meta?.history_strategy;return v==='sync_info'?'معلومات الجهاز':v==='diagnostic_info'?'تشخيص الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='history_attlog_replay'?'الحركات القديمة — إعادة إرسال':v==='biometric_import_fingerprint'?'استيراد بصمات الأصابع':v==='biometric_import_face'?'استيراد بصمة الوجه':v==='biometric_enroll'?'تسجيل بصمة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
+function cmdName(v,meta){const s=meta?.history_strategy;return v==='sync_info'?'معلومات الجهاز':v==='diagnostic_info'?'تشخيص الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='history_attlog_replay'?'الحركات القديمة — إعادة إرسال':v==='biometric_import_fingerprint'?'استيراد بصمات الأصابع':v==='biometric_import_face'?'استيراد بصمة الوجه':v==='biometric_enroll'?'تسجيل بصمة':v==='biometric_delete'?'حذف بصمة محددة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
 function cmdReason(c){
  if(c?.status!=='failed')return '';
  const code=Number(c?.result_code),s=c?.metadata?.history_strategy;
