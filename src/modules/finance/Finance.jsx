@@ -13,6 +13,8 @@ import FinanceReconciliation from './FinanceReconciliation.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
 import {DATE_PRESET_OPTIONS,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 
 const s=v=>String(v??'');
 const REPORTS={summary:'الملخص المالي',expenses:'المصروفات',transactions:'الحركات المالية',cash_registers:'الخزن',cash_shifts:'الورديات',supplier_payables:'مستحقات الموردين'};
@@ -22,6 +24,7 @@ export default function Finance(){
  const [data,setData]=useState(null),[brief,setBrief]=useState(null),[error,setError]=useState(''),[modal,setModal]=useState(null),[busy,setBusy]=useState(false);
  const [report,setReport]=useState({type:'summary',branch:'',from:'',to:''});
  const [listFilter,setListFilter]=useState({q:'',branch:'',status:'',type:'',category:'',register:'',datePreset:'',fromDate:'',toDate:''});
+ const [listRules,setListRules]=useState([]),[listRuleMode,setListRuleMode]=useState('all');
  const p=user?.permissions||{},viewReceiptExplicit=Object.prototype.hasOwnProperty.call(p,'viewPaymentReceipts'),printReceiptExplicit=Object.prototype.hasOwnProperty.call(p,'printPaymentReceipts');
  const canViewReceipt=has(user,'viewPaymentReceipts')||(!viewReceiptExplicit&&(has(user,'finance')||has(user,'payments')));
  const canPrintReceipt=has(user,'printPaymentReceipts')||(!printReceiptExplicit&&(has(user,'finance')||has(user,'payments')));
@@ -56,6 +59,18 @@ export default function Finance(){
  const typeOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.type||r.transaction_type).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
  const categoryOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.category).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[rows]);
  const registerOptions=useMemo(()=>(data?.cash_registers||[]).map(r=>({value:s(r.id),label:r.name||r.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data]);
+ const financeRuleFields=useMemo(()=>[
+  {key:'branch',label:'الفرع',options:branchOptions,get:r=>s(r.branch_id)},
+  {key:'status',label:'الحالة',options:statusOptions,get:r=>s(r.status||(tab==='cash_registers'?(r.active===false?'inactive':'active'):'posted'))},
+  {key:'type',label:'نوع الحركة',options:typeOptions,get:r=>s(r.type||r.transaction_type)},
+  {key:'category',label:'البند',options:categoryOptions,get:r=>s(r.category)},
+  {key:'register',label:'الخزنة',options:registerOptions,get:r=>s(r.register_id)},
+  {key:'amount',label:'المبلغ',type:'number',get:r=>r.amount},
+  {key:'paidAmount',label:'المبلغ المدفوع',type:'number',get:r=>r.paid_amount},
+  {key:'variance',label:'فرق الوردية',type:'number',get:r=>r.variance},
+  {key:'reference',label:'المرجع / رقم الحجز',get:r=>r.reference||r.reference_no||r.booking_number},
+  {key:'date',label:'تاريخ السجل',type:'date',get:r=>rowDate(r)}
+ ],[branchOptions,statusOptions,typeOptions,categoryOptions,registerOptions,tab]);
  const filteredRows=useMemo(()=>rows.filter(r=>{
   const currentStatus=s(r.status||(tab==='cash_registers'?(r.active===false?'inactive':'active'):''));
   if(listFilter.branch&&s(r.branch_id)!==listFilter.branch)return false;
@@ -65,7 +80,7 @@ export default function Finance(){
   if(listFilter.register&&s(r.register_id)!==listFilter.register)return false;
   if(!isWithinDateRange(rowDate(r),listFilter.fromDate,listFilter.toDate))return false;
   return matchesListQuery(listFilter.q,r.expense_date,r.category,r.notes,r.created_at,r.type,r.transaction_type,r.status,r.reference,r.reference_no,r.booking_number,r.name,r.opened_at,r.due_date,r.supplier_id,r.amount,r.paid_amount,branchMap.get(s(r.branch_id)),registerMap.get(s(r.register_id))?.name,appData.trips.find(t=>s(t.id)===s(r.trip_id))?.trip_code);
- }),[rows,listFilter,tab,branchMap,registerMap,appData.trips]);
+ }),[rows,listFilter,tab,branchMap,registerMap,appData.trips,listRules,financeRuleFields,listRuleMode]);
  function applyListDatePreset(v){setListFilter(x=>{if(!v)return {...x,datePreset:'',fromDate:'',toDate:''};if(v==='custom')return {...x,datePreset:v};const r=dateRangeForPreset(v);return {...x,datePreset:v,fromDate:r.from,toDate:r.to}})}
  function rawValue(r,key){if(key==='trip')return appData.trips.find(t=>s(t.id)===s(r.trip_id))?.trip_code||'—';if(key==='branch')return branchMap.get(s(r.branch_id))||'—';if(key==='register_id')return registerMap.get(s(r.register_id))?.name||'—';if(['amount','paid_amount','opening_balance','actual_closing','variance'].includes(key))return money(r[key]);if(['created_at','opened_at'].includes(key))return dateTime(r[key]);if(key==='status')return statusLabel(r.status);if(key==='active')return r.active===false?'موقوفة':'نشطة';if(key==='reference')return r.reference||r.reference_no||r.booking_number||'—';if(key==='type')return statusLabel(r.type||r.transaction_type);if(key==='receipt')return receiptRef(r)||'—';return r[key]??'—'}
  function rowDate(r){return String(r.expense_date||r.created_at||r.opened_at||r.due_date||'').slice(0,10)}
@@ -85,13 +100,13 @@ export default function Finance(){
  function openReports(){setReport({type:'summary',branch:allFinance(user)?'':(appData.scope?.branch_id||''),from:'',to:''});setModal('report')}
  const contextualActions=<><Button onClick={load}><RefreshCw size={16}/> {t('refresh','تحديث')}</Button>{tab==='expenses'&&has(user,'expenses')&&<Button variant="primary" onClick={()=>setModal('expense')}><Plus size={16}/> {t('expense','مصروف')}</Button>}{tab==='cash_registers'&&(has(user,'finance')||has(user,'payments'))&&<Button variant="primary" onClick={()=>setModal('register')}><Plus size={16}/> {t('cashRegister','خزنة')}</Button>}{tab==='cash_shifts'&&(has(user,'finance')||has(user,'shifts'))&&<Button variant="primary" onClick={()=>setModal('shift')}><Plus size={16}/> {t('openShift','فتح وردية')}</Button>}{has(user,'printReports')&&<Button onClick={openReports}><Printer size={16}/> مركز التقارير</Button>}{has(user,'reports')&&<Button onClick={()=>{setReport(r=>({...r,type:['expenses','transactions','cash_registers','cash_shifts','supplier_payables'].includes(tab)?tab:'summary'}));setModal('report')}}><Download size={16}/> CSV / PDF</Button>}</>;
 
- return <div className="finance-module" data-tab={tab}><ModuleShell title={t('finance','المالية')} subtitle={t('financeSubtitle','التحصيل والمصروفات والخزن والورديات بعزل مالي صارم للفروع')} icon={WalletCards} tabs={moduleTabs} activeTab={tab} onTabChange={v=>{setTab(v);setListFilter({q:'',branch:'',status:'',type:'',category:'',register:'',datePreset:'',fromDate:'',toDate:''})}} actions={contextualActions} breadcrumbs={[{label:'المالية'},{label:moduleTabs.find(x=>x.id===tab)?.label||'نظرة عامة'}]}/><ErrorBox error={error}/>
+ return <div className="finance-module" data-tab={tab}><ModuleShell title={t('finance','المالية')} subtitle={t('financeSubtitle','التحصيل والمصروفات والخزن والورديات بعزل مالي صارم للفروع')} icon={WalletCards} tabs={moduleTabs} activeTab={tab} onTabChange={v=>{setTab(v);setListFilter({q:'',branch:'',status:'',type:'',category:'',register:'',datePreset:'',fromDate:'',toDate:''});setListRules([]);setListRuleMode('all')}} actions={contextualActions} breadcrumbs={[{label:'المالية'},{label:moduleTabs.find(x=>x.id===tab)?.label||'نظرة عامة'}]}/><ErrorBox error={error}/>
  <div className="finance-overview-panel">
   <div className="stats-grid finance-stats"><Stat icon={<WalletCards/>} label={t('totalBookings','إجمالي الحجوزات')} value={money(brief?.revenue)}/><Stat icon={<Banknote/>} label={t('grossCollected','إجمالي التحصيل التاريخي')} value={money(brief?.paid)}/><Stat icon={<RotateCcw/>} label={t('refunds','الاستردادات')} value={money(brief?.refunded)}/><Stat icon={<TrendingUp/>} label={t('netCollected','صافي المحصل')} value={money(brief?.net)}/><Stat icon={<ReceiptText/>} label={t('expenses','المصروفات')} value={money(brief?.expenses)}/></div>
   <Card><div className="finance-scope"><LockKeyhole size={17}/><span>{t('financialScope','النطاق المالي الحالي')}: <b>{allFinance(user)?t('allBranches','كل الفروع'):t('yourBranchOnly','فرعك فقط')}</b></span>{brief?.outstanding>0&&<Badge tone="orange">متبقي تحصيل {money(brief.outstanding)}</Badge>}{brief?.financial_mismatches>0&&<Badge tone="red">عدم تطابق مالي {brief.financial_mismatches}</Badge>}</div><div className="finance-actions">{has(user,'expenses')&&<Button variant="primary" onClick={()=>setModal('expense')}><Plus size={16}/> {t('expense','مصروف')}</Button>}{(has(user,'finance')||has(user,'payments'))&&<Button onClick={()=>setModal('register')}><Plus size={16}/> {t('cashRegister','خزنة')}</Button>}{(has(user,'finance')||has(user,'shifts'))&&<Button onClick={()=>setModal('shift')}><Plus size={16}/> {t('openShift','فتح وردية')}</Button>}</div></Card>
  </div>
  {tab==='reconciliation'&&<FinanceReconciliation/>}
- {['expenses','transactions','cash_registers','cash_shifts','supplier_payables'].includes(tab)&&(!data&&!error?<Loading/>:<Card><div className="card-title"><h3>{moduleTabs.find(x=>x.id===tab)?.label}</h3><Badge>{rows.length}</Badge></div><SmartListFilters storageKey={`finance-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث في السجل المالي..." totalCount={rows.length} resultCount={filteredRows.length} onReset={()=>setListFilter({q:'',branch:'',status:'',type:'',category:'',register:'',datePreset:'',fromDate:'',toDate:''})} filters={[
+ {['expenses','transactions','cash_registers','cash_shifts','supplier_payables'].includes(tab)&&(!data&&!error?<Loading/>:<Card><div className="card-title"><h3>{moduleTabs.find(x=>x.id===tab)?.label}</h3><Badge>{rows.length}</Badge></div><SmartListFilters storageKey={`finance-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث في السجل المالي..." totalCount={rows.length} resultCount={filteredRows.length} onReset={()=>{setListFilter({q:'',branch:'',status:'',type:'',category:'',register:'',datePreset:'',fromDate:'',toDate:''});setListRules([]);setListRuleMode('all')}} advanced={{getValue:()=>({rules:listRules,mode:listRuleMode}),onApply:v=>{setListRules(Array.isArray(v?.rules)?v.rules:[]);setListRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={financeRuleFields} rules={listRules} mode={listRuleMode} onRulesChange={setListRules} onModeChange={setListRuleMode}/>}} filters={[
  ...(rows.some(r=>r.branch_id!=null)?[{key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions}]:[]),
  ...((tab==='transactions'||tab==='cash_shifts'||tab==='cash_registers'||tab==='supplier_payables')?[{key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:statusOptions}]:[]),
  ...(tab==='transactions'?[{key:'type',label:'نوع الحركة',value:listFilter.type,onChange:v=>setListFilter(x=>({...x,type:v})),options:typeOptions}]:[]),
