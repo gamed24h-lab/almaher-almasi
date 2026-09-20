@@ -6,6 +6,8 @@ import {Card,PageHeader,Button,Table,Modal,Field,Input,Select,ErrorBox,Badge} fr
 import {money,statusLabel} from '../../lib/format.js';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {has} from '../../lib/permissions.js';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 
 const DAY_NAMES=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const addDays=(d,n)=>{if(!d)return'';const x=new Date(d+'T12:00:00');x.setDate(x.getDate()+Number(n||0));return x.toISOString().slice(0,10)};
@@ -23,10 +25,23 @@ export default function Trips({go}){
  const [mainBranch,setMainBranch]=useState(''),[shared,setShared]=useState([]),[stops,setStops]=useState({}),[saving,setSaving]=useState(false);
  const [scheduleMode,setScheduleMode]=useState('single'),[rangeEnd,setRangeEnd]=useState(''),[weekdays,setWeekdays]=useState([]),[notice,setNotice]=useState(null);
  const [destinationCatalog,setDestinationCatalog]=useState({destinations:[],routes:[]}),[destinationError,setDestinationError]=useState('');
+ const [listFilter,setListFilter]=useState({q:'',branch:'',status:'',from:'',to:''});
  const today=new Date().toISOString().slice(0,10);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(t)},[notice]);
  useEffect(()=>{api.destinations().then(x=>{setDestinationCatalog(x||{destinations:[],routes:[]});setDestinationError('')}).catch(e=>setDestinationError(e.message))},[]);
- const rows=useMemo(()=>data.trips.filter(t=>showPast||!t.departure_date||t.departure_date>=today),[data.trips,showPast,today]);
+ const branchMap=useMemo(()=>new Map((data.branches||[]).map(b=>[String(b.id),b])),[data.branches]);
+ const visibleTrips=useMemo(()=>data.trips.filter(t=>showPast||!t.departure_date||t.departure_date>=today),[data.trips,showPast,today]);
+ const branchOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
+ const fromOptions=useMemo(()=>[...new Set(visibleTrips.map(t=>String(t.from_city||t.origin||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[visibleTrips]);
+ const toOptions=useMemo(()=>[...new Set(visibleTrips.map(t=>String(t.to_city||t.destination||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[visibleTrips]);
+ const rows=useMemo(()=>visibleTrips.filter(t=>{
+  const f=listFilter||{},branch=branchMap.get(String(t.branch_id));
+  return (!f.branch||String(t.branch_id||'')===f.branch)
+   &&(!f.status||String(t.status||'')===f.status)
+   &&(!f.from||String(t.from_city||t.origin||'')===f.from)
+   &&(!f.to||String(t.to_city||t.destination||'')===f.to)
+   &&matchesListQuery(f.q,t.trip_code,t.code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date,t.return_date,t.status,branch?.name,branch?.branch_name);
+ }),[visibleTrips,listFilter,branchMap]);
  const cities=useMemo(()=>{const out=(destinationCatalog.destinations||[]).filter(x=>x.active!==false).map(x=>String(x.city||x.name||'').trim()).filter(Boolean);for(const v of [editing?.from_city,editing?.origin,editing?.to_city,editing?.destination])if(v&&!out.includes(v))out.push(v);return [...new Set(out)]},[destinationCatalog,editing]);
  const activeRoutes=useMemo(()=>(destinationCatalog.routes||[]).filter(x=>x.active!==false),[destinationCatalog]);
  const destinationById=useMemo(()=>new Map((destinationCatalog.destinations||[]).map(x=>[String(x.id),x])),[destinationCatalog]);
@@ -67,7 +82,12 @@ export default function Trips({go}){
  return <>
   {notice&&<div role="status" style={{position:'fixed',top:18,left:'50%',transform:'translateX(-50%)',zIndex:99999,minWidth:320,maxWidth:'min(92vw,680px)',padding:'14px 18px',borderRadius:14,boxShadow:'0 12px 34px rgba(0,0,0,.18)',display:'flex',alignItems:'center',gap:10,direction:'rtl',fontWeight:700,background:notice.type==='success'?'#ecfdf3':'#fff1f2',color:notice.type==='success'?'#166534':'#b42318',border:`1px solid ${notice.type==='success'?'#bbf7d0':'#fecdd3'}`}}>{notice.type==='success'?<CheckCircle2 size={21}/>:<AlertTriangle size={21}/>}<span>{notice.message}</span><button type="button" onClick={()=>setNotice(null)} style={{marginInlineStart:'auto',border:0,background:'transparent',fontSize:20,cursor:'pointer'}}>×</button></div>}
   <PageHeader title="الرحلات" subtitle="الذهاب والعودة والتسعير والرحلات المشتركة بين الفروع" actions={<><label className="toggle"><input type="checkbox" checked={showPast} onChange={e=>setShowPast(e.target.checked)}/>إظهار القديمة</label><Button onClick={()=>refresh()}><RefreshCw size={16}/> تحديث</Button>{has(user,'trips')&&<Button variant="primary" onClick={openNew}><Plus size={16}/> إنشاء رحلة</Button>}</>}/>
-  <ErrorBox error={err}/><Card><Table rows={rows} onRow={r=>go('/trips/'+r.id)} columns={tripColumns}/></Card>
+  <ErrorBox error={err}/><Card><SmartListFilters storageKey="trips-register-filters" search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بكود الرحلة أو المدينة أو التاريخ أو الفرع..." totalCount={visibleTrips.length} resultCount={rows.length} onReset={()=>setListFilter({q:'',branch:'',status:'',from:'',to:''})} filters={[
+ {key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions},
+ {key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:[{value:'active',label:'نشطة'},{value:'cancelled',label:'ملغاة'},{value:'completed',label:'مكتملة'}]},
+ {key:'from',label:'من',value:listFilter.from,onChange:v=>setListFilter(x=>({...x,from:v})),options:fromOptions},
+ {key:'to',label:'إلى',value:listFilter.to,onChange:v=>setListFilter(x=>({...x,to:v})),options:toOptions}
+ ]}/><Table preferenceKey="trips-register" defaultPageSize={25} rows={rows} onRow={r=>go('/trips/'+r.id)} columns={tripColumns}/></Card>
   <Modal open={open} onClose={()=>!saving&&setOpen(false)} title={editing?`تعديل الرحلة ${editing.trip_code}`:'إنشاء رحلة جديدة'} wide>
    <form className="form-grid" onSubmit={save} key={editing?.id||'new'}>
     <div className="field"><span>كود الرحلة</span><div className="price-suggestion"><strong>{editing?.trip_code||'يُنشأ تلقائيًا عند الحفظ'}</strong></div></div>
