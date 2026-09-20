@@ -14,7 +14,7 @@ function statusView(v,active){
  if(v==='seen')return {tone:'blue',label:'تمت المشاهدة'};
  return {tone:'orange',label:'جديد'};
 }
-function categoryLabel(v){return v==='predictive'?'استباقي':v==='linking'?'ربط الحركات':v==='device_health'?'صحة الجهاز':'كل الأنواع'}
+function categoryLabel(v){return v==='predictive'?'استباقي':v==='linking'?'ربط الحركات':v==='device_health'?'صحة الجهاز':v==='maintenance'?'صيانة وقائية':'كل الأنواع'}
 function severityLabel(v){return v==='critical'?'حرج':v==='warning'?'تحذير':v==='info'?'معلومة':'كل الأولويات'}
 function roleLabel(v){return v||'بدون مستلم'}
 function levelLabel(v){const n=Number(v)||0;return n>=3?'المستوى 3 — مدير عام':n===2?'المستوى 2 — مدير فرع':n===1?'المستوى 1 — موارد بشرية':'لم يبدأ التصعيد'}
@@ -185,7 +185,7 @@ export default function AttendanceNotifications({state,onChanged,onError,onNotic
     <Card><div className="card-title"><div><h3>القواعد الحالية</h3><small>القاعدة الأكثر تحديدًا للفرع/النوع/الأولوية تتغلب على القاعدة العامة.</small></div><Button onClick={()=>setRuleForm(blankRule)}>قاعدة جديدة</Button></div><Table preferenceKey="attendance-escalation-rules" defaultPageSize={25} rows={rules} columns={ruleCols}/></Card>
     <Card><div className="card-title"><h3>{ruleForm.id?'تعديل قاعدة التصعيد':'قاعدة تصعيد جديدة'}</h3></div><form onSubmit={saveRule} className="form-grid">
      <Field label="الفرع"><Select value={ruleForm.branch_id||''} onChange={e=>setRuleForm(x=>({...x,branch_id:e.target.value}))} disabled={!state.scope?.all_branches}><option value="">كل الفروع</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
-     <Field label="نوع التنبيه"><Select value={ruleForm.category} onChange={e=>setRuleForm(x=>({...x,category:e.target.value}))}><option value="*">كل الأنواع</option><option value="device_health">صحة الجهاز</option><option value="predictive">استباقي</option><option value="linking">ربط الحركات</option></Select></Field>
+     <Field label="نوع التنبيه"><Select value={ruleForm.category} onChange={e=>setRuleForm(x=>({...x,category:e.target.value}))}><option value="*">كل الأنواع</option><option value="device_health">صحة الجهاز</option><option value="predictive">استباقي</option><option value="linking">ربط الحركات</option><option value="maintenance">صيانة وقائية</option></Select></Field>
      <Field label="الأولوية"><Select value={ruleForm.severity} onChange={e=>setRuleForm(x=>({...x,severity:e.target.value}))}><option value="*">كل الأولويات</option><option value="critical">حرج</option><option value="warning">تحذير</option><option value="info">معلومة</option></Select></Field>
      <Field label="الحالة"><Select value={ruleForm.active?'true':'false'} onChange={e=>setRuleForm(x=>({...x,active:e.target.value==='true'}))}><option value="true">نشطة</option><option value="false">موقوفة</option></Select></Field>
 
