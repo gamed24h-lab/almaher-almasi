@@ -104,6 +104,7 @@ export const api={
   auditRecord:(entityIds,{limit=250}={})=>{const ids=(Array.isArray(entityIds)?entityIds:[entityIds]).map(x=>String(x||'').trim()).filter(Boolean);return request('/api/audit/query',{method:'POST',body:{entity_ids:ids,limit},feedback:false})},
   agent360:(id)=>request(`/api/agents/${encodeURIComponent(id)}/360`),
   agentLedger:(id)=>request(`/api/agents/${encodeURIComponent(id)}/ledger`),
+  agentCredit:(id)=>request(`/api/agents/${encodeURIComponent(id)}/credit`),
   bookingRefundSummaries:()=>request('/api/bookings/refund-summaries'),
   autoHouseBooking:(bookingNumber,tripHotelId)=>request('/api/bookings/auto-house',{method:'POST',body:{booking_number:bookingNumber,trip_hotel_id:tripHotelId},feedback:false}),
   customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
