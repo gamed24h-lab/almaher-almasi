@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BellRing,Fingerprint,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity} from 'lucide-react';
+import {BellRing,Fingerprint,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity,Siren} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
@@ -10,6 +10,7 @@ import AttendanceReports from './AttendanceReports.jsx';
 import AttendanceDeviceData from './AttendanceDeviceData.jsx';
 import AttendancePolicies from './AttendancePolicies.jsx';
 import AttendanceNotifications from './AttendanceNotifications.jsx';
+import AttendanceIncidents from './AttendanceIncidents.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
 const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
@@ -18,7 +19,7 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance({initialTab=''}){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},watchdog:null,deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],watchdog:null,deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:''},unlinked:{q:'',branch:'',device:''}});
@@ -71,10 +72,11 @@ export default function Attendance({initialTab=''}){
   {id:'employees',label:'الموظفون والجداول',icon:Users,badge:employees.length},
   {id:'devices',label:'الأجهزة والمزامنة',icon:ServerCog,badge:devices.length},
   {id:'alerts',label:'التنبيهات',icon:BellRing,badge:Number(state.notificationCounts?.new||0)||null},
+  {id:'incidents',label:'الحوادث و SLA',icon:Siren,badge:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0)||null},
   {id:'links',label:'الربط والحركات',icon:Activity,badge:unlinked||null},
   ...(state.permissions?.reports?[{id:'reports',label:'التقارير والمخالفات',icon:BarChart3}]:[]),
   ...(state.permissions?.manage_policies?[{id:'policies',label:'السياسات',icon:SlidersHorizontal}]:[])
- ],[employees.length,devices.length,unlinked,state.notificationCounts?.new,state.permissions?.reports,state.permissions?.manage_policies]);
+ ],[employees.length,devices.length,unlinked,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.permissions?.reports,state.permissions?.manage_policies]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,initialTab||'overview');
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,tabs.length]);
 
@@ -139,6 +141,7 @@ export default function Attendance({initialTab=''}){
  {key:'status',label:'الحالة',value:listFilters.devices.status,onChange:v=>setListFilter('devices','status',v),options:[{value:'active',label:'نشط'},{value:'disabled',label:'موقوف'}]}
  ]}/><Table preferenceKey="attendance-devices" defaultPageSize={25} rows={filteredDevices} columns={deviceCols}/></></Card></>}
   {activeTab==='alerts'&&<AttendanceNotifications state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenDevices={()=>setActiveTab('devices')} onOpenLinks={()=>setActiveTab('links')}/>}
+  {activeTab==='incidents'&&<AttendanceIncidents state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenDevices={()=>setActiveTab('devices')} onOpenLinks={()=>setActiveTab('links')}/>}
   {activeTab==='links'&&<><Card><div className="card-title"><div><h3>حركات تحتاج ربط موظف</h3><small>كل PIN يظهر مرة واحدة. عند ربطه بموظف يتم ربط جميع حركاته القديمة تلقائيًا بدون حذف سجل البصمات.</small></div><Badge tone={unlinked?'orange':'green'}>{unlinked}</Badge></div>{state.unlinkedTruncated&&<div className="training-banner">القائمة كبيرة جدًا؛ المعروض ملخص لأول 5000 حركة غير مرتبطة.</div>}{unlinkedGroups.length?<><SmartListFilters storageKey="attendance-unlinked-filters" search={listFilters.unlinked.q} onSearchChange={v=>setListFilter('unlinked','q',v)} searchPlaceholder="ابحث بـ PIN أو اسم الجهاز..." totalCount={unlinkedGroups.length} resultCount={filteredUnlinked.length} onReset={()=>resetListFilter('unlinked')} filters={[
  {key:'branch',label:'الفرع',value:listFilters.unlinked.branch,onChange:v=>setListFilter('unlinked','branch',v),options:branchOptions},
  {key:'device',label:'الجهاز',value:listFilters.unlinked.device,onChange:v=>setListFilter('unlinked','device',v),options:deviceOptions}
