@@ -26,7 +26,7 @@ const sovereign=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'
 const canView=u=>!!u&&(sovereign(u)||u.permissions?.agents===true||u.permissions?.finance===true);
 const canFinance=u=>!!u&&(sovereign(u)||u.permissions?.finance===true||u.permissions?.payments===true||u.permissions?.expenses===true||u.permissions?.refunds===true||u.permissions?.allBranchesFinance===true);
 const globalScope=u=>!!u&&(sovereign(u)||u.permissions?.allBranches===true||(canFinance(u)&&u.permissions?.allBranchesFinance===true));
-const accountMode=u=>{const m=lower(u?.account_mode||u?.permissions?._accountMode);return m==='production'||m==='training'?m:''};
+const accountMode=u=>lower(u?.account_mode||u?.permissions?._accountMode)==='production'?'production':'training';
 
 function agentMatch(a,b){
  const acr=compact(a?.commercial_registration),bcr=compact(b?.commercial_registration);
@@ -62,7 +62,7 @@ async function agent360(request,env,ctx,id){
  if(!globalScope(u)&&String(agent.branch_id||'')!==branch)return json({error:'الوكيل خارج نطاق فرعك.'},403);
 
  const mode=accountMode(u);
- const bookingQuery='agent_id=eq.'+enc(id)+'&select='+enc('id,booking_number,agent_id,branch_id,customer_name,customer_phone,booking_status,status,total_price,paid_amount,trip_id,outbound_trip_id,return_trip_id,data_environment,created_at,updated_at')+(mode?'&data_environment=eq.'+enc(mode):'')+'&order=created_at.desc&limit=1000';
+ const bookingQuery='agent_id=eq.'+enc(id)+'&select='+enc('id,booking_number,agent_id,branch_id,customer_name,customer_phone,booking_status,status,total_price,paid_amount,trip_id,outbound_trip_id,return_trip_id,data_environment,created_at,updated_at')+'&data_environment=eq.'+enc(mode)+'&order=created_at.desc&limit=1000';
  const [bookings,allocations,quotas,branches,mergeHistory,allAgents]=await Promise.all([
   rows(env,'bookings',bookingQuery).catch(()=>[]),
   rows(env,'agent_allocations','agent_id=eq.'+enc(id)+'&select=*&order=created_at.desc&limit=1000').catch(()=>[]),
@@ -92,7 +92,7 @@ async function agent360(request,env,ctx,id){
   ok:true,
   financial_access:financial,
   scope:globalScope(u)?'all':'branch',
-  account_mode:mode||null,
+  account_mode:mode,
   branch:branches[0]||null,
   agent:redactFinancial(agent,financial),
   bookings:safeBookings,
