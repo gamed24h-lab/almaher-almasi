@@ -3,6 +3,8 @@ import {BellRing,Fingerprint,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldC
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 import AttendanceEmployees from './AttendanceEmployees.jsx';
 import AttendanceReports from './AttendanceReports.jsx';
 import AttendanceDeviceData from './AttendanceDeviceData.jsx';
@@ -19,6 +21,7 @@ export default function Attendance({initialTab=''}){
  const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],notifications:[],notificationCounts:{},deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
+ const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:''},unlinked:{q:'',branch:'',device:''}});
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
 
@@ -29,6 +32,39 @@ export default function Attendance({initialTab=''}){
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
  const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length;
+
+ const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
+ const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
+ const deviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
+ const setListFilter=(scope,key,value)=>setListFilters(x=>({...x,[scope]:{...x[scope],[key]:value}}));
+ const resetListFilter=scope=>setListFilters(x=>({...x,[scope]:Object.fromEntries(Object.keys(x[scope]||{}).map(k=>[k,'']))}));
+ const filteredDevices=useMemo(()=>devices.filter(d=>{
+  const f=listFilters.devices||{};
+  return (!f.branch||String(d.branch_id)===String(f.branch))
+   &&(!f.connectivity||(f.connectivity==='online'?online(d):!online(d)))
+   &&(!f.status||String(d.status||'active')===String(f.status))
+   &&matchesListQuery(f.q,d.name,d.serial_number,d.model,d.connection_mode,branchMap.get(String(d.branch_id)));
+ }),[devices,listFilters.devices,branchMap]);
+ const filteredLinks=useMemo(()=>links.filter(r=>{
+  const f=listFilters.links||{},emp=employeeMap.get(String(r.attendance_employee_id)),usr=userMap.get(String(r.staff_user_id));
+  return (!f.branch||String(r.branch_id)===String(f.branch))
+   &&(!f.device||String(r.device_id)===String(f.device))
+   &&matchesListQuery(f.q,r.device_pin,r.display_name,emp?.employee_code,emp?.name,usr?.name,deviceMap.get(String(r.device_id))?.name,branchMap.get(String(r.branch_id)));
+ }),[links,listFilters.links,employeeMap,userMap,deviceMap,branchMap]);
+ const filteredLogs=useMemo(()=>logs.filter(r=>{
+  const f=listFilters.logs||{},emp=employeeMap.get(String(r.attendance_employee_id)),usr=userMap.get(String(r.staff_user_id));
+  return (!f.branch||String(r.branch_id)===String(f.branch))
+   &&(!f.device||String(r.device_id)===String(f.device))
+   &&(!f.employee||String(r.attendance_employee_id)===String(f.employee))
+   &&(!f.environment||String(r.data_environment||'')===String(f.environment))
+   &&matchesListQuery(f.q,r.device_pin,r.employee_name,r.serial_number,emp?.employee_code,emp?.name,usr?.name,deviceMap.get(String(r.device_id))?.name,branchMap.get(String(r.branch_id)));
+ }),[logs,listFilters.logs,employeeMap,userMap,deviceMap,branchMap]);
+ const filteredUnlinked=useMemo(()=>unlinkedGroups.filter(r=>{
+  const f=listFilters.unlinked||{},du=deviceUserMap.get(String(r.device_id)+'|'+String(r.device_pin));
+  return (!f.branch||String(r.branch_id)===String(f.branch))
+   &&(!f.device||String(r.device_id)===String(f.device))
+   &&matchesListQuery(f.q,r.device_pin,du?.name,deviceMap.get(String(r.device_id))?.name,branchMap.get(String(r.branch_id)));
+ }),[unlinkedGroups,listFilters.unlinked,deviceUserMap,deviceMap,branchMap]);
 
  const tabs=useMemo(()=>[
   {id:'overview',label:'نظرة عامة',icon:LayoutDashboard},
@@ -97,9 +133,24 @@ export default function Attendance({initialTab=''}){
   </>}
 
   {activeTab==='employees'&&<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
-  {activeTab==='devices'&&<><AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenLinks={()=>setActiveTab('links')}/><Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><Table preferenceKey="attendance-devices" defaultPageSize={25} rows={devices} columns={deviceCols}/></Card></>}
+  {activeTab==='devices'&&<><AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenLinks={()=>setActiveTab('links')}/><Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><><SmartListFilters storageKey="attendance-devices-filters" search={listFilters.devices.q} onSearchChange={v=>setListFilter('devices','q',v)} searchPlaceholder="ابحث باسم الجهاز أو السيريال أو الموديل..." totalCount={devices.length} resultCount={filteredDevices.length} onReset={()=>resetListFilter('devices')} filters={[
+ {key:'branch',label:'الفرع',value:listFilters.devices.branch,onChange:v=>setListFilter('devices','branch',v),options:branchOptions},
+ {key:'connectivity',label:'الاتصال',value:listFilters.devices.connectivity,onChange:v=>setListFilter('devices','connectivity',v),options:[{value:'online',label:'متصل / حديث'},{value:'offline',label:'غير متصل'}]},
+ {key:'status',label:'الحالة',value:listFilters.devices.status,onChange:v=>setListFilter('devices','status',v),options:[{value:'active',label:'نشط'},{value:'disabled',label:'موقوف'}]}
+ ]}/><Table preferenceKey="attendance-devices" defaultPageSize={25} rows={filteredDevices} columns={deviceCols}/></></Card></>}
   {activeTab==='alerts'&&<AttendanceNotifications state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenDevices={()=>setActiveTab('devices')} onOpenLinks={()=>setActiveTab('links')}/>}
-  {activeTab==='links'&&<><Card><div className="card-title"><div><h3>حركات تحتاج ربط موظف</h3><small>كل PIN يظهر مرة واحدة. عند ربطه بموظف يتم ربط جميع حركاته القديمة تلقائيًا بدون حذف سجل البصمات.</small></div><Badge tone={unlinked?'orange':'green'}>{unlinked}</Badge></div>{state.unlinkedTruncated&&<div className="training-banner">القائمة كبيرة جدًا؛ المعروض ملخص لأول 5000 حركة غير مرتبطة.</div>}{unlinkedGroups.length?<Table preferenceKey="attendance-unlinked-groups" defaultPageSize={25} rows={unlinkedGroups} columns={unlinkedCols}/>:<div className="success-note"><ShieldCheck size={16}/> كل الحركات المستلمة مرتبطة بموظفين.</div>}</Card><Card><div className="card-title"><h3>ربط أرقام الأجهزة بالموظفين</h3><Badge>{links.length}</Badge></div><Table preferenceKey="attendance-links" defaultPageSize={25} rows={links} columns={linkCols}/></Card><Card><div className="card-title"><h3>الحركات المستلمة</h3><Badge>{logs.length}</Badge></div><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={logs} columns={logCols}/></Card></>}
+  {activeTab==='links'&&<><Card><div className="card-title"><div><h3>حركات تحتاج ربط موظف</h3><small>كل PIN يظهر مرة واحدة. عند ربطه بموظف يتم ربط جميع حركاته القديمة تلقائيًا بدون حذف سجل البصمات.</small></div><Badge tone={unlinked?'orange':'green'}>{unlinked}</Badge></div>{state.unlinkedTruncated&&<div className="training-banner">القائمة كبيرة جدًا؛ المعروض ملخص لأول 5000 حركة غير مرتبطة.</div>}{unlinkedGroups.length?<><SmartListFilters storageKey="attendance-unlinked-filters" search={listFilters.unlinked.q} onSearchChange={v=>setListFilter('unlinked','q',v)} searchPlaceholder="ابحث بـ PIN أو اسم الجهاز..." totalCount={unlinkedGroups.length} resultCount={filteredUnlinked.length} onReset={()=>resetListFilter('unlinked')} filters={[
+ {key:'branch',label:'الفرع',value:listFilters.unlinked.branch,onChange:v=>setListFilter('unlinked','branch',v),options:branchOptions},
+ {key:'device',label:'الجهاز',value:listFilters.unlinked.device,onChange:v=>setListFilter('unlinked','device',v),options:deviceOptions}
+ ]}/><Table preferenceKey="attendance-unlinked-groups" defaultPageSize={25} rows={filteredUnlinked} columns={unlinkedCols}/></>:<div className="success-note"><ShieldCheck size={16}/> كل الحركات المستلمة مرتبطة بموظفين.</div>}</Card><Card><div className="card-title"><h3>ربط أرقام الأجهزة بالموظفين</h3><Badge>{links.length}</Badge></div><><SmartListFilters storageKey="attendance-links-filters" search={listFilters.links.q} onSearchChange={v=>setListFilter('links','q',v)} searchPlaceholder="ابحث بالموظف أو PIN أو الجهاز..." totalCount={links.length} resultCount={filteredLinks.length} onReset={()=>resetListFilter('links')} filters={[
+ {key:'branch',label:'الفرع',value:listFilters.links.branch,onChange:v=>setListFilter('links','branch',v),options:branchOptions},
+ {key:'device',label:'الجهاز',value:listFilters.links.device,onChange:v=>setListFilter('links','device',v),options:deviceOptions}
+ ]}/><Table preferenceKey="attendance-links" defaultPageSize={25} rows={filteredLinks} columns={linkCols}/></></Card><Card><div className="card-title"><h3>الحركات المستلمة</h3><Badge>{logs.length}</Badge></div><><SmartListFilters storageKey="attendance-logs-filters" search={listFilters.logs.q} onSearchChange={v=>setListFilter('logs','q',v)} searchPlaceholder="ابحث بالموظف أو PIN أو السيريال..." totalCount={logs.length} resultCount={filteredLogs.length} onReset={()=>resetListFilter('logs')} filters={[
+ {key:'employee',label:'الموظف',value:listFilters.logs.employee,onChange:v=>setListFilter('logs','employee',v),options:employeeOptions},
+ {key:'branch',label:'الفرع',value:listFilters.logs.branch,onChange:v=>setListFilter('logs','branch',v),options:branchOptions},
+ {key:'device',label:'الجهاز',value:listFilters.logs.device,onChange:v=>setListFilter('logs','device',v),options:deviceOptions},
+ {key:'environment',label:'البيئة',value:listFilters.logs.environment,onChange:v=>setListFilter('logs','environment',v),options:[{value:'training',label:'Training'},{value:'production',label:'Production'}]}
+ ]}/><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={filteredLogs} columns={logCols}/></></Card></>}
   {activeTab==='reports'&&state.permissions?.reports&&<AttendanceReports state={state} onError={setError} onNotice={setNotice}/>}
   {activeTab==='policies'&&state.permissions?.manage_policies&&<AttendancePolicies state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
 
