@@ -72,7 +72,7 @@ function render(host,state){
 
   const quick=el('section','finance360-quick'),qhead=el('div','finance360-block-head');qhead.append(el('strong','','وصول سريع'),el('span','','يفتح الأدوات الحالية بدل تكرارها'));quick.append(qhead);
   const qbuttons=el('div','finance360-quick-actions');[
-    ['الحركات المالية','الحركات'],['المصروفات','المصروفات'],['الخزن','الخزن'],['الورديات','الورديات'],['مستحقات الموردين','مستحقات الموردين'],['المطابقة المالية','فحص المطابقة المالية']
+    ['الحركات المالية','الحركات'],['المصروفات','المصروفات'],['الخزن','الخزن'],['الورديات','الورديات'],['مستحقات الموردين','مستحقات الموردين'],['المطابقة المالية','المطابقة المالية']
   ].forEach(([label,target])=>qbuttons.append(btn(label,()=>clickExisting(target))));quick.append(qbuttons);
   row.append(health,quick);host.append(row);
 
