@@ -8,7 +8,8 @@ const text=v=>String(v??'').trim();
 const countOf=v=>typeof v==='object'&&v!==null?Number(String(v.count||0).replace('+','')):Number(v||0);
 const totalRefs=obj=>Object.values(obj||{}).reduce((n,v)=>{const x=countOf(v);return n+(Number.isFinite(x)?x:0)},0);
 const show=v=>{if(v===true)return 'نعم';if(v===false)return 'لا';if(v===null||v===undefined||v==='')return '—';return String(v)};
-const optionLabel=r=>`${r.agent_code||'—'} · ${r.company_name||r.name||'وكيل'} · الرصيد ${money(Number(r.current_balance||0))}`;
+const optionLabel=r=>`${r.agent_code||'—'} · ${r.company_name||r.name||'وكيل'} · الرصيد القديم ${money(Number(r.current_balance||0))}`;
+const ledgerText=list=>{const a=Array.isArray(list)?list:[];if(!a.length)return 'لا يوجد كشف بعد';return a.map(x=>`${x.data_environment==='production'?'Production':'Training'}: ${money(Number(x.current_balance||0))}`).join(' · ')};
 
 export default function AgentMergeModal({group,onClose,onMerged}){
  const records=useMemo(()=>Array.isArray(group?.records)?group.records:[],[group]);
@@ -60,9 +61,9 @@ export default function AgentMergeModal({group,onClose,onMerged}){
      {preview.warnings?.length>0&&<div className="training-banner" style={{marginTop:10}}>{preview.warnings.join(' ')}</div>}
      <div className="detail-grid" style={{marginTop:12}}>
       <div><span>الوكيل الأساسي</span><strong>{canonical?.agent_code||'—'} · {canonical?.company_name||canonical?.name||'—'}</strong></div>
-      <div><span>رصيد الأساسي</span><strong>{money(Number(canonical?.current_balance||0))}</strong></div>
+      <div><span>رصيد Ledger الأساسي</span><strong>{ledgerText(preview.ledger_balances?.canonical)}</strong></div>
       <div><span>الوكيل المكرر</span><strong>{duplicate?.agent_code||'—'} · {duplicate?.company_name||duplicate?.name||'—'}</strong></div>
-      <div><span>رصيد المكرر</span><strong>{money(Number(duplicate?.current_balance||0))}</strong></div>
+      <div><span>رصيد Ledger المكرر</span><strong>{ledgerText(preview.ledger_balances?.duplicate)}</strong></div>
       <div><span>مراجع الأساسي</span><strong>{totalRefs(preview.references?.canonical)}</strong></div>
       <div><span>مراجع المكرر ستُنقل</span><strong>{totalRefs(preview.references?.duplicate)}</strong></div>
       <div><span>حجوزات المكرر</span><strong>{countOf(preview.references?.duplicate?.bookings)||0}</strong></div>
