@@ -27,7 +27,7 @@ async function rpc(env,name,body){
 }
 const sovereign=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'||u.permissions?.all===true);
 const globalScope=u=>!!u&&(sovereign(u)||u.permissions?.allBranches===true||u.permissions?.allBranchesFinance===true);
-const canView=u=>!!u&&(sovereign(u)||u.permissions?.finance===true||u.permissions?.payments===true||u.permissions?.reports===true||u.permissions?.agents===true);
+const canView=u=>!!u&&(sovereign(u)||u.permissions?.finance===true||u.permissions?.payments===true||u.permissions?.expenses===true||u.permissions?.refunds===true||u.permissions?.allBranchesFinance===true);
 const canPayment=u=>!!u&&(sovereign(u)||u.permissions?.finance===true||u.permissions?.payments===true);
 const canAdjust=u=>!!u&&(sovereign(u)||u.permissions?.finance===true);
 const modeOf=u=>lower(u?.account_mode||u?.permissions?._accountMode)==='production'?'production':'training';
