@@ -25,7 +25,7 @@ const blankPolicy={id:'',branch_id:'',category:'*',severity:'warning',active:tru
 const blankMaintenance={root_cause_category:'unknown',root_cause_text:'',maintenance_type:'remote',action_taken:'',preventive_action:'',recurrence_risk:'medium',recurrence_prevented:false,technician_staff_id:'',vendor_name:''};
 const blankAction={action_type:'inspection',description:'',part_name:'',quantity:'',unit_cost:'',labor_cost:'',other_cost:'',outcome:''};
 
-export default function AttendanceIncidents({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks}){
+export default function AttendanceIncidents({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks,onOpenPreventive}){
  const incidents=state.incidents||[],counts=state.incidentCounts||{},analytics=state.incidentAnalytics||{},policies=state.incidentPolicies||[],events=state.incidentEvents||[],maintenanceRows=state.incidentMaintenance||[],maintenanceActions=state.maintenanceActions||[],maintenanceAnalytics=state.maintenanceAnalytics||{},devices=state.devices||[],branches=state.branches||[],users=state.users||[];
  const [filters,setFilters]=useState({q:'',status:'active',severity:'',branch:'',device:'',owner:'',breach:''}),[busy,setBusy]=useState('');
  const [assignOpen,setAssignOpen]=useState(false),[assignIncident,setAssignIncident]=useState(null),[ownerId,setOwnerId]=useState('');
@@ -67,7 +67,7 @@ export default function AttendanceIncidents({state,onChanged,onError,onNotice,on
   try{await api.attendanceWrite({action:'save_incident_sla_policy',...policyForm});onNotice?.('تم حفظ سياسة SLA.');setPolicyForm(blankPolicy);await onChanged?.()}
   catch(e2){onError?.(e2.message)}finally{setPolicyBusy(false)}
  }
- function openSource(row){if(row.category==='linking')onOpenLinks?.();else onOpenDevices?.()}
+ function openSource(row){if(row.category==='linking')onOpenLinks?.();else if(row.category==='maintenance')onOpenPreventive?.();else onOpenDevices?.()}
  function openMaintenance(row){
   const m=maintenanceMap.get(String(row.id));
   setMaintenanceIncident(row);setMaintenanceForm(m?{root_cause_category:m.root_cause_category||'unknown',root_cause_text:m.root_cause_text||'',maintenance_type:m.maintenance_type||'remote',action_taken:m.action_taken||'',preventive_action:m.preventive_action||'',recurrence_risk:m.recurrence_risk||'medium',recurrence_prevented:m.recurrence_prevented===true,technician_staff_id:m.technician_staff_id||'',vendor_name:m.vendor_name||''}:{...blankMaintenance});
