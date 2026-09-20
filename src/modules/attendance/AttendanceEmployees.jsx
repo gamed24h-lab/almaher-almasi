@@ -156,7 +156,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const needsTime=['permission','overtime','work_override'].includes(ruleForm.rule_type);
  const needsGrace=ruleForm.rule_type==='work_override';
 
- return <><Card><div className="card-title"><div><h3><Users size={19}/> موظفو الحضور</h3><small>جدول أسبوعي مرن لكل موظف، مع دوام مؤقت وإجازات واستئذان وعمل إضافي حسب التاريخ.</small></div><div className="finance-actions"><Badge>{employees.length}</Badge>{state.permissions?.manage_employees&&<Button variant="primary" onClick={add}><Plus size={15}/> موظف جديد</Button>}</div></div><Table rows={employees} columns={cols}/><div className="success-note"><Trash2 size={16}/> حذف الموظف لا يحذف سجل حضوره القديم. إذا كان مربوطًا بجهاز بصمة، يُحذف من الجهاز أولًا ثم من النظام بعد التأكيد.</div></Card>
+ return <><Card><div className="card-title"><div><h3><Users size={19}/> موظفو الحضور</h3><small>جدول أسبوعي مرن لكل موظف، مع دوام مؤقت وإجازات واستئذان وعمل إضافي حسب التاريخ.</small></div><div className="finance-actions"><Badge>{employees.length}</Badge>{state.permissions?.manage_employees&&<Button variant="primary" onClick={add}><Plus size={15}/> موظف جديد</Button>}</div></div><Table preferenceKey="attendance-employees" defaultPageSize={25} rows={employees} columns={cols}/><div className="success-note"><Trash2 size={16}/> حذف الموظف لا يحذف سجل حضوره القديم. إذا كان مربوطًا بجهاز بصمة، يُحذف من الجهاز أولًا ثم من النظام بعد التأكيد.</div></Card>
 
  <Modal open={open} onClose={()=>setOpen(false)} title={form.id?'تعديل موظف حضور':'إضافة موظف حضور'} wide><form onSubmit={save} className="form-grid">
   <Field label="اسم الموظف"><Input value={form.name||''} onChange={e=>setForm(x=>({...x,name:e.target.value}))} required/></Field>
@@ -209,7 +209,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  <Modal open={calendarOpen} onClose={()=>setCalendarOpen(false)} title={'الجدول والاستثناءات'+(calendarEmployee?' — '+calendarEmployee.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
    <div className="success-note"><CalendarDays size={16}/> استخدم «دوام مؤقت» لتغيير دوام يوم أو فترة محددة، و«إجازة/راحة» لإلغاء الالتزام، و«استئذان» للسماح بجزء من الدوام، و«عمل إضافي» لتسجيل وقت إضافي معتمد.</div>
-   <Card><div className="card-title"><h3>الاستثناءات المسجلة</h3><Badge>{(rulesMap.get(String(calendarEmployee?.id))||[]).length}</Badge></div><Table rows={rulesMap.get(String(calendarEmployee?.id))||[]} columns={calendarCols}/></Card>
+   <Card><div className="card-title"><h3>الاستثناءات المسجلة</h3><Badge>{(rulesMap.get(String(calendarEmployee?.id))||[]).length}</Badge></div><Table preferenceKey="attendance-calendar-rules" defaultPageSize={25} rows={rulesMap.get(String(calendarEmployee?.id))||[]} columns={calendarCols}/></Card>
    <Card><form onSubmit={saveRule} className="form-grid">
     <Field label="النوع"><Select value={ruleForm.rule_type} onChange={e=>setRuleForm(x=>({...x,rule_type:e.target.value}))}><option value="leave">إجازة</option><option value="off">راحة / إجازة إضافية</option><option value="permission">استئذان</option><option value="overtime">عمل إضافي</option><option value="work_override">دوام مؤقت</option></Select></Field>
     <Field label="الوصف"><Input value={ruleForm.label||''} onChange={e=>setRuleForm(x=>({...x,label:e.target.value}))} placeholder="مثال: مهمة خارجية / دوام رمضان"/></Field>

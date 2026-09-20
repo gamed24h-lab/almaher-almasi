@@ -112,14 +112,14 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice})
 
  return <><Card><div className="card-title"><div><h3><Database size={19}/> بيانات الأجهزة والمزامنة</h3><small>إدارة فترات الدوام لكل جهاز، سحب الموظفين والحركات، وتعديل بيانات المستخدمين ورفعها.</small></div><Badge tone="blue"><RefreshCw size={13}/> ADMS Sync</Badge></div>
  {watching&&<div className="success-note" style={{marginBottom:12}}><RefreshCw size={16}/> جاري متابعة أوامر الجهاز تلقائيًا… لا تحتاج تضغط تحديث.</div>}
- <Table rows={devices} columns={cols}/></Card>
+ <Table preferenceKey="attendance-device-data" defaultPageSize={25} rows={devices} columns={cols}/></Card>
 
- {deviceUsers.length>0&&<Card><div className="card-title"><div><h3><Users size={19}/> الموظفون المسحوبون من الأجهزة</h3><small>يمكن تعديل الاسم والصلاحية والكارت والبيانات التي يدعمها جهاز ZKTeco، ثم رفعها للجهاز.</small></div><Badge>{deviceUsers.length}</Badge></div><Table rows={deviceUsers} columns={userCols}/><div className="success-note"><Fingerprint size={16}/> قالب البصمة نفسه يظل داخل جهاز ZKTeco ولا يتم نسخه إلى قاعدة البيانات.</div></Card>}
+ {deviceUsers.length>0&&<Card><div className="card-title"><div><h3><Users size={19}/> الموظفون المسحوبون من الأجهزة</h3><small>يمكن تعديل الاسم والصلاحية والكارت والبيانات التي يدعمها جهاز ZKTeco، ثم رفعها للجهاز.</small></div><Badge>{deviceUsers.length}</Badge></div><Table preferenceKey="attendance-device-users" defaultPageSize={25} rows={deviceUsers} columns={userCols}/><div className="success-note"><Fingerprint size={16}/> قالب البصمة نفسه يظل داخل جهاز ZKTeco ولا يتم نسخه إلى قاعدة البيانات.</div></Card>}
 
  <Modal open={shiftOpen} onClose={()=>setShiftOpen(false)} title={'فترات دوام الجهاز'+(shiftDevice?' — '+shiftDevice.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
    <div className="success-note"><Clock3 size={16}/> هذه فترات الدوام المرجعية الخاصة بهذا الجهاز داخل نظام الماهر. الموظف يقدر يختار منها أو يستخدم فترة مخصصة مختلفة.</div>
-   <Card><div className="card-title"><h3>الفترات المسجلة</h3><Button onClick={newShift}><Plus size={14}/> فترة جديدة</Button></div><Table rows={shiftsByDevice.get(String(shiftDevice?.id))||[]} columns={shiftCols}/></Card>
+   <Card><div className="card-title"><h3>الفترات المسجلة</h3><Button onClick={newShift}><Plus size={14}/> فترة جديدة</Button></div><Table preferenceKey="attendance-device-shifts" defaultPageSize={25} rows={shiftsByDevice.get(String(shiftDevice?.id))||[]} columns={shiftCols}/></Card>
    <Card><form onSubmit={saveShift} className="form-grid">
     <Field label="اسم الفترة"><Input value={shiftForm.name||''} onChange={e=>setShiftForm(x=>({...x,name:e.target.value}))} placeholder="مثال: صباحي" required/></Field>
     <Field label="الترتيب"><Input type="number" min="1" value={shiftForm.sequence_no||1} onChange={e=>setShiftForm(x=>({...x,sequence_no:Number(e.target.value||1)}))}/></Field>
