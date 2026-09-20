@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {AlertTriangle,ArrowRight,BriefcaseBusiness,Building2,CalendarDays,GitMerge,RefreshCw,UsersRound,WalletCards,ReceiptText} from 'lucide-react';
+import {AlertTriangle,ArrowRight,BriefcaseBusiness,Building2,CalendarDays,GitMerge,RefreshCw,UsersRound,WalletCards,ReceiptText,ShieldAlert} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {money,statusLabel} from '../../lib/format.js';
 import {Badge,Button,Card,ErrorBox,Input,Loading,Table} from '../../components/UI.jsx';
@@ -7,6 +7,7 @@ import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
 import AgentMergeModal from '../audit/AgentMergeModal.jsx';
 import AgentLedgerPanel from './AgentLedgerPanel.jsx';
+import AgentCreditPanel from './AgentCreditPanel.jsx';
 
 const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
@@ -15,11 +16,11 @@ const tripName=t=>t?(t.trip_code||[t.from_city,t.to_city].filter(Boolean).join('
 const matchSearch=(row,q,fields)=>{const k=lower(q);if(!k)return true;return fields.some(f=>lower(typeof f==='function'?f(row):row?.[f]).includes(k))};
 
 export default function Agent360({id,go}){
- const [data,setData]=useState(null),[ledgerPreview,setLedgerPreview]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[q,setQ]=useState(''),[mergeGroup,setMergeGroup]=useState(null),[notice,setNotice]=useState('');
+ const [data,setData]=useState(null),[ledgerPreview,setLedgerPreview]=useState(null),[creditPreview,setCreditPreview]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[q,setQ]=useState(''),[mergeGroup,setMergeGroup]=useState(null),[notice,setNotice]=useState('');
  async function load(){
   if(!id)return;
   setBusy(true);setError('');
-  try{const x=await api.agent360(id);setData(x);if(x?.financial_access){api.agentLedger(id).then(l=>setLedgerPreview(l)).catch(()=>setLedgerPreview(null))}else setLedgerPreview(null)}catch(e){setError(e.message)}finally{setBusy(false)}
+  try{const x=await api.agent360(id);setData(x);if(x?.financial_access){Promise.allSettled([api.agentLedger(id),api.agentCredit(id)]).then(([l,c])=>{setLedgerPreview(l.status==='fulfilled'?l.value:null);setCreditPreview(c.status==='fulfilled'?c.value:null)})}else{setLedgerPreview(null);setCreditPreview(null)}}catch(e){setError(e.message)}finally{setBusy(false)}
  }
  useEffect(()=>{load()},[id]);
 
@@ -28,9 +29,9 @@ export default function Agent360({id,go}){
   {id:'bookings',label:'الحجوزات',icon:UsersRound,badge:data?.bookings?.length||null},
   {id:'allocations',label:'التوزيعات',icon:CalendarDays,badge:data?.allocations?.length||null},
   {id:'quotas',label:'Quotas',icon:Building2,badge:data?.quotas?.length||null},
-  ...(data?.financial_access?[{id:'ledger',label:'كشف الحساب',icon:ReceiptText,badge:ledgerPreview?.summary?.entry_count||null}]:[]),
+  ...(data?.financial_access?[{id:'ledger',label:'كشف الحساب',icon:ReceiptText,badge:ledgerPreview?.summary?.entry_count||null},{id:'credit',label:'الائتمان والتحصيل',icon:ShieldAlert,badge:creditPreview?.collection_summary?.overdue||null}]:[]),
   {id:'history',label:'الدمج والتدقيق',icon:GitMerge,badge:(data?.merge_history?.length||0)+(data?.duplicate_candidates?.length||0)||null}
- ],[data,ledgerPreview]);
+ ],[data,ledgerPreview,creditPreview]);
  const [tab,setTab]=useModuleTab('almaher:agent-360:'+String(id||''),tabs,'overview');
  const agent=data?.agent||null,summary=data?.summary||{},financial=!!data?.financial_access;
 
@@ -89,6 +90,8 @@ export default function Agent360({id,go}){
   />
   <ErrorBox error={error}/>
   {notice&&<div className="success-note">{notice}</div>}
+  {financial&&creditPreview?.snapshot?.exceeded&&<div className="error-box"><AlertTriangle size={16}/> الوكيل متجاوز حد الائتمان: الرصيد {money(creditPreview.snapshot.balance||0)} من حد فعلي {money(creditPreview.snapshot.policy?.effective_limit||0)}. وضع السياسة الحالي: {creditPreview.snapshot.policy?.mode==='block'?'منع':'تحذير'}.</div>}
+  {financial&&!creditPreview?.snapshot?.exceeded&&creditPreview?.snapshot?.warning&&<div className="warning-list"><div><AlertTriangle size={16}/> الوكيل اقترب من حد الائتمان — الاستهلاك {Number(creditPreview.snapshot.utilization_percent||0).toFixed(1)}%.</div></div>}
   {data.merged_into&&<div className="warning-list"><div><AlertTriangle size={16}/> هذا السجل مدموج وغير نشط. السجل الأساسي الآن: <strong>{data.merged_into.agent_code} · {data.merged_into.company_name||data.merged_into.name}</strong> <Button onClick={()=>go?.('/partners/agents/'+encodeURIComponent(data.merged_into.id))}>فتح الأساسي</Button></div></div>}
 
   {tab==='overview'&&<>
@@ -132,7 +135,8 @@ export default function Agent360({id,go}){
   {tab==='bookings'&&<Card><div className="card-title"><div><h3>حجوزات الوكيل</h3><small>الحجوزات المرتبطة بالوكيل في بيئة الحساب الحالية.</small></div></div>{bookings.length?<Table preferenceKey={'agent360-bookings-'+id} defaultPageSize={25} rows={bookings} columns={bookingCols}/>:<div className="empty">لا توجد حجوزات مرتبطة بهذا الوكيل.</div>}</Card>}
   {tab==='allocations'&&<Card><div className="card-title"><div><h3>توزيعات الوكيل</h3><small>المقاعد والغرف والتوزيعات المخصصة للوكيل.</small></div></div>{allocations.length?<Table preferenceKey={'agent360-allocations-'+id} defaultPageSize={25} rows={allocations} columns={allocationCols}/>:<div className="empty">لا توجد توزيعات مرتبطة بهذا الوكيل.</div>}</Card>}
   {tab==='quotas'&&<Card><div className="card-title"><div><h3>Resource Quotas</h3><small>الحصص التشغيلية المرتبطة بالوكيل.</small></div></div>{quotas.length?<Table preferenceKey={'agent360-quotas-'+id} defaultPageSize={25} rows={quotas} columns={quotaCols}/>:<div className="empty">لا توجد Quotas مرتبطة بهذا الوكيل.</div>}</Card>}
-  {tab==='ledger'&&financial&&<AgentLedgerPanel agent={agent} bookings={data?.bookings||[]} go={go} onChanged={async()=>{try{setLedgerPreview(await api.agentLedger(id))}catch{}}}/>} 
+  {tab==='ledger'&&financial&&<AgentLedgerPanel agent={agent} bookings={data?.bookings||[]} go={go} onChanged={async()=>{try{setLedgerPreview(await api.agentLedger(id));setCreditPreview(await api.agentCredit(id))}catch{}}}/>} 
+  {tab==='credit'&&financial&&<AgentCreditPanel agent={agent} onChanged={async()=>{try{setCreditPreview(await api.agentCredit(id));setLedgerPreview(await api.agentLedger(id))}catch{}}}/>} 
 
   {tab==='history'&&<>
    <Card><div className="card-title"><div><h3>تكرارات محتملة لهذا الوكيل</h3><small>لا يتم الدمج مباشرة؛ كل مرشح يمر على Preview مالي وتشغيلي كامل.</small></div><Badge tone={data.duplicate_candidates?.length?'orange':'green'}>{data.duplicate_candidates?.length||0}</Badge></div>
