@@ -6,6 +6,8 @@ import {useAppData} from '../../core/AppDataContext.jsx';
 import {has} from '../../lib/permissions.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 import {money,statusLabel} from '../../lib/format.js';
 
 const txt=v=>String(v??'').trim();
@@ -51,9 +53,11 @@ export default function Workflow({go,initialTab=''}) {
  const [attendance,setAttendance]=useState(null);
  const [loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[sourceErrors,setSourceErrors]=useState([]);
  const [busy,setBusy]=useState(''),[taskOpen,setTaskOpen]=useState(false),[decision,setDecision]=useState(null),[decisionNote,setDecisionNote]=useState('');
+ const [listFilters,setListFilters]=useState({overview:{q:'',kind:'',priority:''},tasks:{q:'',status:'',priority:'',assigned:'',branch:''},approvals:{q:'',kind:'',requester:''},refunds:{q:'',status:'',branch:''},hr:{q:'',status:'',branch:''}});
 
  const users=app.users||[],branches=app.branches||[];
  const branchMap=useMemo(()=>new Map(branches.map(b=>[String(b.id),b.name||b.id])),[branches]);
+ const userMap=useMemo(()=>new Map(users.map(u=>[String(u.id),u])),[users]);
 
  async function load(){
   setLoading(true);setError('');setSourceErrors([]);
@@ -167,6 +171,43 @@ export default function Workflow({go,initialTab=''}) {
   ...pendingPermission.map(r=>({...r,_kind:'permission'})),
   ...genericApprovals.map(r=>({...r,_kind:'generic'}))
  ],[pendingPermission,genericApprovals]);
+ const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
+ const userOptions=useMemo(()=>users.map(u=>({value:String(u.id),label:u.name||u.username||u.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[users]);
+ const requesterOptions=useMemo(()=>[...new Set(approvalRows.map(r=>String(r.requested_by||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:userMap.get(v)?.name||v})),[approvalRows,userMap]);
+ const setListFilter=(scope,key,value)=>setListFilters(x=>({...x,[scope]:{...x[scope],[key]:value}}));
+ const resetListFilter=scope=>setListFilters(x=>({...x,[scope]:Object.fromEntries(Object.keys(x[scope]||{}).map(k=>[k,'']))}));
+ const filteredQueue=useMemo(()=>queue.filter(r=>{
+  const f=listFilters.overview||{};
+  return (!f.kind||String(r.kind)===String(f.kind))
+   &&(!f.priority||String(r.priority||'normal')===String(f.priority))
+   &&matchesListQuery(f.q,r.title,r.sub,r.status,r.kind,r.priority,r.raw?.booking_number,r.raw?.customer_name,r.raw?.employee_name,r.raw?.employee_code,r.raw?.request_payload?.target_name);
+ }),[queue,listFilters.overview]);
+ const filteredTasks=useMemo(()=>tasks.filter(r=>{
+  const f=listFilters.tasks||{},assigned=userMap.get(String(r.assigned_to));
+  return (!f.status||String(r.status||'open')===String(f.status))
+   &&(!f.priority||String(r.priority||'normal')===String(f.priority))
+   &&(!f.assigned||String(r.assigned_to||'')===String(f.assigned))
+   &&(!f.branch||String(r.branch_id||'')===String(f.branch))
+   &&matchesListQuery(f.q,r.title,r.description,r.status,r.priority,assigned?.name,assigned?.username,branchMap.get(String(r.branch_id)));
+ }),[tasks,listFilters.tasks,userMap,branchMap]);
+ const filteredApprovalRows=useMemo(()=>approvalRows.filter(r=>{
+  const f=listFilters.approvals||{},kind=r._kind==='permission'?'permission':'generic';
+  return (!f.kind||kind===f.kind)
+   &&(!f.requester||String(r.requested_by||'')===String(f.requester))
+   &&matchesListQuery(f.q,approvalTypeLabel(r.request_type),r.request_type,r.request_payload?.target_name,r.request_payload?.target_username,r.reason,r.reference_table,r.requested_by);
+ }),[approvalRows,listFilters.approvals]);
+ const filteredRefunds=useMemo(()=>openRefunds.filter(r=>{
+  const f=listFilters.refunds||{};
+  return (!f.status||String(r.status||'')===String(f.status))
+   &&(!f.branch||String(r.branch_id||'')===String(f.branch))
+   &&matchesListQuery(f.q,r.receipt_no,r.booking_number,r.customer_name,r.amount,r.status,branchMap.get(String(r.branch_id)));
+ }),[openRefunds,listFilters.refunds,branchMap]);
+ const filteredDeletes=useMemo(()=>deleteRequests.filter(r=>{
+  const f=listFilters.hr||{};
+  return (!f.status||String(r.status||'')===String(f.status))
+   &&(!f.branch||String(r.branch_id||'')===String(f.branch))
+   &&matchesListQuery(f.q,r.employee_name,r.employee_code,r.status,r.result_summary,branchMap.get(String(r.branch_id)));
+ }),[deleteRequests,listFilters.hr,branchMap]);
  const approvalCols=[
   {key:'request_type',label:'النوع',render:r=>approvalTypeLabel(r.request_type)},
   {key:'target',label:'المستهدف',render:r=>r._kind==='permission'?(r.request_payload?.target_name||r.request_payload?.target_username||'موظف'):(r.reason||r.reference_table||'—')},
@@ -209,18 +250,35 @@ export default function Workflow({go,initialTab=''}) {
     <Card><div className="stat-card"><Fingerprint/><div><span>متابعة HR</span><strong>{deleteRequests.length}</strong><small>{canAttendance?'مخالفات وحضور وحذف':'غير متاح'}</small></div></div></Card>
    </div>
    {canAttendance&&<Card><div className="card-title"><div><h3>إجراءات الموارد البشرية</h3><small>مراجعة مخالفات الحضور وإقفال الشهر تظل داخل وحدة الحضور مع نفس الصلاحيات الحالية.</small></div></div><div className="finance-actions">{has(user,'attendance_review_violations')&&<Button variant="primary" onClick={()=>go?.('/attendance?tab=reports')}><Fingerprint size={16}/> مراجعة مخالفات الحضور</Button>}{has(user,'attendance_close_month')&&<Button onClick={()=>go?.('/attendance?tab=reports')}><CheckCircle2 size={16}/> إقفال شهر الحضور</Button>}{has(user,'attendance_manage_employees')&&<Button onClick={()=>go?.('/attendance?tab=employees')}><UserCog size={16}/> موظفو الحضور</Button>}</div></Card>}
-   <Card><div className="card-title"><div><h3>كل المطلوب الآن</h3><small>مرتبة بالأولوية، ثم تاريخ الاستحقاق أو الطلب.</small></div><Badge tone={queue.length?'orange':'green'}>{queue.length}</Badge></div>{queue.length?<Table preferenceKey="action-center-queue" defaultPageSize={25} rows={queue} columns={queueCols} getRowKey={r=>r.id}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد إجراءات معلقة في النطاق الحالي.</div>}</Card>
+   <Card><div className="card-title"><div><h3>كل المطلوب الآن</h3><small>مرتبة بالأولوية، ثم تاريخ الاستحقاق أو الطلب.</small></div><Badge tone={queue.length?'orange':'green'}>{queue.length}</Badge></div>{queue.length?<><SmartListFilters storageKey="action-center-queue-filters" search={listFilters.overview.q} onSearchChange={v=>setListFilter('overview','q',v)} searchPlaceholder="ابحث في المطلوب الآن..." totalCount={queue.length} resultCount={filteredQueue.length} onReset={()=>resetListFilter('overview')} filters={[
+ {key:'kind',label:'النوع',value:listFilters.overview.kind,onChange:v=>setListFilter('overview','kind',v),options:[{value:'task',label:'مهمة'},{value:'permission',label:'صلاحيات'},{value:'approval',label:'موافقة'},{value:'refund',label:'استرداد'},{value:'attendance_delete',label:'HR'}]},
+ {key:'priority',label:'الأولوية',value:listFilters.overview.priority,onChange:v=>setListFilter('overview','priority',v),options:[{value:'urgent',label:'عاجلة'},{value:'high',label:'عالية'},{value:'normal',label:'عادية'},{value:'low',label:'منخفضة'}]}
+ ]}/><Table preferenceKey="action-center-queue" defaultPageSize={25} rows={filteredQueue} columns={queueCols} getRowKey={r=>r.id}/></>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد إجراءات معلقة في النطاق الحالي.</div>}</Card>
   </>}
 
-  {!loading&&tab==='tasks'&&canTasks&&<Card><div className="card-title"><div><h3>المهام</h3><small>المهام التشغيلية المفتوحة والمنتهية داخل نطاق الحساب.</small></div><Badge>{tasks.length}</Badge></div><Table preferenceKey="action-center-tasks" defaultPageSize={25} rows={tasks} columns={taskCols}/></Card>}
+  {!loading&&tab==='tasks'&&canTasks&&<Card><div className="card-title"><div><h3>المهام</h3><small>المهام التشغيلية المفتوحة والمنتهية داخل نطاق الحساب.</small></div><Badge>{tasks.length}</Badge></div><><SmartListFilters storageKey="action-center-tasks-filters" search={listFilters.tasks.q} onSearchChange={v=>setListFilter('tasks','q',v)} searchPlaceholder="ابحث بعنوان المهمة أو المسؤول أو الفرع..." totalCount={tasks.length} resultCount={filteredTasks.length} onReset={()=>resetListFilter('tasks')} filters={[
+ {key:'status',label:'الحالة',value:listFilters.tasks.status,onChange:v=>setListFilter('tasks','status',v),options:[{value:'open',label:'مفتوحة'},{value:'in_progress',label:'قيد التنفيذ'},{value:'done',label:'منتهية'},{value:'cancelled',label:'ملغاة'}]},
+ {key:'priority',label:'الأولوية',value:listFilters.tasks.priority,onChange:v=>setListFilter('tasks','priority',v),options:[{value:'urgent',label:'عاجلة'},{value:'high',label:'عالية'},{value:'normal',label:'عادية'},{value:'low',label:'منخفضة'}]},
+ {key:'assigned',label:'المسؤول',value:listFilters.tasks.assigned,onChange:v=>setListFilter('tasks','assigned',v),options:userOptions},
+ {key:'branch',label:'الفرع',value:listFilters.tasks.branch,onChange:v=>setListFilter('tasks','branch',v),options:branchOptions}
+ ]}/><Table preferenceKey="action-center-tasks" defaultPageSize={25} rows={filteredTasks} columns={taskCols}/></></Card>}
 
-  {!loading&&tab==='approvals'&&(canGenericApprovals||canPermissionApprovals)&&<Card><div className="card-title"><div><h3>الموافقات المعلقة</h3><small>تغييرات الصلاحيات الحساسة تُطبق فقط عبر مسار الموافقة المخصص، ولا يتم تجاوز منطق الخادم من هنا.</small></div><Badge tone={approvalRows.length?'orange':'green'}>{approvalRows.length}</Badge></div>{approvalRows.length?<Table preferenceKey="action-center-approvals" defaultPageSize={25} rows={approvalRows} columns={approvalCols}/>:<div className="success-note">لا توجد موافقات معلقة.</div>}</Card>}
+  {!loading&&tab==='approvals'&&(canGenericApprovals||canPermissionApprovals)&&<Card><div className="card-title"><div><h3>الموافقات المعلقة</h3><small>تغييرات الصلاحيات الحساسة تُطبق فقط عبر مسار الموافقة المخصص، ولا يتم تجاوز منطق الخادم من هنا.</small></div><Badge tone={approvalRows.length?'orange':'green'}>{approvalRows.length}</Badge></div>{approvalRows.length?<><SmartListFilters storageKey="action-center-approvals-filters" search={listFilters.approvals.q} onSearchChange={v=>setListFilter('approvals','q',v)} searchPlaceholder="ابحث بنوع الموافقة أو المستهدف أو مقدم الطلب..." totalCount={approvalRows.length} resultCount={filteredApprovalRows.length} onReset={()=>resetListFilter('approvals')} filters={[
+ {key:'kind',label:'المسار',value:listFilters.approvals.kind,onChange:v=>setListFilter('approvals','kind',v),options:[{value:'permission',label:'صلاحيات موظفين'},{value:'generic',label:'موافقات عامة'}]},
+ {key:'requester',label:'مقدم الطلب',value:listFilters.approvals.requester,onChange:v=>setListFilter('approvals','requester',v),options:requesterOptions}
+ ]}/><Table preferenceKey="action-center-approvals" defaultPageSize={25} rows={filteredApprovalRows} columns={approvalCols}/></>:<div className="success-note">لا توجد موافقات معلقة.</div>}</Card>}
 
-  {!loading&&tab==='refunds'&&canRefunds&&<Card><div className="card-title"><div><h3>الاستردادات المفتوحة</h3><small>اعتماد الطلب أو تنفيذه يتم بنفس صلاحيات وسجل الاسترداد الحالي.</small></div><Badge tone={openRefunds.length?'orange':'green'}>{openRefunds.length}</Badge></div>{openRefunds.length?<Table preferenceKey="action-center-refunds" defaultPageSize={25} rows={openRefunds} columns={refundCols}/>:<div className="success-note">لا توجد طلبات استرداد مفتوحة.</div>}</Card>}
+  {!loading&&tab==='refunds'&&canRefunds&&<Card><div className="card-title"><div><h3>الاستردادات المفتوحة</h3><small>اعتماد الطلب أو تنفيذه يتم بنفس صلاحيات وسجل الاسترداد الحالي.</small></div><Badge tone={openRefunds.length?'orange':'green'}>{openRefunds.length}</Badge></div>{openRefunds.length?<><SmartListFilters storageKey="action-center-refunds-filters" search={listFilters.refunds.q} onSearchChange={v=>setListFilter('refunds','q',v)} searchPlaceholder="ابحث بالحجز أو العميل أو السند..." totalCount={openRefunds.length} resultCount={filteredRefunds.length} onReset={()=>resetListFilter('refunds')} filters={[
+ {key:'status',label:'الحالة',value:listFilters.refunds.status,onChange:v=>setListFilter('refunds','status',v),options:[{value:'pending',label:'بانتظار الاعتماد'},{value:'approved',label:'معتمد — ينتظر التنفيذ'}]},
+ {key:'branch',label:'الفرع',value:listFilters.refunds.branch,onChange:v=>setListFilter('refunds','branch',v),options:branchOptions}
+ ]}/><Table preferenceKey="action-center-refunds" defaultPageSize={25} rows={filteredRefunds} columns={refundCols}/></>:<div className="success-note">لا توجد طلبات استرداد مفتوحة.</div>}</Card>}
 
   {!loading&&tab==='hr'&&canAttendance&&<>
    <Card><div className="card-title"><div><h3>إجراءات الحضور والموارد البشرية</h3><small>العمليات الحساسة تظل داخل صفحاتها الأصلية وتُفتح من هنا مباشرة.</small></div></div><div className="finance-actions">{has(user,'attendance_review_violations')&&<Button variant="primary" onClick={()=>go?.('/attendance?tab=reports')}>مراجعة المخالفات</Button>}{has(user,'attendance_close_month')&&<Button onClick={()=>go?.('/attendance?tab=reports')}>إقفال الشهر</Button>}{has(user,'attendance_manage_schedules')&&<Button onClick={()=>go?.('/attendance?tab=employees')}>الجداول والإجازات</Button>}{has(user,'attendance_manage_policies')&&<Button onClick={()=>go?.('/attendance?tab=policies')}>السياسات</Button>}</div></Card>
-   {!!deleteRequests.length&&<Card><div className="card-title"><h3>طلبات حذف موظفي الحضور التي تحتاج متابعة</h3><Badge tone="orange">{deleteRequests.length}</Badge></div><Table preferenceKey="action-center-attendance-delete" defaultPageSize={25} rows={deleteRequests} columns={deleteCols}/></Card>}
+   {!!deleteRequests.length&&<Card><div className="card-title"><h3>طلبات حذف موظفي الحضور التي تحتاج متابعة</h3><Badge tone="orange">{deleteRequests.length}</Badge></div><SmartListFilters storageKey="action-center-hr-filters" search={listFilters.hr.q} onSearchChange={v=>setListFilter('hr','q',v)} searchPlaceholder="ابحث باسم الموظف أو الكود أو نتيجة الحذف..." totalCount={deleteRequests.length} resultCount={filteredDeletes.length} onReset={()=>resetListFilter('hr')} filters={[
+ {key:'status',label:'الحالة',value:listFilters.hr.status,onChange:v=>setListFilter('hr','status',v),options:[{value:'pending',label:'قيد التنفيذ'},{value:'failed',label:'فشل'}]},
+ {key:'branch',label:'الفرع',value:listFilters.hr.branch,onChange:v=>setListFilter('hr','branch',v),options:branchOptions}
+ ]}/><Table preferenceKey="action-center-attendance-delete" defaultPageSize={25} rows={filteredDeletes} columns={deleteCols}/></Card>}
   </>}
 
   <Modal open={taskOpen} onClose={()=>setTaskOpen(false)} title="مهمة جديدة"><form onSubmit={createTask} className="form-grid">
