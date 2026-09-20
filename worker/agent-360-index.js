@@ -23,7 +23,7 @@ async function rows(env,table,query){
  const b=await readJson(r);if(!r.ok)throw new Error(b?.message||`تعذر قراءة ${table}`);return Array.isArray(b)?b:[];
 }
 const sovereign=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'||u.permissions?.all===true);
-const canView=u=>!!u&&(sovereign(u)||u.permissions?.agents===true||u.permissions?.finance===true||u.permissions?.suppliers===true);
+const canView=u=>!!u&&(sovereign(u)||u.permissions?.agents===true||u.permissions?.finance===true);
 const canFinance=u=>!!u&&(sovereign(u)||u.permissions?.finance===true||u.permissions?.payments===true||u.permissions?.expenses===true||u.permissions?.refunds===true||u.permissions?.allBranchesFinance===true);
 const globalScope=u=>!!u&&(sovereign(u)||u.permissions?.allBranches===true||(canFinance(u)&&u.permissions?.allBranchesFinance===true));
 const accountMode=u=>{const m=lower(u?.account_mode||u?.permissions?._accountMode);return m==='production'||m==='training'?m:''};
