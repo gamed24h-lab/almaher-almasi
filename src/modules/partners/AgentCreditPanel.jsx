@@ -9,7 +9,7 @@ const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
 const dt=v=>{if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}};
 const dateOnly=v=>{if(!v)return '—';try{return new Date(v+'T12:00:00').toLocaleDateString('ar-SA')}catch{return String(v)}};
-const today=()=>new Date().toISOString().slice(0,10);
+const today=()=>new Date(Date.now()+3*60*60*1000).toISOString().slice(0,10);
 const PROMISE_STATUS={open:'مفتوح',kept:'تم الوفاء',broken:'لم يتم الوفاء',cancelled:'ملغي'};
 const PROMISE_TONE={open:'orange',kept:'green',broken:'red',cancelled:'blue'};
 const MODE_LABEL={off:'متوقف',warn:'تحذير فقط',block:'منع عند التجاوز'};
@@ -55,6 +55,7 @@ export default function AgentCreditPanel({agent,onChanged}){
     <Button onClick={()=>{setPromiseRow(r);setPromiseAction('followup');setModal('promise-action')}}>متابعة</Button>
     <Button onClick={()=>{setPromiseRow(r);setPromiseAction('kept');setModal('promise-action')}}><CheckCircle2 size={14}/> تم الوفاء</Button>
     <Button onClick={()=>{setPromiseRow(r);setPromiseAction('broken');setModal('promise-action')}}><XCircle size={14}/> لم يتم</Button>
+    <Button onClick={()=>{setPromiseRow(r);setPromiseAction('cancelled');setModal('promise-action')}}>إلغاء</Button>
   </div>:'—'}
  ];
 
