@@ -94,8 +94,8 @@ async function ledgerGet(request,env,ctx,id){
   account,
   entries:decorated.map(x=>({...x,reversed:reversedIds.has(String(x.id))})),
   summary:{debit,credit,current_balance:account?stored:derived,derived_balance:derived,discrepancy,entry_count:entries.length,opening_balance:account?num(account.opening_balance):0},
-  setup_required:!agent.ledger_started_at,
-  legacy_balance_requires_setup:!agent.ledger_started_at&&Math.abs(num(agent.current_balance))>0.000001,
+  setup_required:!agent.ledger_started_at||(!account&&Math.abs(num(agent.current_balance))>0.000001),
+  legacy_balance_requires_setup:!account&&Math.abs(num(agent.current_balance))>0.000001,
   reconciliation_ok:Math.abs(discrepancy)<0.005,
   capabilities:{view:true,payment:canPayment(u),adjust:canAdjust(u),initialize:canAdjust(u),reverse:canAdjust(u)}
  });
