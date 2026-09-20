@@ -125,7 +125,7 @@ export default function AgentLedgerPanel({agent,bookings=[],go,onChanged}){
  return <>
   <ErrorBox error={error}/>
   {notice&&<div className="success-note">{notice}</div>}
-  {data?.setup_required&&<Card><div className="warning-list"><div><AlertTriangle size={17}/><div style={{flex:1}}><strong>كشف الحساب يحتاج تهيئة أول مرة</strong><div className="muted-small">الرصيد القديم غير مقسم بين Training وProduction، لذلك لن يتم نقله تلقائيًا حتى لا نخلط البيئتين.</div>{data.legacy_balance_requires_setup&&<div className="muted-small">الرصيد القديم المسجل: {money(data.agent?.legacy_current_balance||0)}</div>}</div>{data.capabilities?.initialize&&<Button variant="primary" onClick={()=>setModal('init')}>تهيئة الرصيد الافتتاحي</Button>}</div></Card>}
+  {data?.setup_required&&<Card><div className="warning-list"><div><AlertTriangle size={17}/><div style={{flex:1}}><strong>كشف الحساب يحتاج تهيئة أول مرة</strong><div className="muted-small">الرصيد القديم غير مقسم بين Training وProduction، لذلك لن يتم نقله تلقائيًا حتى لا نخلط البيئتين.</div>{data.legacy_balance_requires_setup&&<div className="muted-small">الرصيد القديم المسجل: {money(data.agent?.legacy_current_balance||0)}</div>}</div>{data.capabilities?.initialize&&<Button variant="primary" onClick={()=>setModal('init')}>تهيئة الرصيد الافتتاحي</Button>}</div></div></Card>}
 
   <div className="stats-grid">
    <Card><div className="stat-card"><WalletCards/><div><span>الرصيد الحالي</span><strong>{money(data?.summary?.current_balance||0)}</strong><small>{balanceLabel(data?.summary?.current_balance||0)}</small></div></div></Card>
