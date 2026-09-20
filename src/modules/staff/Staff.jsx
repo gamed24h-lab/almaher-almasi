@@ -44,7 +44,7 @@ const permLabel=k=>GENERAL_PERMS.find(x=>x[0]===k)?.[1]||ID_STUDIO_PERMISSIONS.f
 function defaultForm(){return {id:'',name:'',username:'',phone:'',role:'موظف',branch_id:'',status:'نشط',password:'',accountMode:'training',permissions:{},reauthPassword:''}}
 function newStaffId(){try{return `staff-${crypto.randomUUID()}`}catch{return `staff-${Date.now()}-${Math.random().toString(36).slice(2,10)}`}}
 
-export default function Staff(){
+export default function Staff({initialTab=''}){
  const {user}=useAuth();const {data,refresh}=useAppData();
  const [open,setOpen]=useState(false),[form,setForm]=useState(defaultForm()),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [approvals,setApprovals]=useState([]),[approvalBusy,setApprovalBusy]=useState('');const [review,setReview]=useState(null),[reviewBusy,setReviewBusy]=useState(false);
@@ -57,7 +57,8 @@ export default function Staff(){
   ...((canEditPermissions||canApprovePermissionChanges)?[{id:'approvals',label:'الموافقات الحساسة',icon:ClipboardCheck,badge:pendingPermissionApprovals.length||null}]:[]),
   ...(canEditPermissions?[{id:'review',label:'مراجعة الصلاحيات',icon:ShieldCheck,badge:(review?.issues||[]).length||null}]:[])
  ],[users.length,canEditPermissions,canApprovePermissionChanges,pendingPermissionApprovals.length,review]);
- const [activeTab,setActiveTab]=useModuleTab('almaher:module:staff',moduleTabs,'accounts');
+ const [activeTab,setActiveTab]=useModuleTab('almaher:module:staff',moduleTabs,initialTab||'accounts');
+ useEffect(()=>{if(initialTab&&moduleTabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,moduleTabs.length]);
  function canManageTarget(u){if(isDeveloper)return true;if(String(u?.id)===String(user?.id))return false;if(String(u?.role||'').toLowerCase()==='developer')return false;if(Object.keys(u?.permissions||{}).some(k=>SENSITIVE.has(k)&&u.permissions[k]))return false;return rankOf(u?.role)<=actorRank}
  function edit(u){if(!canManageTarget(u)){setError('لا يمكنك تعديل هذا الحساب لأنه أعلى منك إداريًا أو حساب محمي.');return}setForm({...defaultForm(),...u,branch_id:u.branch_id||'',password:'',accountMode:modeOf(u),permissions:u.permissions||{},reauthPassword:''});setError('');setNotice('');setOpen(true)}
  function add(){if(!canManageUsers&&!canEditPermissions){setError('لا توجد صلاحية إضافة موظفين.');return}setForm(defaultForm());setError('');setNotice('');setOpen(true)}
