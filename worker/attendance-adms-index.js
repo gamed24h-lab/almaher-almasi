@@ -386,7 +386,8 @@ async function reconcileAttendanceIncidents(env,notifications,policies){
  const filter='&source_notification_id=in.('+ids.map(enc).join(',')+')',existing=await rest(env,'attendance_incidents?select=*'+filter+'&order=started_at.desc&limit=1000').catch(()=>[]);
  const byKey=new Map((existing||[]).map(x=>[txt(x.incident_key),x])),now=new Date(),nowIso=now.toISOString(),out=[...(existing||[])];
  for(const n of rows){
-  const key=incidentKey(n),old=byKey.get(key),policy=selectIncidentPolicy(policies,n),started=n.first_seen_at||n.created_at||nowIso,startMs=new Date(started).getTime(),responseMin=Math.max(0,Number(policy?.response_minutes??60)),resolutionMin=Math.max(responseMin,Number(policy?.resolution_minutes??480)),responseDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+responseMin*60000).toISOString(),resolutionDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+resolutionMin*60000).toISOString();
+  const upcomingMaintenance=n.category==='maintenance'&&n.metadata?.type==='preventive_due'&&Number(n.metadata?.days_to_due)>=0;if(upcomingMaintenance)continue;
+  const key=incidentKey(n),old=byKey.get(key),policy=selectIncidentPolicy(policies,n),started=n.category==='maintenance'&&n.metadata?.type==='preventive_due'&&n.metadata?.next_due_at?n.metadata.next_due_at:(n.first_seen_at||n.created_at||nowIso),startMs=new Date(started).getTime(),responseMin=Math.max(0,Number(policy?.response_minutes??60)),resolutionMin=Math.max(responseMin,Number(policy?.resolution_minutes??480)),responseDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+responseMin*60000).toISOString(),resolutionDue=new Date((Number.isFinite(startMs)?startMs:now.getTime())+resolutionMin*60000).toISOString();
   if(n.active){
    if(!old){
     const created=(await rest(env,'attendance_incidents',{method:'POST',body:{incident_key:key,source_notification_id:n.id,branch_id:n.branch_id||null,device_id:n.device_id||null,category:n.category||'device_health',severity:n.severity||'warning',title:n.title||'حادثة حضور',summary:n.message||null,status:'open',source_active:true,sla_policy_id:policy?.id||null,started_at:started,response_due_at:responseDue,resolution_due_at:resolutionDue,response_breached:now>new Date(responseDue),resolution_breached:now>new Date(resolutionDue),metadata:{notification_key:n.notification_key||null,escalation_level:n.escalation_level||0}},prefer:'return=representation'}).catch(()=>[]))?.[0]||null;
@@ -545,14 +546,15 @@ function buildPreventiveMaintenanceAlerts(plans,devices,recentMaintenance,recent
  const incidentMap=new Map((recentIncidentRows||[]).map(x=>[String(x.id),x])),groups=new Map();
  for(const m of recentMaintenance||[]){
   const incident=incidentMap.get(String(m.incident_id)),cause=txt(m.root_cause_category);if(!incident?.device_id||!cause||cause==='unknown')continue;
-  const key=String(incident.device_id)+'|'+cause,g=groups.get(key)||{device_id:incident.device_id,branch_id:incident.branch_id||null,cause,count:0,prevention:false,last_at:null};
-  g.count+=1;g.prevention=g.prevention||m.recurrence_prevented===true;if(!g.last_at||new Date(m.updated_at)>new Date(g.last_at))g.last_at=m.updated_at;groups.set(key,g);
+  const key=String(incident.device_id)+'|'+cause,g=groups.get(key)||{device_id:incident.device_id,branch_id:incident.branch_id||null,cause,events:[]};
+  g.events.push({at:m.updated_at,prevention:m.recurrence_prevented===true});groups.set(key,g);
  }
  for(const g of groups.values()){
-  const plan=(plans||[]).find(p=>String(p.device_id)===String(g.device_id)&&p.active!==false),threshold=Math.max(2,Number(plan?.recurrence_threshold)||3);
-  if(g.count<threshold||!g.prevention)continue;
+  const plan=(plans||[]).find(p=>String(p.device_id)===String(g.device_id)&&p.active!==false),threshold=Math.max(2,Number(plan?.recurrence_threshold)||3),windowDays=Math.max(30,Number(plan?.recurrence_window_days)||90),cutoff=nowMs-windowDays*86400000;
+  const events=g.events.filter(e=>{const t=new Date(e.at).getTime();return Number.isFinite(t)&&t>=cutoff}),count=events.length,prevention=events.some(e=>e.prevention===true),lastAt=events.slice().sort((a,b)=>new Date(b.at)-new Date(a.at))[0]?.at||null;
+  if(count<threshold||!prevention)continue;
   const d=deviceMap.get(String(g.device_id));if(!d)continue;
-  alerts.push({notification_key:'maintenance_recurrence:'+g.device_id+':'+g.cause,device_id:g.device_id,branch_id:g.branch_id||d.branch_id||null,category:'maintenance',severity:g.count>=threshold+1?'critical':'warning',title:'تكرار سبب عطل — '+d.name,message:'تكرر نفس السبب الجذري '+g.count+' مرات رغم تسجيل إجراء لمنع التكرار.',metadata:{type:'root_cause_recurrence',root_cause_category:g.cause,count:g.count,threshold,last_at:g.last_at,plan_id:plan?.id||null}});
+  alerts.push({notification_key:'maintenance_recurrence:'+g.device_id+':'+g.cause,device_id:g.device_id,branch_id:g.branch_id||d.branch_id||null,category:'maintenance',severity:count>=threshold+1?'critical':'warning',title:'تكرار سبب عطل — '+d.name,message:'تكرر نفس السبب الجذري '+count+' مرات خلال '+windowDays+' يوم رغم تسجيل إجراء لمنع التكرار.',metadata:{type:'root_cause_recurrence',root_cause_category:g.cause,count,threshold,window_days:windowDays,last_at:lastAt,plan_id:plan?.id||null}});
  }
  return alerts;
 }
@@ -599,7 +601,7 @@ async function skipPreventiveMaintenance(env,me,body){
 
 async function saveAttendanceEscalationRule(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قواعد تصعيد التنبيهات.'),{status:403});
- const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
+ const id=txt(body.id),category=['*','device_health','predictive','linking','maintenance'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
  const branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
  const minute=v=>{if(v===null||v===undefined||v==='')return null;const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(10080,Math.round(n))):null};
  const l1=minute(body.level1_minutes),l2=minute(body.level2_minutes),l3=minute(body.level3_minutes);
