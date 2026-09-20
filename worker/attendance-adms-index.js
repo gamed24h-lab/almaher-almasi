@@ -50,7 +50,14 @@ async function getDevice(env,serial){if(!serial)return null;const rows=await res
 async function touchDevice(env,device,request,url,extra={}){
  if(!device?.id)return;
  const now=new Date().toISOString(),patch={last_seen_at:now,last_ip:clientIp(request),updated_at:now};
- if(url.pathname==='/iclock/getrequest')patch.last_command_poll_at=now;
+ if(url.pathname==='/iclock/getrequest'){
+  const previous=device.last_command_poll_at||null,prevMs=previous?new Date(previous).getTime():NaN,nowMs=new Date(now).getTime(),gapSec=Number.isFinite(prevMs)?Math.round((nowMs-prevMs)/1000):0;
+  patch.last_command_poll_at=now;
+  if(gapSec>1800){
+   const startedAt=new Date(prevMs+1800*1000).toISOString(),duration=Math.max(1,gapSec-1800);
+   await recordDeviceHealthEvent(env,{event_key:'disconnect_gap:'+device.id+':'+new Date(prevMs).toISOString(),device_id:device.id,branch_id:device.branch_id,event_type:'disconnect_gap',severity:duration>=4*3600?'critical':'warning',started_at:startedAt,ended_at:now,duration_seconds:duration,summary:'انقطاع اتصال تقريبي قبل عودة الجهاز لمدة '+Math.max(1,Math.round(duration/60))+' دقيقة.',metadata:{previous_poll_at:previous,reconnected_at:now,threshold_seconds:1800}});
+  }
+ }
  const pv=txt(url.searchParams.get('pushver')||extra.pushversion);if(pv)patch.push_version=pv;
  const fw=txt(extra.firmware||extra.firmver||extra.fwversion);if(fw)patch.firmware=fw;
  const dn=txt(extra.devicename);if(dn)patch.device_name=dn;
@@ -78,6 +85,11 @@ function historyQueryCommand(strategy,start,end){
  return 'DATA QUERY ATTLOG StartTime='+start+'\tEndTime='+end;
 }
 function ageSeconds(value){if(!value)return null;const n=(Date.now()-new Date(value).getTime())/1000;return Number.isFinite(n)?Math.max(0,Math.round(n)):null}
+async function recordDeviceHealthEvent(env,event){
+ if(!event?.event_key||!event?.device_id)return false;
+ await rest(env,'attendance_device_health_events?on_conflict=event_key',{method:'POST',body:{event_key:event.event_key,device_id:event.device_id,branch_id:event.branch_id||null,event_type:event.event_type||'event',severity:event.severity||'warning',status:event.status||'closed',started_at:event.started_at||new Date().toISOString(),ended_at:event.ended_at||null,duration_seconds:event.duration_seconds??null,command_id:event.command_id||null,result_code:event.result_code??null,summary:txt(event.summary)||null,metadata:event.metadata&&typeof event.metadata==='object'?event.metadata:{}},prefer:'resolution=ignore-duplicates,return=minimal'}).catch(()=>{});
+ return true;
+}
 function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
  const seen=device?.last_command_poll_at||device?.last_seen_at||null,seenAge=ageSeconds(seen),lastLog=latestLog?.occurred_at||null,lastReceived=latestLog?.received_at||null,logAge=ageSeconds(lastLog);
  const recent=(deviceCommands||[]).slice().sort((x,y)=>Number(y.id||0)-Number(x.id||0)),latestCommand=recent[0]||null,pendingRows=recent.filter(x=>x.status==='queued'||x.status==='sent'),pending=pendingRows.length,stuck=pendingRows.filter(x=>(ageSeconds(x.sent_at||x.updated_at||x.created_at)??0)>15*60).length;
@@ -200,6 +212,7 @@ async function completeDeviceCommand(env,body){
   const now=new Date().toISOString();
   const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
   const cmd=rows?.[0];
+  if(cmd&&rc!==0)await recordDeviceHealthEvent(env,{event_key:'command_failed:'+cmd.id,device_id:cmd.device_id,branch_id:null,event_type:'command_failed',severity:['history_attlog','history_attlog_replay','sync_attlog','sync_users','diagnostic_info'].includes(cmd.command_type)?'warning':'info',started_at:now,ended_at:now,duration_seconds:0,command_id:cmd.id,result_code:rc,summary:'فشل أمر '+cmd.command_type+(rc!=null?' (Code '+rc+')':''),metadata:{command_type:cmd.command_type,history_strategy:cmd?.metadata?.history_strategy||null}});
   if(cmd&&['sync_info','diagnostic_info'].includes(cmd.command_type))await updateDeviceInfoFromInfoCommand(env,cmd,raw,rc).catch(()=>{});
   if(cmd?.command_type==='history_attlog'&&rc===0){
    const devices=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]);
@@ -786,11 +799,13 @@ async function attendanceState(env,me,url){
   rest(env,'attendance_branch_policies?select=*&data_environment=eq.'+enc(mode)+policyFilter+'&order=branch_id.asc')
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
- const [deviceUsers,commands,deviceShiftTemplates]=deviceIds.length?await Promise.all([
+ const historySince=new Date(Date.now()-90*86400000).toISOString();
+ const [deviceUsers,commands,deviceShiftTemplates,healthEvents]=deviceIds.length?await Promise.all([
    rest(env,'attendance_device_users?select=id,device_id,serial_number,device_pin,name,privilege,card_number,group_no,timezone_raw,verify_mode,data_environment,source_table,first_seen_at,last_seen_at'+inFilter+'&order=device_pin.asc'),
    rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,result_body,command_text,metadata,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
-   rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc')
- ]):[[],[],[]];
+   rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc'),
+   rest(env,'attendance_device_health_events?select=id,event_key,device_id,branch_id,event_type,severity,status,started_at,ended_at,duration_seconds,command_id,result_code,summary,metadata,created_at'+inFilter+'&started_at=gte.'+enc(historySince)+'&order=started_at.desc&limit=1000').catch(()=>[])
+ ]):[[],[],[],[]];
  const latestDeviceLogs=deviceIds.length?await Promise.all(deviceIds.map(async id=>({device_id:id,row:(await rest(env,'attendance_raw_logs?device_id=eq.'+enc(id)+'&select=occurred_at,received_at&order=occurred_at.desc&limit=1').catch(()=>[]))?.[0]||null}))):[];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
  const unlinkedMap=new Map();
@@ -804,7 +819,30 @@ async function attendanceState(env,me,url){
  for(const c of commands||[]){const k=String(c.device_id),arr=commandMap.get(k)||[];arr.push(c);commandMap.set(k,arr)}
  for(const x of unlinkedGroups){const k=String(x.device_id);unlinkedByDevice.set(k,(unlinkedByDevice.get(k)||0)+Number(x.count||0))}
  const deviceHealth=(devices||[]).map(device=>deviceHealthSnapshot(device,latestLogMap.get(String(device.id))||null,commandMap.get(String(device.id))||[],unlinkedByDevice.get(String(device.id))||0,(unlinkedRows||[]).length>=5000));
- return {ok:true,devices,deviceHealth,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const healthMap=new Map(deviceHealth.map(x=>[String(x.device_id),x])),eventsMap=new Map();
+ for(const ev of healthEvents||[]){const k=String(ev.device_id),arr=eventsMap.get(k)||[];arr.push(ev);eventsMap.set(k,arr)}
+ const nowMs=Date.now(),monthAgoMs=nowMs-30*86400000;
+ const deviceHealthHistory=(devices||[]).map(device=>{
+  const createdMs=new Date(device.created_at||0).getTime(),periodStart=Math.max(Number.isFinite(createdMs)?createdMs:monthAgoMs,monthAgoMs),periodSeconds=Math.max(1,Math.round((nowMs-periodStart)/1000));
+  const events=eventsMap.get(String(device.id))||[];let downtime=0,outages=0,failures=0;
+  for(const ev of events){
+   const startMs=new Date(ev.started_at).getTime();if(!Number.isFinite(startMs)||startMs<monthAgoMs)continue;
+   if(ev.event_type==='command_failed')failures+=1;
+   if(ev.event_type==='disconnect_gap'){
+    outages+=1;const endMs=new Date(ev.ended_at||ev.started_at).getTime(),a=Math.max(periodStart,startMs),b=Math.min(nowMs,Number.isFinite(endMs)?endMs:startMs);if(b>a)downtime+=Math.round((b-a)/1000);
+   }
+  }
+  const health=healthMap.get(String(device.id));
+  let currentOutageSeconds=0;
+  if(device.status==='active'&&health?.connection==='offline'&&health?.last_seen_at){
+   const startMs=new Date(health.last_seen_at).getTime()+1800*1000;
+   if(Number.isFinite(startMs)&&startMs<nowMs){currentOutageSeconds=Math.round((nowMs-Math.max(periodStart,startMs))/1000);if(currentOutageSeconds>0){downtime+=currentOutageSeconds;outages+=1}}
+  }
+  downtime=Math.min(periodSeconds,Math.max(0,downtime));
+  const availability=Math.max(0,Math.min(100,((periodSeconds-downtime)/periodSeconds)*100));
+  return {device_id:device.id,period_days:Math.max(1,Math.ceil(periodSeconds/86400)),availability_pct:Number(availability.toFixed(2)),outage_count:outages,downtime_seconds:downtime,current_outage_seconds:currentOutageSeconds,command_failures:failures,last_event_at:events?.[0]?.started_at||null};
+ });
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,healthEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){

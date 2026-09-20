@@ -4,6 +4,7 @@ import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
 function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
+function durationText(sec){const n=Math.max(0,Number(sec)||0);if(n<60)return Math.round(n)+' ثانية';if(n<3600)return Math.round(n/60)+' دقيقة';if(n<86400)return (n/3600).toFixed(n<7200?1:0)+' ساعة';return (n/86400).toFixed(1)+' يوم'}
 function ageState(d){
  const v=d.last_command_poll_at||d.last_seen_at;if(!v)return {tone:'red',label:'لم يتصل'};
  const ms=Date.now()-new Date(v).getTime();
@@ -34,16 +35,19 @@ const blankUser={device_id:'',device_pin:'',name:'',privilege:0,card_number:'',g
 const blankShift={id:'',device_id:'',name:'',start_time:'08:00',end_time:'17:00',grace_minutes:10,sequence_no:1,active:true,notes:''};
 
 export default function AttendanceDeviceData({state,onChanged,onError,onNotice,onOpenLinks}){
- const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[historyBusy,setHistoryBusy]=useState(''),[diagBusy,setDiagBusy]=useState(''),[diagAllBusy,setDiagAllBusy]=useState(false),[diagOpen,setDiagOpen]=useState(false),[diagDeviceId,setDiagDeviceId]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
+ const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[historyBusy,setHistoryBusy]=useState(''),[diagBusy,setDiagBusy]=useState(''),[diagAllBusy,setDiagAllBusy]=useState(false),[diagOpen,setDiagOpen]=useState(false),[diagDeviceId,setDiagDeviceId]=useState(''),[historyOpen,setHistoryOpen]=useState(false),[historyDeviceId,setHistoryDeviceId]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
  const [shiftOpen,setShiftOpen]=useState(false),[shiftDevice,setShiftDevice]=useState(null),[shiftForm,setShiftForm]=useState(blankShift),[shiftBusy,setShiftBusy]=useState(false);
  const timerRef=useRef(null),attemptRef=useRef(0);
- const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[];
+ const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
  const commandsByDevice=useMemo(()=>{const m=new Map();for(const c of commands){const k=String(c.device_id),a=m.get(k)||[];a.push(c);m.set(k,a)}return m},[commands]);
  const shiftsByDevice=useMemo(()=>{const m=new Map();for(const x of deviceShiftTemplates){const k=String(x.device_id),a=m.get(k)||[];a.push(x);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>Number(x.sequence_no)-Number(y.sequence_no));return m},[deviceShiftTemplates]);
  const healthByDevice=useMemo(()=>new Map(deviceHealth.map(x=>[String(x.device_id),x])),[deviceHealth]);
+ const historyByDevice=useMemo(()=>new Map(deviceHealthHistory.map(x=>[String(x.device_id),x])),[deviceHealthHistory]);
+ const eventsByDevice=useMemo(()=>{const m=new Map();for(const x of healthEvents){const k=String(x.device_id),arr=m.get(k)||[];arr.push(x);m.set(k,arr)}return m},[healthEvents]);
  const linkMap=useMemo(()=>new Map(links.map(l=>[String(l.device_id)+'|'+String(l.device_pin),l])),[links]);
  const diagDevice=devices.find(x=>String(x.id)===String(diagDeviceId))||null,diagHealth=healthByDevice.get(String(diagDeviceId))||null,diagCommand=(commandsByDevice.get(String(diagDeviceId))||[]).find(x=>x.command_type==='diagnostic_info')||null;
+ const historyDevice=devices.find(x=>String(x.id)===String(historyDeviceId))||null,historySummary=historyByDevice.get(String(historyDeviceId))||null,historyRows=eventsByDevice.get(String(historyDeviceId))||[];
 
  useEffect(()=>{
   if(!watching)return;
@@ -98,6 +102,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   if(h.recommended_action==='history'){importHistory(device);return}
   if(h.recommended_action==='diagnose')diagnose(device);
  }
+ function openHealthHistory(device){setHistoryDeviceId(device.id);setHistoryOpen(true)}
  function editUser(u){setUserForm({...blankUser,...u,device_id:u.device_id,device_pin:u.device_pin,privilege:u.privilege??0,group_no:u.group_no||'1',timezone_raw:u.timezone_raw||'0000000100000000',verify_mode:u.verify_mode??0});setUserOpen(true)}
  async function saveAndPush(e){
   e.preventDefault();setUserBusy(true);onError?.('');attemptRef.current=0;
@@ -131,8 +136,15 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   {key:'reported',label:'الموجود بالجهاز',render:d=><div><strong>{d.reported_user_count??'—'} موظف</strong><div className="muted-small">{d.reported_fp_count??'—'} قالب بصمة · {d.reported_face_count??'—'} وجه</div><div className="muted-small">{d.reported_transaction_count??'—'} حركة معلنة</div></div>},
   {key:'synced',label:'المسحوب للنظام',render:d=>{const us=usersByDevice.get(String(d.id))||[],imported=us.filter(u=>linkMap.get(String(d.id)+'|'+String(u.device_pin))?.attendance_employee_id).length;return <div><strong>{us.length} موظف مسحوب</strong><div className="muted-small">{imported} مستورد كموظف حضور</div></div>}},
   {key:'compat',label:'توافق سجل الحضور',render:d=>{const p=historyProfile(d);return <div><Badge tone={p.tone}>{p.label}</Badge><div className="muted-small" style={{marginTop:3}}>{p.detail}</div>{p.last&&<div className="muted-small">آخر نجاح: {fmt(p.last)}</div>}</div>}},
+  {key:'reliability',label:'اعتمادية 30 يوم',render:d=>{const h=historyByDevice.get(String(d.id));return h?<div><strong>{h.availability_pct}%</strong><div className="muted-small">{h.outage_count} انقطاع · {durationText(h.downtime_seconds)}</div><div className="muted-small">{h.command_failures} فشل أوامر</div></div>:'—'}},
   {key:'command',label:'حالة آخر أوامر',render:d=>{const rows=(commandsByDevice.get(String(d.id))||[]).slice(0,4);return rows.length?<div style={{display:'grid',gap:6}}>{rows.map(c=><div key={c.id} style={{display:'flex',gap:8,alignItems:'flex-start',justifyContent:'space-between'}}><div><span className="muted-small">{cmdName(c.command_type,c.metadata)}</span>{c.status==='failed'&&<div className="muted-small" style={{marginTop:2,maxWidth:260}}>{cmdReason(c)}</div>}</div><Badge tone={c.status==='success'?'green':c.status==='failed'?'red':'orange'}>{cmdLabel(c.status)}</Badge></div>)}</div>:'—'}},
-  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id,count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions">{state.permissions?.manage_devices&&<Button onClick={()=>diagnose(d)} disabled={diagBusy===d.id}><Activity size={15}/>{diagBusy===d.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>openShifts(d)}><Clock3 size={15}/> فترات الدوام</Button>}{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><DownloadCloud size={15}/>{active?' جاري السحب...':' سحب بيانات الجهاز'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}{state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>importHistory(d)} disabled={historyBusy===d.id||active}><History size={15}/>{historyBusy===d.id?' جاري الاستيراد...':historyProfile(d).label==='Push Replay'?' إعادة إرسال الحركات القديمة':' استيراد الحركات القديمة'}</Button>}</div>}}
+  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id,count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions"><Button onClick={()=>openHealthHistory(d)}><History size={15}/> سجل الصحة</Button>{state.permissions?.manage_devices&&<Button onClick={()=>diagnose(d)} disabled={diagBusy===d.id}><Activity size={15}/>{diagBusy===d.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>openShifts(d)}><Clock3 size={15}/> فترات الدوام</Button>}{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><DownloadCloud size={15}/>{active?' جاري السحب...':' سحب بيانات الجهاز'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}{state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>importHistory(d)} disabled={historyBusy===d.id||active}><History size={15}/>{historyBusy===d.id?' جاري الاستيراد...':historyProfile(d).label==='Push Replay'?' إعادة إرسال الحركات القديمة':' استيراد الحركات القديمة'}</Button>}</div>}}
+ ];
+ const healthEventCols=[
+  {key:'type',label:'الحدث',render:x=>x.event_type==='disconnect_gap'?<Badge tone="red">انقطاع اتصال</Badge>:x.event_type==='command_failed'?<Badge tone="orange">فشل أمر</Badge>:<Badge>{x.event_type}</Badge>},
+  {key:'time',label:'الوقت',render:x=><div><strong>{fmt(x.started_at)}</strong>{x.ended_at&&x.ended_at!==x.started_at&&<div className="muted-small">حتى {fmt(x.ended_at)}</div>}</div>},
+  {key:'duration',label:'المدة',render:x=>x.event_type==='disconnect_gap'?durationText(x.duration_seconds):'—'},
+  {key:'summary',label:'التفاصيل',render:x=><div>{x.summary||'—'}{x.result_code!=null&&<div className="muted-small">Code: {x.result_code}</div>}</div>}
  ];
  const healthAlerts=deviceHealth.filter(h=>Number(h.severity)>0&&h.tone!=='gray').sort((x,y)=>Number(y.severity)-Number(x.severity)||Number(x.score)-Number(y.score));
  const alertCols=[
@@ -168,6 +180,20 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
 
  {deviceUsers.length>0&&<Card><div className="card-title"><div><h3><Users size={19}/> الموظفون المسحوبون من الأجهزة</h3><small>يمكن تعديل الاسم والصلاحية والكارت والبيانات التي يدعمها جهاز ZKTeco، ثم رفعها للجهاز.</small></div><Badge>{deviceUsers.length}</Badge></div><Table preferenceKey="attendance-device-users" defaultPageSize={25} rows={deviceUsers} columns={userCols}/><div className="success-note"><Fingerprint size={16}/> قالب البصمة نفسه يظل داخل جهاز ZKTeco ولا يتم نسخه إلى قاعدة البيانات.</div></Card>}
 
+ <Modal open={historyOpen} onClose={()=>setHistoryOpen(false)} title={'سجل صحة الجهاز'+(historyDevice?' — '+historyDevice.name:'')} wide>
+  <div style={{display:'grid',gap:14}}>
+   <div className="stats-grid">
+    <Card><div className="stat-card"><div><span>الاعتمادية</span><strong>{historySummary?historySummary.availability_pct+'%':'—'}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>الانقطاعات</span><strong>{historySummary?.outage_count??0}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>وقت الانقطاع</span><strong style={{fontSize:17}}>{durationText(historySummary?.downtime_seconds)}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>فشل الأوامر</span><strong>{historySummary?.command_failures??0}</strong></div></div></Card>
+   </div>
+   {historySummary?.current_outage_seconds>0&&<div className="training-banner">الجهاز في انقطاع حالي محسوب منذ تجاوز 30 دقيقة بدون اتصال: {durationText(historySummary.current_outage_seconds)}.</div>}
+   <Card><div className="card-title"><div><h3><History size={18}/> سجل آخر 90 يومًا</h3><small>فشل الأوامر السابق تم استرجاعه من السجل الحالي. احتساب انقطاعات الاتصال التفصيلية يبدأ تلقائيًا من هذا التحديث ويُسجّل عند عودة الجهاز بعد انقطاع أطول من 30 دقيقة.</small></div><Badge>{historyRows.length}</Badge></div>
+    {historyRows.length?<Table preferenceKey={'attendance-device-health-history-'+String(historyDeviceId)} defaultPageSize={25} rows={historyRows} columns={healthEventCols}/>:<div className="success-note"><ShieldCheck size={16}/> لا توجد أعطال مسجلة لهذا الجهاز ضمن الفترة الحالية.</div>}
+   </Card>
+  </div>
+ </Modal>
  <Modal open={diagOpen} onClose={()=>setDiagOpen(false)} title={'تشخيص الجهاز'+(diagDevice?' — '+diagDevice.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
    <div className="stats-grid">
