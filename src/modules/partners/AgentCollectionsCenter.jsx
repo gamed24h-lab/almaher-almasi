@@ -72,6 +72,8 @@ export default function AgentCollectionsCenter({go}){
   overLimit:filtered.filter(r=>r.credit?.exceeded).length,
   urgent:filtered.filter(r=>r.priority?.level==='urgent').length,
   promiseOverdue:filtered.reduce((n,r)=>n+Number(r.promises?.overdue_count||0),0),
+  dueToday:filtered.reduce((n,r)=>n+Number(r.promises?.due_today_count||0),0),
+  broken:filtered.reduce((n,r)=>n+Number(r.promises?.broken_count||0),0),
   unassigned:filtered.filter(r=>!r.assignment?.collector_user_id).length
  }),[filtered]);
 
@@ -138,6 +140,8 @@ export default function AgentCollectionsCenter({go}){
    <Card><div className="stat-card"><ShieldAlert/><div><span>متجاوزو الحد</span><strong>{summary.overLimit}</strong><small>Credit Limit</small></div></div></Card>
    <Card><div className="stat-card"><AlertTriangle/><div><span>أولوية عاجلة</span><strong>{summary.urgent}</strong><small>حسب درجة المخاطر</small></div></div></Card>
    <Card><div className="stat-card"><HandCoins/><div><span>وعود سداد متأخرة</span><strong>{summary.promiseOverdue}</strong><small>لم تُغلق بعد</small></div></div></Card>
+   <Card><div className="stat-card"><CalendarClock/><div><span>وعود مستحقة اليوم</span><strong>{summary.dueToday}</strong><small>متابعة اليوم</small></div></div></Card>
+   <Card><div className="stat-card"><AlertTriangle/><div><span>وعود مكسورة</span><strong>{summary.broken}</strong><small>تحتاج مراجعة</small></div></div></Card>
    <Card><div className="stat-card"><UserRoundCheck/><div><span>غير موزع</span><strong>{summary.unassigned}</strong><small>بدون موظف تحصيل</small></div></div></Card>
   </div>
 
