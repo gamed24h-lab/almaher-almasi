@@ -256,6 +256,43 @@ async function handleEmployeeMerge(request,env,ctx,body){
  }catch(e){return json({error:friendlyEmployeeMergeError(e)},409)}
 }
 
+
+const canReviewRegistry=u=>!!u&&(elevated(u)||u.permissions?.auditLog===true||u.permissions?.managePermissions===true);
+const globalRegistry=u=>!!u&&(elevated(u)||u.permissions?.allBranches===true);
+function duplicateGroupsByKeys(records,keyFn,{entity_type,label,warning,recordId}){
+ const owners=new Map(),parent=records.map((_,i)=>i),rank=records.map(()=>0);
+ const find=i=>parent[i]===i?i:(parent[i]=find(parent[i]));
+ const join=(a,b)=>{a=find(a);b=find(b);if(a===b)return;if(rank[a]<rank[b])[a,b]=[b,a];parent[b]=a;if(rank[a]===rank[b])rank[a]++};
+ records.forEach((r,i)=>{for(const key of keyFn(r)){if(!key)continue;if(owners.has(key))join(i,owners.get(key));else owners.set(key,i)}});
+ const grouped=new Map();records.forEach((r,i)=>{const root=find(i),a=grouped.get(root)||[];a.push(r);grouped.set(root,a)});
+ return [...grouped.values()].filter(a=>a.length>1).map((group,idx)=>{
+  const keys=keyFn(group[0]);let match='مطابقة قوية';
+  for(const k of keys){if(group.slice(1).every(r=>keyFn(r).includes(k))){match=k.startsWith('cr:')?'نفس السجل التجاري':k.startsWith('tax:')?'نفس الرقم الضريبي':k.startsWith('email:')?'نفس البريد الإلكتروني':k.startsWith('phone_name:')?'نفس الاسم والجوال':'مطابقة قوية';break}}
+  return {id:entity_type+'-'+idx+'-'+recordId(group[0]),entity_type,label,match,merge_mode:'review_only',warning,records:group.map(r=>({...r,id:recordId(r)}))};
+ });
+}
+async function duplicateReviewRegistry(env,u){
+ if(!canReviewRegistry(u))throw Object.assign(new Error('لا توجد صلاحية لمراجعة تكرارات السجلات الحساسة.'),{status:403});
+ const global=globalRegistry(u),branch=text(u?.branch_id);
+ const [staff,agents,customers]=await Promise.all([
+  rows(env,'staff_users','select='+enc('id,name,username,phone,role,branch_id,status,account_mode,created_at,updated_at')+(global?'':branch?'&branch_id=eq.'+enc(branch):'&id=eq.__none__')+'&limit=5000').catch(()=>[]),
+  rows(env,'agents','select='+enc('id,agent_code,name,company_name,phone,whatsapp,email,commercial_registration,tax_number,branch_id,status,current_balance,portal_enabled,created_at,updated_at')+(global?'':branch?'&branch_id=eq.'+enc(branch):'&id=eq.00000000-0000-0000-0000-000000000000')+'&limit=5000').catch(()=>[]),
+  global?rows(env,'customer_profiles','select='+enc('user_id,full_name,phone,preferred_language,marketing_opt_in,created_at,updated_at')+'&limit=5000').catch(()=>[]):Promise.resolve([])
+ ]);
+ const staffGroups=duplicateGroupsByKeys(staff,r=>{
+  const p=digits(r.phone),n=compact(r.name);return p&&n?['phone_name:'+p+'|'+n]:[];
+ },{entity_type:'staff_users',label:'حساب موظف',warning:'حسابات الموظفين لا تُدمج تلقائيًا لأن لها جلسات وصلاحيات وسجل اعتماد. راجع الحسابين يدويًا أولًا.',recordId:r=>String(r.id)});
+ const agentGroups=duplicateGroupsByKeys(agents,r=>{
+  const keys=[],cr=compact(r.commercial_registration),tax=compact(r.tax_number),email=lower(r.email),p=digits(r.phone||r.whatsapp),n=compact(r.company_name||r.name);
+  if(cr)keys.push('cr:'+cr);if(tax)keys.push('tax:'+tax);if(email)keys.push('email:'+email);if(p&&n)keys.push('phone_name:'+p+'|'+n);return keys;
+ },{entity_type:'agents',label:'وكيل',warning:'الوكلاء لهم أرصدة وحجوزات وتخصيصات؛ الدمج يحتاج معاينة مالية مستقلة قبل أي تنفيذ.',recordId:r=>String(r.id)});
+ const customerGroups=duplicateGroupsByKeys(customers,r=>{
+  const p=digits(r.phone),n=compact(r.full_name);return p&&n?['phone_name:'+p+'|'+n]:[];
+ },{entity_type:'customer_profiles',label:'حساب عميل',warning:'حساب العميل مرتبط بهوية تسجيل دخول خارجية، لذلك المراجعة فقط حاليًا ولا يوجد دمج تلقائي.',recordId:r=>String(r.user_id)});
+ const groups=[...staffGroups,...agentGroups,...customerGroups];
+ return {ok:true,groups,summary:{total:groups.length,staff:staffGroups.length,agents:agentGroups.length,customers:customerGroups.length},scope:global?'all':'branch'};
+}
+
 export default {
  async fetch(request,env,ctx){
   const url=new URL(request.url);
@@ -263,6 +300,7 @@ export default {
    let body={};try{body=await request.clone().json()}catch{}
    if(body?.action==='passenger_duplicate_preview'||body?.action==='passenger_duplicate_merge')return handle(request,env,ctx,body);
    if(['attendance_employee_duplicates_list','attendance_employee_duplicate_preview','attendance_employee_duplicate_merge'].includes(body?.action))return handleEmployeeMerge(request,env,ctx,body);
+   if(body?.action==='duplicate_review_registry'){const u=await actor(request,env,ctx);if(!u)return json({error:'انتهت الجلسة.'},401);try{return json(await duplicateReviewRegistry(env,u))}catch(e){return json({error:e.message},e.status||500)}}
   }
   return appWorker.fetch(request,env,ctx);
  }
