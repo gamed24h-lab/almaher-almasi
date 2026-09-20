@@ -26,7 +26,7 @@ const items=[
  {p:'/wallets',key:'wallets',Icon:WalletCards,perms:['payments','refunds','viewBookings'],group:'finance'},
  {p:'/partners',key:'partners',Icon:Handshake,perms:['finance','agents','suppliers'],group:'finance'},
  {p:'/staff',key:'staff',Icon:Users,perms:['manageUsers','managePermissions'],group:'hr'},
- {p:'/attendance',key:'attendance',Icon:Fingerprint,perms:['attendance_view','attendance_manage_devices','attendance_manage_links','attendance_manage_employees','attendance_manage_schedules','attendance_manage_policies','attendance_review_violations','attendance_close_month','attendance_reopen_month','attendance_delete_employees','attendance_reports'],group:'hr'},
+ {p:'/attendance',key:'attendance',Icon:Fingerprint,perms:['attendance_view','attendance_manage_devices','attendance_manage_links','attendance_manage_employees','attendance_manage_biometrics','attendance_manage_schedules','attendance_manage_policies','attendance_review_violations','attendance_close_month','attendance_reopen_month','attendance_delete_employees','attendance_reports'],group:'hr'},
  {p:'/id-studio',key:'idStudio',Icon:ShieldCheck,perms:['id_studio_access'],group:'hr'},
  {p:'/branches',key:'branches',Icon:Building2,perms:['manageBranches'],group:'management'},
  {p:'/workflow',key:'workflow',Icon:CheckSquare2,perms:['operations','approvals','approval_requests','tasks','refunds','refund_view','refund_request','refund_approve','refund_complete','attendance_review_violations','attendance_close_month','attendance_reopen_month','attendance_manage_employees','managePermissions'],group:'management'},
