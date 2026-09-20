@@ -15,7 +15,7 @@ const fmtDate=v=>{if(!v)return '—';try{return new Date(v).toLocaleDateString('
 const tripName=t=>t?(t.trip_code||[t.from_city,t.to_city].filter(Boolean).join(' ← ')||t.id):'—';
 const matchSearch=(row,q,fields)=>{const k=lower(q);if(!k)return true;return fields.some(f=>lower(typeof f==='function'?f(row):row?.[f]).includes(k))};
 
-export default function Agent360({id,go}){
+export default function Agent360({id,go,initialTab=''}){
  const [data,setData]=useState(null),[ledgerPreview,setLedgerPreview]=useState(null),[creditPreview,setCreditPreview]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[q,setQ]=useState(''),[mergeGroup,setMergeGroup]=useState(null),[notice,setNotice]=useState('');
  async function load(){
   if(!id)return;
@@ -32,7 +32,8 @@ export default function Agent360({id,go}){
   ...(data?.financial_access?[{id:'ledger',label:'كشف الحساب',icon:ReceiptText,badge:ledgerPreview?.summary?.entry_count||null},{id:'credit',label:'الائتمان والتحصيل',icon:ShieldAlert,badge:creditPreview?.collection_summary?.overdue||null}]:[]),
   {id:'history',label:'الدمج والتدقيق',icon:GitMerge,badge:(data?.merge_history?.length||0)+(data?.duplicate_candidates?.length||0)||null}
  ],[data,ledgerPreview,creditPreview]);
- const [tab,setTab]=useModuleTab('almaher:agent-360:'+String(id||''),tabs,'overview');
+ const requestedTab=initialTab&&tabs.some(x=>x.id===initialTab)?initialTab:'overview';
+ const [tab,setTab]=useModuleTab('almaher:agent-360:'+String(id||''),tabs,requestedTab);
  const agent=data?.agent||null,summary=data?.summary||{},financial=!!data?.financial_access;
 
  const bookings=useMemo(()=>(data?.bookings||[]).filter(r=>matchSearch(r,q,['booking_number','customer_name','customer_phone','booking_status','status'])),[data,q]);
