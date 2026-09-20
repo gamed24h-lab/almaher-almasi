@@ -124,12 +124,145 @@ async function handle(request,env,ctx,body){
  }catch(e){return json({error:friendlyMergeError(e)},409)}
 }
 
+
+const employeeMode=u=>u?.permissions?._accountMode==='production'?'production':'training';
+const canReviewEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_view===true);
+const canMergeEmployees=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_employees===true);
+function employeeMatch(a,b){
+ const as=compact(a?.staff_user_id),bs=compact(b?.staff_user_id);
+ if(as&&bs&&as===bs)return {ok:true,type:'staff_user',label:'نفس حساب الموظف'};
+ const anid=compact(a?.national_id),bnid=compact(b?.national_id);
+ if(anid&&bnid&&anid===bnid)return {ok:true,type:'national_id',label:'نفس الهوية / الإقامة'};
+ const ap=digits(a?.phone),bp=digits(b?.phone),an=compact(a?.name),bn=compact(b?.name);
+ if(ap&&bp&&ap===bp&&an&&bn&&an===bn)return {ok:true,type:'phone_name',label:'نفس الاسم والجوال'};
+ return {ok:false,type:'none',label:'لا توجد مطابقة قوية كافية'};
+}
+function employeeKeys(x){
+ const out=[],staff=compact(x?.staff_user_id),nid=compact(x?.national_id),phone=digits(x?.phone),name=compact(x?.name);
+ if(staff)out.push('staff:'+staff);
+ if(nid)out.push('nid:'+nid);
+ if(phone&&name)out.push('phone_name:'+phone+'|'+name);
+ return out;
+}
+function employeeGroups(list){
+ const n=list.length,parent=Array.from({length:n},(_,i)=>i),rank=Array(n).fill(0);
+ const find=i=>parent[i]===i?i:(parent[i]=find(parent[i]));
+ const join=(a,b)=>{a=find(a);b=find(b);if(a===b)return;if(rank[a]<rank[b])[a,b]=[b,a];parent[b]=a;if(rank[a]===rank[b])rank[a]++};
+ const keyOwner=new Map();
+ for(let i=0;i<n;i++)for(const k of employeeKeys(list[i])){if(keyOwner.has(k))join(i,keyOwner.get(k));else keyOwner.set(k,i)}
+ const grouped=new Map();
+ for(let i=0;i<n;i++){const root=find(i),arr=grouped.get(root)||[];arr.push(list[i]);grouped.set(root,arr)}
+ return [...grouped.values()].filter(g=>g.length>1).map(records=>{
+   records.sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+   const match=employeeMatch(records[0],records[1]);
+   return {id:'attendance-dup-'+records[0].id,branch_id:records[0].branch_id||null,match:match.label,match_type:match.type,records,canonical:records[0]};
+ });
+}
+async function employeeDuplicateList(env,u){
+ if(!canReviewEmployees(u))throw Object.assign(new Error('لا توجد صلاحية مراجعة تكرارات موظفي الحضور.'),{status:403});
+ const mode=employeeMode(u),parts=['status=eq.active','data_environment=eq.'+enc(mode),'select='+enc('id,employee_code,name,branch_id,phone,national_id,department,job_title,staff_user_id,status,data_environment,created_at,updated_at,merged_into_id')];
+ if(!elevated(u)){
+  if(!u?.branch_id)return {ok:true,groups:[],mode};
+  parts.push('branch_id=eq.'+enc(u.branch_id));
+ }
+ parts.push('order=created_at.asc','limit=5000');
+ const employees=await rows(env,'attendance_employees',parts.join('&'));
+ return {ok:true,groups:employeeGroups(employees),mode,total_employees:employees.length};
+}
+async function employeeReferenceRows(env,a,b){
+ const ids='('+a.id+','+b.id+')',specs=[
+  ['attendance_employee_links','attendance_employee_id','id,attendance_employee_id,device_id,device_pin,staff_user_id,active'],
+  ['attendance_raw_logs','attendance_employee_id','id,attendance_employee_id,device_id,device_pin,occurred_at'],
+  ['attendance_employee_shift_periods','attendance_employee_id','id,attendance_employee_id,sequence_no,label,start_time,end_time,grace_minutes,active,weekdays'],
+  ['attendance_employee_calendar_rules','attendance_employee_id','id,attendance_employee_id,rule_type,label,start_date,end_date,status'],
+  ['attendance_violation_decisions','attendance_employee_id','id,attendance_employee_id,work_date,data_environment,decision_status'],
+  ['attendance_employee_delete_requests','attendance_employee_id','id,attendance_employee_id,status,created_at']
+ ],out={};
+ await Promise.all(specs.map(async([table,col,select])=>{
+  const cap=table==='attendance_raw_logs'?1001:500;
+  out[table]=await rows(env,table,col+'=in.'+ids+'&select='+enc(select)+'&limit='+cap).catch(()=>[]);
+ }));
+ return out;
+}
+function employeeRefCounts(refs,id){
+ const out={};
+ for(const [table,list] of Object.entries(refs)){
+  const count=(list||[]).filter(x=>String(x.attendance_employee_id)===String(id)).length;
+  out[table]={count:table==='attendance_raw_logs'&&count>=1001?'1000+':count,truncated:table==='attendance_raw_logs'&&count>=1001};
+ }
+ return out;
+}
+function employeeConflicts(refs,a,b){
+ const reasons=[];
+ const as=compact(a.staff_user_id),bs=compact(b.staff_user_id),anid=compact(a.national_id),bnid=compact(b.national_id);
+ if(as&&bs&&as!==bs)reasons.push('السجلان مربوطان بحسابي موظفين مختلفين.');
+ if(anid&&bnid&&anid!==bnid)reasons.push('رقما الهوية مختلفان.');
+ const ap=(refs.attendance_employee_shift_periods||[]).filter(x=>String(x.attendance_employee_id)===String(a.id));
+ const bp=(refs.attendance_employee_shift_periods||[]).filter(x=>String(x.attendance_employee_id)===String(b.id));
+ if(ap.length&&bp.length)reasons.push('السجلان لديهما فترات دوام؛ يلزم توحيد الدوام قبل الدمج.');
+ const av=(refs.attendance_violation_decisions||[]).filter(x=>String(x.attendance_employee_id)===String(a.id));
+ const bv=(refs.attendance_violation_decisions||[]).filter(x=>String(x.attendance_employee_id)===String(b.id));
+ if(av.some(x=>bv.some(y=>String(x.work_date)===String(y.work_date)&&String(x.data_environment)===String(y.data_environment))))reasons.push('يوجد قرار مخالفة لنفس اليوم على السجلين.');
+ return reasons;
+}
+async function inspectEmployeePair(env,u,canonicalId,duplicateId){
+ if(!canonicalId||!duplicateId||canonicalId===duplicateId)return {can_merge:false,reasons:['اختر سجلين مختلفين.']};
+ const pair=await rows(env,'attendance_employees','id=in.('+enc(canonicalId)+','+enc(duplicateId)+')&select=*&limit=2');
+ const canonical=pair.find(x=>String(x.id)===String(canonicalId)),duplicate=pair.find(x=>String(x.id)===String(duplicateId));
+ if(!canonical||!duplicate)return {can_merge:false,reasons:['أحد سجلي الموظف غير موجود.']};
+ if(!elevated(u)&&String(canonical.branch_id||'')!==String(u?.branch_id||''))return {forbidden:true,can_merge:false,reasons:['السجل خارج نطاق فرعك.']};
+ const reasons=[];
+ if(String(canonical.branch_id||'')!==String(duplicate.branch_id||''))reasons.push('السجلان ليسا في نفس الفرع.');
+ if(String(canonical.data_environment||'')!==String(duplicate.data_environment||''))reasons.push('السجلان من بيئتين مختلفتين.');
+ if(lower(canonical.status)!=='active'||lower(duplicate.status)!=='active'||canonical.merged_into_id||duplicate.merged_into_id)reasons.push('أحد السجلين غير نشط أو مدموج بالفعل.');
+ const match=employeeMatch(canonical,duplicate);if(!match.ok)reasons.push(match.label);
+ const refs=await employeeReferenceRows(env,canonical,duplicate);
+ reasons.push(...employeeConflicts(refs,canonical,duplicate));
+ return {can_merge:reasons.length===0,match,reasons,canonical,duplicate,references:{canonical:employeeRefCounts(refs,canonical.id),duplicate:employeeRefCounts(refs,duplicate.id)}};
+}
+function friendlyEmployeeMergeError(e){
+ const m=String(e?.message||e||'');
+ if(/MERGE_REASON_REQUIRED/i.test(m))return 'اكتب سبب الدمج بوضوح (5 أحرف على الأقل).';
+ if(/MERGE_SAME_BRANCH_ONLY/i.test(m))return 'دمج موظفي الحضور مسموح داخل نفس الفرع فقط.';
+ if(/MERGE_ENVIRONMENT_MISMATCH/i.test(m))return 'لا يمكن دمج سجلين من بيئتين مختلفتين.';
+ if(/MERGE_STAFF_ACCOUNT_CONFLICT/i.test(m))return 'السجلان مربوطان بحسابي موظفين مختلفين.';
+ if(/MERGE_NATIONAL_ID_CONFLICT/i.test(m))return 'رقما الهوية مختلفان، لذلك تم إيقاف الدمج.';
+ if(/MERGE_SHIFT_CONFLICT/i.test(m))return 'يوجد دوام مسجل على السجلين. وحّد فترات الدوام أولًا.';
+ if(/MERGE_VIOLATION_CONFLICT/i.test(m))return 'يوجد قرار مخالفة لنفس اليوم على السجلين.';
+ if(/MERGE_STRONG_MATCH_REQUIRED/i.test(m))return 'لا توجد مطابقة قوية كافية بين سجلي الموظف.';
+ if(/MERGE_EMPLOYEE_NOT_FOUND|MERGE_INACTIVE_EMPLOYEE|MERGE_ALREADY_MERGED/i.test(m))return 'أحد السجلين لم يعد صالحًا للدمج.';
+ return m||'تعذر دمج سجلي الموظف.';
+}
+async function handleEmployeeMerge(request,env,ctx,body){
+ const u=await actor(request,env,ctx);if(!u)return json({error:'انتهت الجلسة.'},401);
+ if(body.action==='attendance_employee_duplicates_list'){
+  try{return json(await employeeDuplicateList(env,u))}catch(e){return json({error:e.message},e.status||500)}
+ }
+ if(!canReviewEmployees(u))return json({error:'لا توجد صلاحية مراجعة تكرارات موظفي الحضور.'},403);
+ const preview=await inspectEmployeePair(env,u,String(body.canonical_id||''),String(body.duplicate_id||''));
+ if(preview.forbidden)return json({error:preview.reasons?.[0]||'خارج نطاق الفرع.'},403);
+ if(body.action==='attendance_employee_duplicate_preview')return json({ok:true,...preview,can_execute:canMergeEmployees(u)});
+ if(!canMergeEmployees(u))return json({error:'دمج موظفي الحضور يتطلب صلاحية إدارة موظفي الحضور.'},403);
+ if(!preview.can_merge)return json({error:preview.reasons?.join(' ')||'لا يمكن دمج السجلين.',preview},409);
+ if(text(body.confirm_employee_code)!==text(preview.canonical?.employee_code))return json({error:'اكتب رقم الموظف الأساسي كما هو لتأكيد عملية الدمج.'},400);
+ if(text(body.reason).length<5)return json({error:'سبب الدمج مطلوب (5 أحرف على الأقل).'},400);
+ try{
+  const result=await rpc(env,'merge_attendance_employee_duplicates',{
+   p_canonical:preview.canonical.id,p_duplicate:preview.duplicate.id,
+   p_actor_id:String(u.id||''),p_actor_name:String(u.name||u.username||''),p_actor_role:String(u.role||''),
+   p_reason:text(body.reason)
+  });
+  return json({ok:true,result,preview});
+ }catch(e){return json({error:friendlyEmployeeMergeError(e)},409)}
+}
+
 export default {
  async fetch(request,env,ctx){
   const url=new URL(request.url);
   if(url.pathname==='/api/admin'&&request.method==='POST'){
    let body={};try{body=await request.clone().json()}catch{}
    if(body?.action==='passenger_duplicate_preview'||body?.action==='passenger_duplicate_merge')return handle(request,env,ctx,body);
+   if(['attendance_employee_duplicates_list','attendance_employee_duplicate_preview','attendance_employee_duplicate_merge'].includes(body?.action))return handleEmployeeMerge(request,env,ctx,body);
   }
   return appWorker.fetch(request,env,ctx);
  }
