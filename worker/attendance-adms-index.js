@@ -814,17 +814,41 @@ function deviceLocalNow(){try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'
 async function queueDeviceSync(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لسحب بيانات جهاز البصمة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
- const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&select=id,command_type,status&limit=20').catch(()=>[]);
- if(existing?.some(x=>x.command_type==='sync_users'||x.command_type==='sync_attlog'))return {ok:true,queued:false,message:'يوجد طلب مزامنة قيد التنفيذ بالفعل.'};
- const now=deviceLocalNow();
+ const existing=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&select=id,command_type,status,metadata&limit=100').catch(()=>[]);
+ if(existing?.some(x=>x.command_type==='sync_users'||x.command_type==='sync_attlog'||x?.metadata?.smart_sync===true))return {ok:true,queued:false,message:'يوجد Smart Sync قيد التنفيذ بالفعل على هذا الجهاز.'};
+ const now=deviceLocalNow(),requestedAt=new Date().toISOString(),batch='smart-sync-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),allowBiometrics=canManageBiometrics(me);
+ const baseMeta={smart_sync:true,smart_sync_batch:batch,requested_at:requestedAt};
  const commands=[
-  {device_id:device.id,command_type:'sync_info',command_text:'INFO',created_by:actorId(me)||actorName(me)||null},
-  {device_id:device.id,command_type:'sync_users',command_text:'DATA QUERY USERINFO',created_by:actorId(me)||actorName(me)||null},
-  {device_id:device.id,command_type:'sync_attlog',command_text:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,created_by:actorId(me)||actorName(me)||null}
+  {device_id:device.id,command_type:'sync_info',command_text:'INFO',metadata:{...baseMeta,stage:'device_info'},created_by:actorId(me)||actorName(me)||null},
+  {device_id:device.id,command_type:'sync_users',command_text:'DATA QUERY USERINFO',metadata:{...baseMeta,stage:'users'},created_by:actorId(me)||actorName(me)||null},
+  {device_id:device.id,command_type:'sync_attlog',command_text:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{...baseMeta,stage:'attendance'},created_by:actorId(me)||actorName(me)||null}
  ];
+ let biometricCommandCount=0,linkedPinCount=0,biometricStrategy=null;
+ if(allowBiometrics){
+  const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&attendance_employee_id=not.is.null&select=device_pin,attendance_employee_id').catch(()=>[]);
+  const unique=[...new Map((links||[]).filter(x=>txt(x.device_pin)).map(x=>[txt(x.device_pin),x])).values()];
+  linkedPinCount=unique.length;
+  const modern=protocolAtLeast(device.push_version,2,2,14);biometricStrategy=modern?'biodata':'legacy_fingertmp';
+  if(modern){
+   commands.push(
+    {device_id:device.id,command_type:'biometric_import_fingerprint',command_text:'DATA QUERY BIODATA Type=1',metadata:{...baseMeta,stage:'biometrics',biometric_type:'finger',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null},
+    {device_id:device.id,command_type:'biometric_import_face',command_text:'DATA QUERY BIODATA Type=2',metadata:{...baseMeta,stage:'biometrics',biometric_type:'face',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null},
+    {device_id:device.id,command_type:'biometric_import_face',command_text:'DATA QUERY BIODATA Type=9',metadata:{...baseMeta,stage:'biometrics',biometric_type:'visible_face',strategy:'biodata_all'},created_by:actorId(me)||actorName(me)||null}
+   );
+   biometricCommandCount=3;
+  }else{
+   for(const link of unique){
+    const pin=safeDeviceText(link.device_pin,24);
+    commands.push({device_id:device.id,command_type:'biometric_import_fingerprint',command_text:'DATA QUERY FINGERTMP PIN='+pin,entity_type:'attendance_employee',entity_id:link.attendance_employee_id,metadata:{...baseMeta,stage:'biometrics',pin,attendance_employee_id:link.attendance_employee_id,biometric_type:'finger',strategy:'legacy_fingertmp'},created_by:actorId(me)||actorName(me)||null});
+   }
+   biometricCommandCount=unique.length;
+  }
+ }
  const created=await rest(env,'attendance_device_commands',{method:'POST',body:commands,prefer:'return=representation'});
- await audit(env,me,'attendance_device_sync_requested','attendance_device',device.id,device.branch_id,null,{commands:commands.map(x=>x.command_type)},'سحب بيانات الجهاز والموظفين وسجل الحضور');
- return {ok:true,queued:true,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[]};
+ const meta={...(device.metadata||{}),last_smart_sync:{batch,requested_at:requestedAt,requested_by:actorId(me)||actorName(me)||null,total_commands:commands.length,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,biometric_strategy:biometricStrategy,biometrics_included:allowBiometrics,raw_biometric_templates_stored:false}};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:requestedAt},prefer:'return=minimal'}).catch(()=>{});
+ await audit(env,me,'attendance_device_smart_sync_requested','attendance_device',device.id,device.branch_id,null,{batch,commands:commands.map(x=>x.command_type),total_commands:commands.length,biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,biometric_strategy:biometricStrategy},'Smart Sync: معلومات الجهاز والموظفين والحركات والبصمات');
+ return {ok:true,queued:true,batch,commands:created?.map(x=>({id:x.id,type:x.command_type,status:x.status}))||[],biometrics_included:allowBiometrics,biometric_commands:biometricCommandCount,linked_pins:linkedPinCount,message:allowBiometrics?'بدأ Smart Sync: الجهاز + الموظفون + الحركات + البصمات.':'بدأ Smart Sync للجهاز والموظفين والحركات. البصمات لم تُدرج لأن المستخدم لا يملك صلاحية إدارتها.'};
 }
 async function diagnoseDevice(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لتشخيص أجهزة البصمة.'),{status:403});
