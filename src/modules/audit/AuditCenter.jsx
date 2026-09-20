@@ -150,7 +150,7 @@ export default function AuditCenter({go,initialTab=''}) {
   if(['trips','trip'].includes(et)&&id)return '/trips/'+encodeURIComponent(id);
   if(/staff|permission/.test(et))return '/staff';
   if(/attendance|violation|schedule/.test(et))return '/attendance';
-  if(et==='agents'||et==='agent')return '/partners';
+  if(et==='agents'||et==='agent')return id?'/partners/agents/'+encodeURIComponent(id):'/partners';
   if(/refund/.test(et)){const no=r.metadata?.booking_number;return no?'/refunds?booking='+encodeURIComponent(no):'/refunds'}
   if(r.metadata?.booking_number)return '/bookings/'+encodeURIComponent(r.metadata.booking_number);
   return '';
