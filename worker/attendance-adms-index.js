@@ -678,6 +678,7 @@ async function completeDeviceCommand(env,body){
   }
   if(cmd?.command_type==='history_attlog'&&rc===-3)await queueHistoricalFallback(env,cmd,rc).catch(()=>false);
   if(cmd?.command_type==='biometric_enroll')await finalizeBiometricEnrollment(env,cmd,rc,now).catch(()=>{});
+  if(cmd?.command_type==='biometric_delete')await finalizeBiometricDelete(env,cmd,rc,now).catch(()=>{});
   if(cmd?.command_type==='delete_employee_user'&&cmd.operation_group_id)groups.add(String(cmd.operation_group_id));
  }
  for(const groupId of groups)await finalizeEmployeeDeleteGroup(env,groupId);
@@ -1528,6 +1529,63 @@ async function importDeviceBiometrics(env,me,body){
  await audit(env,me,'attendance_biometric_import_requested','attendance_device',device.id,device.branch_id,null,{batch,strategy:modern?'biodata':'legacy_fingertmp',commands:commands.length,linked_pins:unique.length,employee_id:txt(body.attendance_employee_id)||null},'طلب استيراد البصمات الموجودة على الجهاز');
  return {ok:true,queued:true,batch,strategy:modern?'biodata':'legacy_fingertmp',commands:queued?.length||0,linked_pins:unique.length,message:'تم بدء استيراد البصمات الموجودة على الجهاز لـ '+unique.length+' موظف. القوالب الخام لن تُحفظ.'};
 }
+
+async function biometricProfileForActor(env,me,id){
+ const rows=await rest(env,'attendance_biometric_profiles?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]),profile=rows?.[0]||null;
+ if(!profile)return null;
+ if(!elevated(me)&&txt(profile.branch_id)!==actorBranch(me))return null;
+ return profile;
+}
+function biometricDeleteCommand(device,profile){
+ const pin=safeDeviceText(profile.device_pin,24);if(!pin)throw Object.assign(new Error('PIN البصمة غير موجود في السجل.'),{status:400});
+ const modern=protocolAtLeast(device.push_version,2,2,14);
+ if(profile.biometric_type==='face')return modern?'DATA DELETE biodata Type=2\tPin='+pin:'DELETE FACE PIN='+pin;
+ const slot=safeInt(profile.slot_no);if(slot==null||slot<0||slot>9)throw Object.assign(new Error('رقم الإصبع غير صالح.'),{status:400});
+ return modern?'DATA DELETE biodata Type=1\tPin='+pin+'\tNo='+slot:'DELETE FINGERTMP PIN='+pin+'\tFID='+slot;
+}
+async function requestBiometricDelete(env,me,body){
+ if(!canManageBiometrics(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة البصمات البيومترية.'),{status:403});
+ const profile=await biometricProfileForActor(env,me,txt(body.profile_id));if(!profile)throw Object.assign(new Error('البصمة غير موجودة أو خارج نطاق الفرع.'),{status:404});
+ if(profile.status!=='active')throw Object.assign(new Error('البصمة ليست نشطة حاليًا.'),{status:409});
+ const reason=txt(body.reason);if(!reason)throw Object.assign(new Error('سبب حذف البصمة مطلوب.'),{status:400});
+ const device=await scopedDevice(env,me,profile.source_device_id);if(!device)throw Object.assign(new Error('الجهاز المصدر غير موجود أو خارج نطاق الفرع.'),{status:404});
+ if(device.status!=='active')throw Object.assign(new Error('الجهاز موقوف ولا يمكن حذف البصمة منه الآن.'),{status:409});
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.biometric_delete&status=in.(queued,sent)&entity_id=eq.'+enc(profile.id)+'&select=id&limit=1').catch(()=>[]);
+ if(pending?.length)throw Object.assign(new Error('يوجد طلب حذف لهذه البصمة قيد التنفيذ بالفعل.'),{status:409});
+ const queued=await queueCommands(env,device,me,[{type:'biometric_delete',command:biometricDeleteCommand(device,profile),entity_type:'attendance_biometric_profile',entity_id:profile.id,metadata:{profile_id:profile.id,attendance_employee_id:profile.attendance_employee_id,device_pin:profile.device_pin,biometric_type:profile.biometric_type,biometric_key:profile.biometric_key,finger_code:profile.finger_code,slot_no:profile.slot_no,reason}}]);
+ const cmd=queued?.[0]||null;if(!cmd)throw Object.assign(new Error('تعذر إنشاء أمر حذف البصمة.'),{status:500});
+ await audit(env,me,'attendance_biometric_delete_requested','attendance_biometric_profile',profile.id,profile.branch_id,profile,{...profile,delete_command_id:cmd.id,delete_reason:reason},reason);
+ return {ok:true,queued:true,command_id:cmd.id,message:'تم إرسال طلب حذف البصمة المحددة من الجهاز.'};
+}
+async function finalizeBiometricDelete(env,cmd,rc,now){
+ const profileId=txt(cmd?.metadata?.profile_id||cmd?.entity_id);if(!profileId)return;
+ const rows=await rest(env,'attendance_biometric_profiles?id=eq.'+enc(profileId)+'&select=*&limit=1').catch(()=>[]),before=rows?.[0]||null;if(!before)return;
+ const systemActor={id:'device:'+String(cmd.device_id||''),name:'جهاز البصمة',role:'system',permissions:{}},completed=now||new Date().toISOString();
+ if(rc!==0){
+  await rest(env,'attendance_biometric_profiles?id=eq.'+enc(profileId),{method:'PATCH',body:{last_result_code:rc,updated_at:completed},prefer:'return=minimal'}).catch(()=>{});
+  await audit(env,systemActor,'attendance_biometric_delete_failed','attendance_biometric_profile',profileId,before.branch_id,before,{...before,last_result_code:rc},txt(cmd?.metadata?.reason)||'فشل حذف البصمة من الجهاز').catch(()=>{});
+  return;
+ }
+ const metadata={...(before.metadata||{}),deleted_from_device_at:completed,delete_command_id:cmd.id,delete_reason:txt(cmd?.metadata?.reason)||null};
+ const after=(await rest(env,'attendance_biometric_profiles?id=eq.'+enc(profileId),{method:'PATCH',body:{status:'disabled',last_result_code:0,last_sync_at:completed,metadata,updated_by:'device',updated_at:completed},prefer:'return=representation'}).catch(()=>[]))?.[0]||{...before,status:'disabled',metadata,last_result_code:0,last_sync_at:completed};
+ await audit(env,systemActor,'attendance_biometric_deleted','attendance_biometric_profile',profileId,before.branch_id,before,after,txt(cmd?.metadata?.reason)||'حذف بصمة من الجهاز').catch(()=>{});
+}
+async function setBiometricPreference(env,me,body){
+ if(!canManageBiometrics(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة البصمات البيومترية.'),{status:403});
+ const profile=await biometricProfileForActor(env,me,txt(body.profile_id));if(!profile)throw Object.assign(new Error('البصمة غير موجودة أو خارج نطاق الفرع.'),{status:404});
+ const preference=['primary','backup','normal'].includes(txt(body.preference))?txt(body.preference):'normal',now=new Date().toISOString();
+ if(preference==='primary'){
+  const peers=await rest(env,'attendance_biometric_profiles?attendance_employee_id=eq.'+enc(profile.attendance_employee_id)+'&biometric_type=eq.'+enc(profile.biometric_type)+'&data_environment=eq.'+enc(profile.data_environment)+'&status=eq.active&select=*').catch(()=>[]);
+  for(const peer of peers||[]){
+   if(String(peer.id)===String(profile.id))continue;
+   if(txt(peer?.metadata?.preference)==='primary')await rest(env,'attendance_biometric_profiles?id=eq.'+enc(peer.id),{method:'PATCH',body:{metadata:{...(peer.metadata||{}),preference:'normal'},updated_by:actorId(me)||actorName(me)||null,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  }
+ }
+ const metadata={...(profile.metadata||{}),preference};
+ const after=(await rest(env,'attendance_biometric_profiles?id=eq.'+enc(profile.id),{method:'PATCH',body:{metadata,updated_by:actorId(me)||actorName(me)||null,updated_at:now},prefer:'return=representation'}))?.[0]||{...profile,metadata};
+ await audit(env,me,'attendance_biometric_preference_update','attendance_biometric_profile',profile.id,profile.branch_id,profile,after,'تحديد أولوية البصمة: '+preference);
+ return {ok:true,profile:after};
+}
 function biometricSpec(body){
  const type=txt(body.biometric_type)==='face'?'face':'finger';
  if(type==='face')return {biometric_type:'face',biometric_key:'face',finger_code:null,slot_no:null};
@@ -1657,6 +1715,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='save_device')return json(await saveDevice(env,me,body));
   if(action==='request_biometric_enrollment')return json(await requestBiometricEnrollment(env,me,body));
   if(action==='import_device_biometrics')return json(await importDeviceBiometrics(env,me,body));
+  if(action==='delete_biometric_profile')return json(await requestBiometricDelete(env,me,body));
+  if(action==='set_biometric_preference')return json(await setBiometricPreference(env,me,body));
   if(action==='save_employee')return json(await saveEmployee(env,me,body));
   if(action==='save_attendance_policy')return json(await saveAttendancePolicy(env,me,body));
   if(action==='close_attendance_month')return json(await closeAttendanceMonth(env,me,body));
