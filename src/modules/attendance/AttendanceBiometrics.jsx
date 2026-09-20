@@ -1,5 +1,5 @@
 import React,{useMemo,useState} from 'react';
-import {Fingerprint,RefreshCw,ShieldCheck} from 'lucide-react';
+import {Fingerprint,RefreshCw,ShieldCheck,Star,Trash2} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Field,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
@@ -13,7 +13,7 @@ const statusTone=s=>s==='success'?'green':s==='failed'?'red':s==='queued'||s==='
 function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 
 export default function AttendanceBiometrics({state,employee,onChanged,onError,onNotice,disabled=false}){
- const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[importBusy,setImportBusy]=useState(false);
+ const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[importBusy,setImportBusy]=useState(false),[actionBusy,setActionBusy]=useState('');
  const [form,setForm]=useState({biometric_type:'finger',finger_code:'right_index',device_id:'',overwrite_existing:true,retry_count:3,reason:''});
  const devices=state.devices||[],links=state.links||[],profiles=state.biometricProfiles||[],requests=state.biometricEnrollmentRequests||[];
  const deviceMap=useMemo(()=>new Map(devices.map(d=>[String(d.id),d])),[devices]);
@@ -29,7 +29,9 @@ export default function AttendanceBiometrics({state,employee,onChanged,onError,o
  const current=useMemo(()=>profiles.filter(x=>String(x.attendance_employee_id)===String(employee?.id)),[profiles,employee?.id]);
  const recent=useMemo(()=>requests.filter(x=>String(x.attendance_employee_id)===String(employee?.id)).slice(0,20),[requests,employee?.id]);
  const selectedKey=form.biometric_type==='face'?'face':'finger:'+form.finger_code;
- const existing=current.find(x=>x.biometric_key===selectedKey&&x.status==='active')||null;
+ const activeCurrent=current.filter(x=>x.status==='active');
+ const activeByKey=new Map(activeCurrent.map(x=>[x.biometric_key,x]));
+ const existing=activeByKey.get(selectedKey)||null;
 
  function show(){
   const first=linkedDevices[0]?.device?.id||'';
@@ -64,14 +66,34 @@ export default function AttendanceBiometrics({state,employee,onChanged,onError,o
    await onChanged?.();
   }catch(err){onError?.(err.message)}finally{setImportBusy(false)}
  }
+ async function setPreference(profile,preference){
+  setActionBusy('pref-'+profile.id);onError?.('');
+  try{
+   await api.attendanceWrite({action:'set_biometric_preference',profile_id:profile.id,preference});
+   onNotice?.(preference==='primary'?'تم تعيين البصمة كأساسية.':preference==='backup'?'تم تعيين البصمة كاحتياطية.':'تم إلغاء أولوية البصمة.');
+   await onChanged?.();
+  }catch(err){onError?.(err.message)}finally{setActionBusy('')}
+ }
+ async function deleteProfile(profile){
+  const reason=window.prompt('اكتب سبب حذف هذه البصمة من الجهاز:','');
+  if(reason==null)return;if(!String(reason).trim()){onError?.('سبب حذف البصمة مطلوب.');return}
+  if(!window.confirm('سيتم حذف '+(profile.biometric_type==='face'?'بصمة الوجه':fingerLabel(profile.finger_code))+' من جهاز '+(deviceMap.get(String(profile.source_device_id))?.name||'البصمة')+'. الموظف نفسه لن يُحذف. متابعة؟'))return;
+  setActionBusy('del-'+profile.id);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'delete_biometric_profile',profile_id:profile.id,reason:String(reason).trim()});
+   onNotice?.(out?.message||'تم إرسال طلب حذف البصمة المحددة من الجهاز.');
+   await onChanged?.();
+  }catch(err){onError?.(err.message)}finally{setActionBusy('')}
+ }
 
  const profileCols=[
   {key:'kind',label:'البصمة',render:r=><div><strong>{r.biometric_type==='face'?'بصمة الوجه':fingerLabel(r.finger_code)}</strong><div className="muted-small">{r.biometric_type==='face'?'Face':('Finger · Slot '+r.slot_no)}</div></div>},
   {key:'device',label:'آخر جهاز تسجيل',render:r=>deviceMap.get(String(r.source_device_id))?.name||'—'},
   {key:'version',label:'الإصدار',render:r=><Badge>V{r.version||1}</Badge>},
-  {key:'status',label:'الحالة',render:r=><Badge tone={r.status==='active'?'green':r.status==='error'?'red':'orange'}>{r.status==='active'?'نشطة':r.status==='disabled'?'معطلة':'مشكلة'}</Badge>},
+  {key:'status',label:'الحالة',render:r=><div><Badge tone={r.status==='active'?'green':r.status==='error'?'red':'orange'}>{r.status==='active'?'نشطة':r.status==='disabled'?'محذوفة من الجهاز':'مشكلة'}</Badge>{r.metadata?.preference==='primary'&&<div className="muted-small">⭐ أساسية</div>}{r.metadata?.preference==='backup'&&<div className="muted-small">احتياطية</div>}</div>},
   {key:'source',label:'المصدر',render:r=>r.metadata?.source==='device_import'?<Badge tone="blue">مستوردة من الجهاز</Badge>:<Badge tone="green">مسجلة من النظام</Badge>},
-  {key:'date',label:'آخر تحديث',render:r=>fmt(r.last_enrolled_at||r.last_sync_at)}
+  {key:'date',label:'آخر تحديث',render:r=>fmt(r.last_enrolled_at||r.last_sync_at)},
+  {key:'actions',label:'',render:r=>r.status==='active'?<div className="finance-actions"><Button onClick={()=>setPreference(r,'primary')} disabled={actionBusy==='pref-'+r.id}><Star size={14}/> أساسية</Button><Button onClick={()=>setPreference(r,'backup')} disabled={actionBusy==='pref-'+r.id}>احتياطية</Button><Button onClick={()=>deleteProfile(r)} disabled={actionBusy==='del-'+r.id}><Trash2 size={14}/> حذف من الجهاز</Button></div>:'—'}
  ];
  const requestCols=[
   {key:'kind',label:'الطلب',render:r=>r.biometric_type==='face'?'وجه':fingerLabel(r.finger_code)},
@@ -85,7 +107,11 @@ export default function AttendanceBiometrics({state,employee,onChanged,onError,o
   <Modal open={open} onClose={()=>setOpen(false)} title={'الهوية البيومترية — '+(employee?.name||'الموظف')} wide>
    <div style={{display:'grid',gap:14}}>
     <div className="success-note"><ShieldCheck size={16}/> النظام يحفظ نوع البصمة وحالتها والإصبع والجهاز فقط. قالب الإصبع أو بيانات الوجه الخام لا يتم حفظها في قاعدة بيانات الماهر.</div>
-    <div className="card-title"><div><h3>البصمات المسجلة</h3><small>يمكن للموظف امتلاك وجه وأكثر من إصبع في نفس الوقت.</small></div><Badge>{current.length}</Badge></div>
+    <div className="card-title"><div><h3>خريطة الأصابع</h3><small>عرض سريع للأصابع العشرة وما هو مسجل فعليًا لهذا الموظف.</small></div><Badge tone={activeCurrent.length?'green':'orange'}>{activeCurrent.length} نشطة</Badge></div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:8}}>
+     {FINGERS.map(([code,label])=>{const p=activeByKey.get('finger:'+code);return <div key={code} style={{border:'1px solid var(--border)',borderRadius:12,padding:10,display:'grid',gap:5}}><strong style={{fontSize:13}}>{label}</strong>{p?<><Badge tone="green">مسجل</Badge><span className="muted-small">{p.metadata?.preference==='primary'?'أساسية':p.metadata?.preference==='backup'?'احتياطية':'نشطة'}</span></>:<Badge tone="gray">غير مسجل</Badge>}</div>})}
+    </div>
+    <div className="card-title"><div><h3>البصمات المسجلة</h3><small>يمكن تعيين بصمة أساسية واحتياطية، أو حذف إصبع محدد من الجهاز دون حذف الموظف.</small></div><Badge>{current.length}</Badge></div>
     {current.length?<Table preferenceKey="attendance-employee-biometrics" defaultPageSize={10} rows={current} columns={profileCols}/>:<div className="muted-small">لا توجد بصمة مؤكدة لهذا الموظف حتى الآن.</div>}
 
     <form onSubmit={submit} className="form-grid">
