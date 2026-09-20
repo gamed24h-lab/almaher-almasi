@@ -6,6 +6,8 @@ import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
 import {DATE_PRESET_OPTIONS,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 import AttendanceEmployees from './AttendanceEmployees.jsx';
 import AttendanceReports from './AttendanceReports.jsx';
 import AttendanceDeviceData from './AttendanceDeviceData.jsx';
@@ -24,6 +26,7 @@ export default function Attendance({initialTab=''}){
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:'',verify:'',statusCode:'',datePreset:'',fromDate:'',toDate:''},unlinked:{q:'',branch:'',device:''}});
+ const [logRules,setLogRules]=useState([]),[logRuleMode,setLogRuleMode]=useState('all');
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
 
@@ -40,6 +43,16 @@ export default function Attendance({initialTab=''}){
  const deviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
  const verifyOptions=useMemo(()=>[...new Set(logs.map(r=>String(r.verify_code??'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[logs]);
  const statusCodeOptions=useMemo(()=>[...new Set(logs.map(r=>String(r.status_code??'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[logs]);
+ const logRuleFields=useMemo(()=>[
+  {key:'employee',label:'الموظف',options:employeeOptions,get:r=>String(r.attendance_employee_id||'')},
+  {key:'branch',label:'الفرع',options:branchOptions,get:r=>String(r.branch_id||'')},
+  {key:'device',label:'الجهاز',options:deviceOptions,get:r=>String(r.device_id||'')},
+  {key:'environment',label:'البيئة',options:[{value:'training',label:'Training'},{value:'production',label:'Production'}],get:r=>String(r.data_environment||'')},
+  {key:'verify',label:'رمز التحقق',get:r=>r.verify_code},
+  {key:'statusCode',label:'رمز الحالة',get:r=>r.status_code},
+  {key:'pin',label:'PIN الجهاز',get:r=>r.device_pin},
+  {key:'occurredAt',label:'تاريخ البصمة',type:'date',get:r=>r.occurred_at}
+ ],[employeeOptions,branchOptions,deviceOptions]);
  const setListFilter=(scope,key,value)=>setListFilters(x=>({...x,[scope]:{...x[scope],[key]:value}}));
  const resetListFilter=scope=>setListFilters(x=>({...x,[scope]:Object.fromEntries(Object.keys(x[scope]||{}).map(k=>[k,'']))}));
  const applyLogDatePreset=v=>setListFilters(x=>{const current=x.logs||{};if(!v)return {...x,logs:{...current,datePreset:'',fromDate:'',toDate:''}};if(v==='custom')return {...x,logs:{...current,datePreset:v}};const r=dateRangeForPreset(v);return {...x,logs:{...current,datePreset:v,fromDate:r.from,toDate:r.to}}});
@@ -65,8 +78,9 @@ export default function Attendance({initialTab=''}){
    &&(!f.verify||String(r.verify_code??'')===String(f.verify))
    &&(!f.statusCode||String(r.status_code??'')===String(f.statusCode))
    &&isWithinDateRange(r.occurred_at,f.fromDate,f.toDate)
+   &&matchesRuleSet(r,logRules,logRuleFields,logRuleMode)
    &&matchesListQuery(f.q,r.device_pin,r.employee_name,r.serial_number,emp?.employee_code,emp?.name,usr?.name,deviceMap.get(String(r.device_id))?.name,branchMap.get(String(r.branch_id)));
- }),[logs,listFilters.logs,employeeMap,userMap,deviceMap,branchMap]);
+ }),[logs,listFilters.logs,employeeMap,userMap,deviceMap,branchMap,logRules,logRuleFields,logRuleMode]);
  const filteredUnlinked=useMemo(()=>unlinkedGroups.filter(r=>{
   const f=listFilters.unlinked||{},du=deviceUserMap.get(String(r.device_id)+'|'+String(r.device_pin));
   return (!f.branch||String(r.branch_id)===String(f.branch))
@@ -163,7 +177,7 @@ export default function Attendance({initialTab=''}){
  {key:'verify',label:'رمز التحقق',value:listFilters.logs.verify,onChange:v=>setListFilter('logs','verify',v),options:verifyOptions},
  {key:'statusCode',label:'رمز الحالة',value:listFilters.logs.statusCode,onChange:v=>setListFilter('logs','statusCode',v),options:statusCodeOptions},
  {key:'datePreset',label:'الفترة',value:listFilters.logs.datePreset,onChange:applyLogDatePreset,options:DATE_PRESET_OPTIONS},
- {key:'fromDate',label:'من تاريخ',value:listFilters.logs.fromDate,onChange:v=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:v,datePreset:v||x.logs?.toDate?'custom':''}})),render:()=> <Input type="date" value={listFilters.logs.fromDate} onChange={e=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:e.target.value,datePreset:e.target.value||x.logs?.toDate?'custom':''}}))}/>},
+ {key:'fromDate',label:'من تاريخ',value:listFilters.logs.fromDate,onChange:v=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:v,datePreset:v||x.logs?.toDate?'custom':''}})),render:()=> <Input type="date" value={listFilters.logs.fromDate} onChange={e=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:e.target.value,datePreset:e.target.value||x.logs?.toDate?'custom':''}}))} advanced={{getValue:()=>({rules:logRules,mode:logRuleMode}),onApply:v=>{setLogRules(Array.isArray(v?.rules)?v.rules:[]);setLogRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={logRuleFields} rules={logRules} mode={logRuleMode} onRulesChange={setLogRules} onModeChange={setLogRuleMode}/>}}/>},
  {key:'toDate',label:'إلى تاريخ',value:listFilters.logs.toDate,onChange:v=>setListFilters(x=>({...x,logs:{...x.logs,toDate:v,datePreset:x.logs?.fromDate||v?'custom':''}})),render:()=> <Input type="date" value={listFilters.logs.toDate} onChange={e=>setListFilters(x=>({...x,logs:{...x.logs,toDate:e.target.value,datePreset:x.logs?.fromDate||e.target.value?'custom':''}}))}/>}
  ]}/><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={filteredLogs} columns={logCols}/></></Card></>}
   {activeTab==='reports'&&state.permissions?.reports&&<AttendanceReports state={state} onError={setError} onNotice={setNotice}/>}
