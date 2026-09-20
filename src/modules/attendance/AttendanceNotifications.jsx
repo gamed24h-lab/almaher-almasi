@@ -31,7 +31,7 @@ const blankRule={id:'',branch_id:'',category:'*',severity:'warning',active:true,
 const blankDeliverySettings={whatsapp_enabled:false,email_enabled:false,auto_dispatch:false,whatsapp_provider:'notification_jobs',email_provider:''};
 
 export default function AttendanceNotifications({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks}){
- const notifications=state.notifications||[],devices=state.devices||[],branches=state.branches||[],counts=state.notificationCounts||{},rules=state.escalationRules||[],events=state.escalationEvents||[],deliveries=state.deliveries||[],deliveryCounts=state.deliveryCounts||{},deliverySettings=state.deliverySettings||blankDeliverySettings;
+ const notifications=state.notifications||[],devices=state.devices||[],branches=state.branches||[],counts=state.notificationCounts||{},rules=state.escalationRules||[],events=state.escalationEvents||[],deliveries=state.deliveries||[],deliveryCounts=state.deliveryCounts||{},deliverySettings=state.deliverySettings||blankDeliverySettings,watchdog=state.watchdog||null;
  const [status,setStatus]=useState('open'),[severity,setSeverity]=useState('all'),[deviceId,setDeviceId]=useState('all'),[query,setQuery]=useState(''),[busy,setBusy]=useState('');
  const [rulesOpen,setRulesOpen]=useState(false),[ruleForm,setRuleForm]=useState(blankRule),[ruleBusy,setRuleBusy]=useState(false),[deliveryForm,setDeliveryForm]=useState(blankDeliverySettings),[deliveryBusy,setDeliveryBusy]=useState(false);
  useEffect(()=>{setDeliveryForm({...blankDeliverySettings,...deliverySettings,email_provider:deliverySettings?.email_provider||''})},[deliverySettings?.whatsapp_enabled,deliverySettings?.email_enabled,deliverySettings?.auto_dispatch,deliverySettings?.whatsapp_provider,deliverySettings?.email_provider]);
@@ -97,6 +97,14 @@ export default function AttendanceNotifications({state,onChanged,onError,onNotic
   try{await api.attendanceWrite({action:'retry_notification_delivery',id:row.id});onNotice?.('تمت إعادة محاولة إرسال التنبيه إلى الطابور.');await onChanged?.()}
   catch(e){onError?.(e.message)}finally{setBusy('')}
  }
+ async function runWatchdog(){
+  setBusy('watchdog');onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'run_watchdog'});
+   onNotice?.('اكتمل الفحص الخلفي: '+String(out?.devices_count||0)+' أجهزة · '+String(out?.active_notifications||0)+' تنبيهات نشطة.');
+   await onChanged?.();
+  }catch(e){onError?.(e.message)}finally{setBusy('')}
+ }
 
  const cols=[
   {key:'severity',label:'الأولوية',render:r=>{const x=severityView(r.severity);return <Badge tone={x.tone}>{x.label}</Badge>}},
@@ -127,6 +135,16 @@ export default function AttendanceNotifications({state,onChanged,onError,onNotic
  ];
 
  return <>
+  <Card>
+   <div className="card-title"><div><h3><RotateCcw size={19}/> المراقب الخلفي للتنبيهات</h3><small>يفحص صحة الأجهزة والتصعيد وسجل التوصيل تلقائيًا كل 5 دقائق حتى لو لم تكن صفحة الحضور مفتوحة.</small></div><div className="finance-actions"><Badge tone={watchdog?.status==='failed'?'red':watchdog?.status==='running'?'blue':watchdog?.status==='success'?'green':'gray'}>{watchdog?.status==='failed'?'آخر فحص فشل':watchdog?.status==='running'?'الفحص يعمل الآن':watchdog?.status==='success'?'يعمل تلقائيًا':'بانتظار أول تشغيل'}</Badge>{state.permissions?.manage_policies&&<Button onClick={runWatchdog} disabled={busy==='watchdog'}><RotateCcw size={15}/>{busy==='watchdog'?' جاري الفحص...':' تشغيل الفحص الآن'}</Button>}</div></div>
+   <div className="stats-grid">
+    <Card><div className="stat-card"><div><span>آخر تشغيل</span><strong style={{fontSize:16}}>{fmt(watchdog?.completed_at||watchdog?.started_at)}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>الأجهزة المفحوصة</span><strong>{watchdog?.devices_count??'—'}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>تنبيهات نشطة</span><strong>{watchdog?.active_notifications??'—'}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>تصعيدات نشطة</span><strong>{watchdog?.escalations_count??'—'}</strong></div></div></Card>
+   </div>
+   {watchdog?.status==='failed'&&watchdog?.error_text&&<div className="training-banner" style={{marginTop:12}}>{watchdog.error_text}</div>}
+  </Card>
   <div className="stats-grid">
    <Card><div className="stat-card"><div><span>جديد</span><strong>{counts.new||0}</strong></div></div></Card>
    <Card><div className="stat-card"><div><span>تنبيهات نشطة</span><strong>{counts.active||0}</strong></div></div></Card>
