@@ -8,6 +8,8 @@ import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import {money,statusLabel,journeyLabel,tripDisplay,phoneWa} from '../../lib/format.js';
 import {has} from '../../lib/permissions.js';
 import {bookingFinanceNumbers,bookingFinancialState} from '../../lib/bookingFinance.js';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 
 const num=v=>Number(v||0);
 const lower=v=>String(v??'').trim().toLowerCase();
@@ -35,7 +37,7 @@ export default function Bookings({go,query=''}){
  useEffect(()=>{loadRefundSummary()},[]);
  const refundedFor=b=>num(refundSummary.byId?.[String(b.id||'')])||num(refundSummary.byNo?.[String(b.booking_number||'')]);
  const rows=useMemo(()=>{
-   const s=lower(q);
+   const s=q;
    const out=(data.bookings||[]).filter(b=>{
      const st=lower(b.status);
      if(status==='active'&&['cancelled','deleted','refunded'].includes(st))return false;
@@ -44,13 +46,15 @@ export default function Bookings({go,query=''}){
      if(branchId&&String(b.branch_id)!==String(branchId))return false;
      const fs=bookingFinancialState(b,refundedFor(b)).code;
      if(financial!=='all'&&fs!==financial)return false;
-     if(!s)return true;
-     const t=tripMap.get(String(b.trip_id));const ps=passengerMap.get(String(b.id))||[];
-     return [b.booking_number,b.customer_name,b.customer_phone,b.customer_identity,b.customer_nationality,t?.trip_code,t?.from_city,t?.origin,t?.to_city,t?.destination,...ps.flatMap(p=>[p.full_name,p.identity_number,p.phone,p.nationality])].some(v=>lower(v).includes(s));
+     if(!String(s||'').trim())return true;
+     const t=tripMap.get(String(b.trip_id));const rt=tripMap.get(String(b.return_trip_id));const ps=passengerMap.get(String(b.id))||[];
+     return matchesListQuery(s,b.booking_number,b.customer_name,b.customer_phone,b.customer_identity,b.customer_nationality,t?.trip_code,t?.from_city,t?.origin,t?.to_city,t?.destination,rt?.trip_code,branchMap.get(String(b.branch_id))?.name,branchMap.get(String(b.branch_id))?.branch_name,...ps.flatMap(p=>[p.full_name,p.identity_number,p.phone,p.nationality]));
    });
    out.sort((a,b)=>{if(sort==='oldest')return String(a.created_at||a.booking_number||'').localeCompare(String(b.created_at||b.booking_number||''));if(sort==='remaining')return bookingFinanceNumbers(b,refundedFor(b)).remaining-bookingFinanceNumbers(a,refundedFor(a)).remaining;return String(b.created_at||b.booking_number||'').localeCompare(String(a.created_at||a.booking_number||''))});
    return out;
  },[data.bookings,q,status,tripId,branchId,financial,sort,tripMap,passengerMap,refundSummary]);
+ const tripFilterOptions=useMemo(()=>(data.trips||[]).map(t=>({value:String(t.id),label:tripDisplay(t),searchText:[t.trip_code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date]})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.trips]);
+ const branchFilterOptions=useMemo(()=>(data.branches||[]).map(b=>({value:String(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[data.branches]);
  const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.gross+=f.gross;x.net+=f.netRaw;x.refunded+=f.refund;if(activeForFinance(b)){x.remaining+=f.remaining;x.credit+=f.credit}x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,gross:0,net:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
  const overview=useMemo(()=>{const list=(data.bookings||[]),active=list.filter(b=>!['cancelled','canceled','deleted','refunded'].includes(lower(b.status))),pending=active.filter(b=>lower(b.status)==='pending').length,confirmed=active.filter(b=>lower(b.status)==='confirmed').length,newCount=active.filter(b=>lower(b.status)==='new').length,mismatch=active.filter(b=>bookingFinancialState(b,refundedFor(b)).code==='mismatch').length,unpaid=active.filter(b=>['unpaid','partial'].includes(bookingFinancialState(b,refundedFor(b)).code)).length,remaining=active.reduce((n,b)=>n+bookingFinanceNumbers(b,refundedFor(b)).remaining,0);return {active:active.length,pending,confirmed,newCount,mismatch,unpaid,remaining}},[data.bookings,refundSummary]);
  const moduleTabs=useMemo(()=>[
@@ -81,16 +85,13 @@ export default function Bookings({go,query=''}){
    <Card><div className="card-title"><div><h3>وصول سريع</h3><small>افتح سجل الحجوزات مباشرة على الحالات الأكثر استخدامًا.</small></div></div><div className="finance-actions"><Button variant="primary" onClick={()=>{setStatus('active');setFinancial('all');setActiveTab('bookings')}}><ClipboardList size={16}/> كل الحجوزات الفعالة</Button><Button onClick={()=>{setStatus('pending');setFinancial('all');setActiveTab('bookings')}}><AlertTriangle size={16}/> قيد المراجعة</Button><Button onClick={()=>{setStatus('active');setFinancial('unpaid');setActiveTab('bookings')}}><WalletCards size={16}/> غير المسدد</Button><Button onClick={()=>{setStatus('active');setFinancial('mismatch');setActiveTab('bookings')}}><AlertTriangle size={16}/> عدم تطابق مالي</Button></div></Card>
   </>}
   {activeTab==='bookings'&&<Card>
-   <div className="booking-filters">
-    <div className="filterbar"><Search size={18}/><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="رقم الحجز، العميل، الجوال، الهوية، المسافر، الرحلة..."/></div>
-    <Select value={status} onChange={e=>setStatus(e.target.value)}><option value="active">الحجوزات الفعالة</option><option value="all">كل الحالات</option><option value="new">جديد</option><option value="confirmed">مؤكد</option><option value="pending">قيد المراجعة</option><option value="cancelled">ملغي</option></Select>
-    <Select value={financial} onChange={e=>setFinancial(e.target.value)}><option value="all">كل الحالات المالية</option><option value="paid">مسدد</option><option value="partial">مدفوع جزئيًا</option><option value="unpaid">غير مسدد</option><option value="credit">رصيد للعميل</option><option value="refunded">مسترد بالكامل</option><option value="no_value">بدون قيمة</option><option value="mismatch">عدم تطابق مالي</option></Select>
-    <Select value={tripId} onChange={e=>setTripId(e.target.value)}><option value="">كل الرحلات</option>{(data.trips||[]).map(t=><option key={t.id} value={t.id}>{tripDisplay(t)}</option>)}</Select>
-    <Select value={branchId} onChange={e=>setBranchId(e.target.value)}><option value="">كل الفروع المتاحة</option>{(data.branches||[]).map(b=><option key={b.id} value={b.id}>{b.name||b.branch_name}</option>)}</Select>
-    <Select value={sort} onChange={e=>setSort(e.target.value)}><option value="newest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option><option value="remaining">الأعلى متبقيًا</option></Select>
-    <Button onClick={clear}><FilterX size={16}/> مسح الفلاتر</Button>
-    <SavedViews storageKey="bookings-register" current={{q,status,tripId,branchId,financial,sort}} onApply={applySavedView}/>
-   </div>
+   <SmartListFilters storageKey="bookings-register-smart-filters" search={q} onSearchChange={setQ} searchPlaceholder="رقم الحجز، العميل، الجوال، الهوية، المسافر، الرحلة..." totalCount={(data.bookings||[]).length} resultCount={rows.length} onReset={clear} filters={[
+    {key:'status',label:'الحالة',value:status,onChange:setStatus,options:[{value:'active',label:'الحجوزات الفعالة'},{value:'all',label:'كل الحالات'},{value:'new',label:'جديد'},{value:'confirmed',label:'مؤكد'},{value:'pending',label:'قيد المراجعة'},{value:'cancelled',label:'ملغي'}]},
+    {key:'financial',label:'الحالة المالية',value:financial,onChange:setFinancial,options:[{value:'all',label:'كل الحالات المالية'},{value:'paid',label:'مسدد'},{value:'partial',label:'مدفوع جزئيًا'},{value:'unpaid',label:'غير مسدد'},{value:'credit',label:'رصيد للعميل'},{value:'refunded',label:'مسترد بالكامل'},{value:'no_value',label:'بدون قيمة'},{value:'mismatch',label:'عدم تطابق مالي'}]},
+    {key:'tripId',label:'الرحلة',value:tripId,onChange:setTripId,options:tripFilterOptions},
+    {key:'branchId',label:'الفرع',value:branchId,onChange:setBranchId,options:branchFilterOptions},
+    {key:'sort',label:'الترتيب',value:sort,onChange:setSort,options:[{value:'newest',label:'الأحدث أولًا'},{value:'oldest',label:'الأقدم أولًا'},{value:'remaining',label:'الأعلى متبقيًا'}]}
+   ]}/>
    <div className="table-summary"><span>الحجوزات: <b>{rows.length}</b></span><span><UsersRound size={14}/> المسافرون: <b>{totals.passengers}</b></span><span>الإجمالي: <b>{money(totals.total)}</b></span><span>التحصيل التاريخي: <b>{money(totals.gross)}</b></span><span>المحصل الصافي: <b>{money(totals.net)}</b></span><span>المسترد: <b>{money(totals.refunded)}</b></span><span>المتبقي: <b>{money(totals.remaining)}</b></span>{totals.credit>0&&<span>رصيد العملاء: <b>{money(totals.credit)}</b></span>}</div>
    <Table preferenceKey="bookings-register" defaultPageSize={25} rows={rows} onRow={r=>go('/bookings/'+r.booking_number)} columns={[
     {key:'booking_number',label:'رقم الحجز',render:r=><strong>{r.booking_number}</strong>},
