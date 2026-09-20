@@ -1,9 +1,10 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {Plus,Search,RefreshCw,FilterX,Ticket,RotateCcw,MessageCircle,Pencil,UsersRound,Clock3,XCircle} from 'lucide-react';
+import {Plus,Search,RefreshCw,FilterX,Ticket,RotateCcw,MessageCircle,Pencil,UsersRound,Clock3,XCircle,LayoutDashboard,ClipboardList,AlertTriangle,WalletCards} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
-import {Card,PageHeader,Button,Table,Input,Badge,Select,Modal} from '../../components/UI.jsx';
+import {Card,Button,Table,Input,Badge,Select,Modal} from '../../components/UI.jsx';
+import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import {money,statusLabel,journeyLabel,tripDisplay,phoneWa} from '../../lib/format.js';
 import {has} from '../../lib/permissions.js';
 import {bookingFinanceNumbers,bookingFinancialState} from '../../lib/bookingFinance.js';
@@ -51,6 +52,13 @@ export default function Bookings({go,query=''}){
    return out;
  },[data.bookings,q,status,tripId,branchId,financial,sort,tripMap,passengerMap,refundSummary]);
  const totals=useMemo(()=>rows.reduce((x,b)=>{const f=bookingFinanceNumbers(b,refundedFor(b));x.total+=f.total;x.gross+=f.gross;x.net+=f.netRaw;x.refunded+=f.refund;if(activeForFinance(b)){x.remaining+=f.remaining;x.credit+=f.credit}x.passengers+=(passengerMap.get(String(b.id))||[]).filter(p=>lower(p.status)!=='cancelled').length;return x},{total:0,gross:0,net:0,refunded:0,remaining:0,credit:0,passengers:0}),[rows,passengerMap,refundSummary]);
+ const overview=useMemo(()=>{const list=(data.bookings||[]),active=list.filter(b=>!['cancelled','canceled','deleted','refunded'].includes(lower(b.status))),pending=active.filter(b=>lower(b.status)==='pending').length,confirmed=active.filter(b=>lower(b.status)==='confirmed').length,newCount=active.filter(b=>lower(b.status)==='new').length,mismatch=active.filter(b=>bookingFinancialState(b,refundedFor(b)).code==='mismatch').length,unpaid=active.filter(b=>['unpaid','partial'].includes(bookingFinancialState(b,refundedFor(b)).code)).length,remaining=active.reduce((n,b)=>n+bookingFinanceNumbers(b,refundedFor(b)).remaining,0);return {active:active.length,pending,confirmed,newCount,mismatch,unpaid,remaining}},[data.bookings,refundSummary]);
+ const moduleTabs=useMemo(()=>[
+  {id:'overview',label:'نظرة عامة',icon:LayoutDashboard},
+  {id:'bookings',label:'سجل الحجوزات',icon:ClipboardList,badge:rows.length}
+ ],[rows.length]);
+ const [activeTab,setActiveTab]=useModuleTab('almaher:module:bookings',moduleTabs,query?'bookings':'overview');
+ useEffect(()=>{if(query)setActiveTab('bookings')},[query]);
  function clear(){setQ('');setStatus('active');setTripId('');setBranchId('');setFinancial('all');setSort('newest')}
  async function refreshAll(){await refresh();await loadRefundSummary()}
  function wa(b,e){e.stopPropagation();const href=`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(`شركة الماهر الماسي\nرقم الحجز: ${b.booking_number}\nالعميل: ${b.customer_name||''}`)}`;window.open(href,'_blank')}
@@ -60,8 +68,18 @@ export default function Bookings({go,query=''}){
  function openStatus(b,e){e?.stopPropagation();setStatusTarget(b);setStatusValue(lower(b.status)==='new'?'confirmed':lower(b.status)==='confirmed'?'new':'confirmed');setStatusError('')}
  async function confirmStatus(){if(!statusTarget)return;setStatusBusy(true);setStatusError('');try{await api.admin({action:'set_booking_status',booking_number:statusTarget.booking_number,status:statusValue});setStatusTarget(null);await refreshAll()}catch(x){setStatusError(x.message)}finally{setStatusBusy(false)}}
  return <>
-  <PageHeader title="الحجوزات" subtitle="سجل موحد للحجوزات والمسافرين والتحصيل والتذكرة والاسترداد" actions={<><Button onClick={refreshAll}><RefreshCw size={16}/> تحديث</Button><Button variant="primary" onClick={()=>go('/bookings/new')}><Plus size={16}/> حجز جديد</Button></>}/>
-  <Card>
+  <ModuleShell title="الحجوزات" subtitle="إدارة الحجز والمسافرين والتحصيل والتذكرة والاسترداد من مساحة عمل منظمة" icon={ClipboardList} tabs={moduleTabs} activeTab={activeTab} onTabChange={setActiveTab} actions={<><Button onClick={refreshAll}><RefreshCw size={16}/> تحديث</Button><Button variant="primary" onClick={()=>go('/bookings/new')}><Plus size={16}/> حجز جديد</Button></>} breadcrumbs={[{label:'الحجوزات والمبيعات'},{label:moduleTabs.find(x=>x.id===activeTab)?.label||'نظرة عامة'}]}/>
+  {activeTab==='overview'&&<>
+   <div className="stats-grid">
+    <Card><div className="stat-card"><div><span>الحجوزات الفعالة</span><strong>{overview.active}</strong><small>{overview.confirmed} مؤكد</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>جديدة</span><strong>{overview.newCount}</strong><small>تحتاج متابعة تشغيلية</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>قيد المراجعة</span><strong>{overview.pending}</strong><small>حجوزات Pending</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>غير مسدد / جزئي</span><strong>{overview.unpaid}</strong><small>{money(overview.remaining)} متبقي</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>عدم تطابق مالي</span><strong>{overview.mismatch}</strong><small>يحتاج مراجعة</small></div></div></Card>
+   </div>
+   <Card><div className="card-title"><div><h3>وصول سريع</h3><small>افتح سجل الحجوزات مباشرة على الحالات الأكثر استخدامًا.</small></div></div><div className="finance-actions"><Button variant="primary" onClick={()=>{setStatus('active');setFinancial('all');setActiveTab('bookings')}}><ClipboardList size={16}/> كل الحجوزات الفعالة</Button><Button onClick={()=>{setStatus('pending');setFinancial('all');setActiveTab('bookings')}}><AlertTriangle size={16}/> قيد المراجعة</Button><Button onClick={()=>{setStatus('active');setFinancial('unpaid');setActiveTab('bookings')}}><WalletCards size={16}/> غير المسدد</Button><Button onClick={()=>{setStatus('active');setFinancial('mismatch');setActiveTab('bookings')}}><AlertTriangle size={16}/> عدم تطابق مالي</Button></div></Card>
+  </>}
+  {activeTab==='bookings'&&<Card>
    <div className="booking-filters">
     <div className="filterbar"><Search size={18}/><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="رقم الحجز، العميل، الجوال، الهوية، المسافر، الرحلة..."/></div>
     <Select value={status} onChange={e=>setStatus(e.target.value)}><option value="active">الحجوزات الفعالة</option><option value="all">كل الحالات</option><option value="new">جديد</option><option value="confirmed">مؤكد</option><option value="pending">قيد المراجعة</option><option value="cancelled">ملغي</option></Select>
@@ -83,7 +101,7 @@ export default function Bookings({go,query=''}){
     {key:'status',label:'الحالة',render:r=><Badge tone={r.status==='cancelled'?'red':r.status==='pending'?'orange':'green'}>{statusLabel(r.status)}</Badge>},
     {key:'actions',label:'إجراءات',render:r=><div className="row-actions">{canEdit&&<Button title="تعديل" onClick={e=>{e.stopPropagation();go('/bookings/'+r.booking_number)}}><Pencil size={14}/></Button>}{canEdit&&!['cancelled','canceled','refunded'].includes(lower(r.status))&&<Button title="تغيير حالة الحجز" onClick={e=>openStatus(r,e)}><RefreshCw size={14}/></Button>}{canActivity&&<Button title="الخط الزمني / سجل النشاط" onClick={e=>openTimeline(r,e)}><Clock3 size={14}/></Button>}{canPrint&&<Button title="التذكرة" onClick={e=>{e.stopPropagation();go('/ticket/'+r.booking_number)}}><Ticket size={14}/></Button>}<Button title="واتساب" onClick={e=>wa(r,e)}><MessageCircle size={14}/></Button>{canRefund&&r.status!=='cancelled'&&<Button title="استرداد" onClick={e=>{e.stopPropagation();go('/refunds?booking='+r.booking_number)}}><RotateCcw size={14}/></Button>}{canCancel&&!['cancelled','canceled'].includes(lower(r.status))&&<Button title="إلغاء الحجز" onClick={e=>openCancel(r,e)}><XCircle size={14}/></Button>}</div>}
    ]}/>
-  </Card>
+  </Card>}
   <Modal open={!!statusTarget} onClose={()=>{if(!statusBusy){setStatusTarget(null);setStatusError('')}}} title={`تغيير حالة الحجز ${statusTarget?.booking_number||''}`}>
    {statusError&&<div className="error-box">{statusError}</div>}
    <div style={{display:'grid',gap:12}}><div className="training-banner" style={{background:'#f8fafc',color:'#334155',borderColor:'#dbe3ec'}}>الحالة التشغيلية مستقلة عن الحالة المالية. الإلغاء والاسترداد يظلان من مساراتهما المخصصة.</div><label>الحالة الجديدة<Select value={statusValue} onChange={e=>setStatusValue(e.target.value)}><option value="confirmed">مؤكد</option><option value="new">جديد</option></Select></label><div className="row-actions"><Button onClick={()=>setStatusTarget(null)} disabled={statusBusy}>رجوع</Button><Button variant="primary" onClick={confirmStatus} disabled={statusBusy}>{statusBusy?'جاري الحفظ...':'حفظ الحالة'}</Button></div></div>
