@@ -66,7 +66,7 @@ async function getCredit(request,env,ctx,id){
  const snapshot=await rpc(env,'agent_credit_snapshot',{p_agent_id:agent.id,p_environment:mode});
  const [promises,credits]=await Promise.all([
   rows(env,'agent_collection_promises','agent_id=eq.'+enc(agent.id)+'&data_environment=eq.'+enc(mode)+'&select=*&order=due_date.asc,created_at.desc&limit=1000').catch(()=>[]),
-  rows(env,'agent_ledger_entries','agent_id=eq.'+enc(agent.id)+'&data_environment=eq.'+enc(mode)+'&direction=eq.credit&select=id,reference_no,entry_type,amount,created_at,reason&order=created_at.desc&limit=300').catch(()=>[])
+  rows(env,'agent_ledger_entries','agent_id=eq.'+enc(agent.id)+'&data_environment=eq.'+enc(mode)+'&direction=eq.credit&entry_type=eq.payment&select=id,reference_no,entry_type,amount,created_at,reason&order=created_at.desc&limit=300').catch(()=>[])
  ]);
  const promiseIds=promises.map(x=>x.id);
  let events=[];
@@ -77,7 +77,7 @@ async function getCredit(request,env,ctx,id){
  }
  const eventMap=new Map();
  for(const e of events){const k=String(e.promise_id),a=eventMap.get(k)||[];a.push(e);eventMap.set(k,a)}
- const today=new Date().toISOString().slice(0,10);
+ const today=new Date(Date.now()+3*60*60*1000).toISOString().slice(0,10);
  const open=promises.filter(x=>x.status==='open');
  const overdue=open.filter(x=>String(x.due_date)<today);
  return json({
