@@ -1,0 +1,7 @@
+.rule-filter-builder{margin:12px 0;padding:12px;border:1px solid var(--border,#dbe3ec);border-radius:14px;background:var(--card,#fff)}
+.rule-filter-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.rule-filter-head>div:first-child{display:flex;flex-direction:column;gap:2px}.rule-filter-head small{color:var(--muted,#6b7280)}
+.rule-filter-row{display:grid;grid-template-columns:32px minmax(150px,1.3fr) minmax(140px,1fr) minmax(150px,1.2fr) auto;gap:8px;align-items:center;margin:8px 0}
+.rule-filter-index{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#f1f5f9;font-weight:700}
+.rule-filter-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+@media(max-width:760px){.rule-filter-head{align-items:stretch;flex-direction:column}.rule-filter-row{grid-template-columns:30px 1fr auto}.rule-filter-row>*:nth-child(3),.rule-filter-row>*:nth-child(4){grid-column:2/4}.rule-filter-row>*:last-child{grid-column:3;grid-row:1}.rule-filter-index{grid-row:1}}

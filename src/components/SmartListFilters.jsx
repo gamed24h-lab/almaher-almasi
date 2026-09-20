@@ -11,11 +11,12 @@ export default function SmartListFilters({
  filters=[],
  totalCount=0,
  resultCount=0,
- onReset
+ onReset,
+ advanced=null
 }){
  const [open,setOpen]=useState(false);
  const activeFilters=useMemo(()=>filters.filter(f=>String(f.value??'')!==''),[filters]);
- const current=useMemo(()=>({search:String(search||''),values:Object.fromEntries(filters.map(f=>[f.key,String(f.value??'')]))}),[search,filters]);
+ const current=useMemo(()=>({search:String(search||''),values:Object.fromEntries(filters.map(f=>[f.key,String(f.value??'')])),advanced:advanced?.getValue?.()??null}),[search,filters,advanced]);
  function clearAll(){
   if(onReset)return onReset();
   onSearchChange?.('');
@@ -24,6 +25,7 @@ export default function SmartListFilters({
  function applyView(view){
   onSearchChange?.(String(view?.search||''));
   filters.forEach(f=>f.onChange?.(String(view?.values?.[f.key]??'')));
+  if(view?.advanced!=null)advanced?.onApply?.(view.advanced);
  }
  function optionLabel(f){
   const item=(f.options||[]).find(x=>String(x.value)===String(f.value));
@@ -38,6 +40,7 @@ export default function SmartListFilters({
    <div className="smart-list-count">عرض <strong>{Number(resultCount||0).toLocaleString('ar-SA')}</strong> من أصل <strong>{Number(totalCount||0).toLocaleString('ar-SA')}</strong> سجل</div>
   </div>
   {!!filters.length&&<div className="smart-list-filter-grid">{filters.map(f=><div className="smart-list-filter" key={f.key}><span>{f.label}</span>{f.render?f.render():<SearchSelect value={f.value??''} onChange={e=>f.onChange?.(e.target.value)} placeholder={f.placeholder||(`كل ${f.label}`)} options={[{value:'',label:f.allLabel||(`الكل — ${f.label}`)},...(f.options||[])]}/>}</div>)}</div>}
+  {advanced?.render?.()}
   {changed&&<div className="smart-list-active">
    {String(search||'').trim()&&<button type="button" className="smart-filter-chip" onClick={()=>onSearchChange?.('')}><span>بحث: {search}</span><X size={13}/></button>}
    {activeFilters.map(f=><button type="button" className="smart-filter-chip" key={f.key} onClick={()=>f.onChange?.('')}><span>{f.label}: {optionLabel(f)}</span><X size={13}/></button>)}
