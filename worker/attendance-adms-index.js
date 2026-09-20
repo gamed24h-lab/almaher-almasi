@@ -90,6 +90,60 @@ async function recordDeviceHealthEvent(env,event){
  await rest(env,'attendance_device_health_events?on_conflict=event_key',{method:'POST',body:{event_key:event.event_key,device_id:event.device_id,branch_id:event.branch_id||null,event_type:event.event_type||'event',severity:event.severity||'warning',status:event.status||'closed',started_at:event.started_at||new Date().toISOString(),ended_at:event.ended_at||null,duration_seconds:event.duration_seconds??null,command_id:event.command_id||null,result_code:event.result_code??null,summary:txt(event.summary)||null,metadata:event.metadata&&typeof event.metadata==='object'?event.metadata:{}},prefer:'resolution=ignore-duplicates,return=minimal'}).catch(()=>{});
  return true;
 }
+async function reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts){
+ const rows=Array.isArray(devices)?devices:[],ids=rows.map(x=>x.id).filter(Boolean);
+ if(!ids.length)return [];
+ const now=new Date().toISOString(),deviceMap=new Map(rows.map(x=>[String(x.id),x])),desired=[];
+ const add=(x)=>{if(x?.notification_key)desired.push(x)};
+ for(const h of deviceHealth||[]){
+  const d=deviceMap.get(String(h.device_id));if(!d)continue;
+  if(h.connection==='offline')add({notification_key:'device_offline:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'device_health',severity:'critical',title:'جهاز البصمة غير متصل — '+d.name,message:'لم يصل اتصال حديث من الجهاز خلال آخر 30 دقيقة.',metadata:{type:'offline',health_score:h.score,last_seen_at:h.last_seen_at}});
+  if(Number(h.stuck_commands)>0)add({notification_key:'stuck_commands:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'device_health',severity:'critical',title:'أوامر معلقة على جهاز البصمة — '+d.name,message:String(h.stuck_commands)+' أمر/أوامر معلقة لأكثر من 15 دقيقة.',metadata:{type:'stuck_commands',count:Number(h.stuck_commands),health_score:h.score}});
+  if(Number(h.unlinked_count)>0)add({notification_key:'unlinked_movements:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'linking',severity:'warning',title:'حركات بصمة تحتاج ربط — '+d.name,message:String(h.unlinked_count)+(h.unlinked_truncated?'+':'')+' حركة تحتاج ربط موظف.',metadata:{type:'unlinked_movements',count:Number(h.unlinked_count),truncated:!!h.unlinked_truncated}});
+ }
+ for(const p of devicePredictiveAlerts||[]){
+  const d=deviceMap.get(String(p.device_id));if(!d)continue;
+  add({notification_key:'predictive:'+d.id+':'+txt(p.primary_type||'watch'),device_id:d.id,branch_id:d.branch_id||null,category:'predictive',severity:p.level==='high'?'critical':p.level==='medium'?'warning':'info',title:'تنبيه استباقي — '+d.name,message:(p.signals||[]).slice(0,3).join(' '),metadata:{type:p.primary_type||'watch',risk_score:p.risk_score,level:p.level,confidence:p.confidence,signals:p.signals||[],recommended_action:p.recommended_action||null,recommended_label:p.recommended_label||null,metrics:p.metrics||{}}});
+ }
+ const filter='&device_id=in.('+ids.map(enc).join(',')+')',existing=await rest(env,'attendance_notifications?select=*'+filter+'&order=last_seen_at.desc&limit=1000').catch(()=>[]);
+ const existingMap=new Map((existing||[]).map(x=>[txt(x.notification_key),x])),desiredKeys=new Set(desired.map(x=>x.notification_key));
+ for(const item of desired){
+  const old=existingMap.get(item.notification_key),payload={branch_id:item.branch_id,device_id:item.device_id,category:item.category,severity:item.severity,title:item.title,message:item.message||null,active:true,last_seen_at:now,metadata:item.metadata||{},updated_at:now};
+  if(!old){
+   await rest(env,'attendance_notifications',{method:'POST',body:{...payload,notification_key:item.notification_key,status:'new',first_seen_at:now,created_at:now},prefer:'return=minimal'}).catch(()=>{});
+  }else if(old.active===false){
+   await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:{...payload,status:'new',first_seen_at:now,seen_at:null,seen_by:null,resolved_at:null,resolved_by:null,resolved_reason:null},prefer:'return=minimal'}).catch(()=>{});
+  }else{
+   await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:payload,prefer:'return=minimal'}).catch(()=>{});
+  }
+ }
+ for(const old of existing||[]){
+  if(old.active!==true||desiredKeys.has(txt(old.notification_key)))continue;
+  await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:{active:false,status:old.status==='resolved'?'resolved':'resolved',resolved_at:old.resolved_at||now,resolved_by:old.resolved_by||'system',resolved_reason:old.resolved_reason||'زالت الحالة تلقائيًا',updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ }
+ return await rest(env,'attendance_notifications?select=*'+filter+'&order=active.desc,last_seen_at.desc&limit=500').catch(()=>[]);
+}
+async function updateAttendanceNotification(env,me,body){
+ const id=txt(body.id),op=txt(body.notification_action);if(!id)throw Object.assign(new Error('التنبيه غير محدد.'),{status:400});
+ const rows=await rest(env,'attendance_notifications?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('التنبيه غير موجود.'),{status:404});
+ if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('التنبيه خارج نطاق الفرع.'),{status:403});
+ const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;let patch;
+ if(op==='seen')patch={status:before.status==='resolved'?'resolved':'seen',seen_at:before.seen_at||now,seen_by:before.seen_by||who,updated_at:now};
+ else if(op==='resolved'){
+  if(!canManageDevices(me)&&!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لمعالجة هذا التنبيه.'),{status:403});
+  patch={status:'resolved',resolved_at:now,resolved_by:who,resolved_reason:txt(body.reason)||'تمت المعالجة يدويًا',updated_at:now};
+ }else throw Object.assign(new Error('إجراء التنبيه غير صحيح.'),{status:400});
+ const after=(await rest(env,'attendance_notifications?id=eq.'+enc(id),{method:'PATCH',body:patch,prefer:'return=representation'}))?.[0]||null;
+ await audit(env,me,op==='seen'?'attendance_notification_seen':'attendance_notification_resolved','attendance_notification',id,before.branch_id,before,after,txt(body.reason)||'إدارة تنبيه الحضور');
+ return {ok:true,notification:after};
+}
+async function markAttendanceNotificationsSeen(env,me,body){
+ const branchId=requestedBranch(me,body),filter=branchId?'&branch_id=eq.'+enc(branchId):'',now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;
+ const rows=await rest(env,'attendance_notifications?active=eq.true&status=eq.new&select=id'+filter+'&limit=500').catch(()=>[]);
+ for(const row of rows||[])await rest(env,'attendance_notifications?id=eq.'+enc(row.id),{method:'PATCH',body:{status:'seen',seen_at:now,seen_by:who,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ await audit(env,me,'attendance_notifications_seen_bulk','attendance_notification','bulk',branchId||null,null,{count:(rows||[]).length},'تحديد تنبيهات الحضور كمشاهدة');
+ return {ok:true,count:(rows||[]).length};
+}
 function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
  const seen=device?.last_command_poll_at||device?.last_seen_at||null,seenAge=ageSeconds(seen),lastLog=latestLog?.occurred_at||null,lastReceived=latestLog?.received_at||null,logAge=ageSeconds(lastLog);
  const recent=(deviceCommands||[]).slice().sort((x,y)=>Number(y.id||0)-Number(x.id||0)),latestCommand=recent[0]||null,pendingRows=recent.filter(x=>x.status==='queued'||x.status==='sent'),pending=pendingRows.length,stuck=pendingRows.filter(x=>(ageSeconds(x.sent_at||x.updated_at||x.created_at)??0)>15*60).length;
@@ -879,7 +933,9 @@ async function attendanceState(env,me,url){
   devicePredictiveAlerts.push({device_id:device.id,risk_score:risk,level,tone,label,confidence,primary_type:primary,signals,recommended_action:recommendedAction,recommended_label:recommendedLabel,metrics:{failures_24h:fail24,failures_7d:fail7,failures_previous_7d:failPrev7,outages_7d:outage7,outages_previous_7d:outagePrev7,downtime_7d_seconds:downtime7,availability_30d:hist.availability_pct??null,last_log_age_seconds:logAge},evaluated_at:new Date(nowMs).toISOString()});
  }
  devicePredictiveAlerts.sort((x,y)=>Number(y.risk_score)-Number(x.risk_score)||String(x.device_id).localeCompare(String(y.device_id)));
- return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const notifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0};
+ for(const n of notifications||[]){if(n.status==='new')notificationCounts.new+=1;else if(n.status==='seen')notificationCounts.seen+=1;else if(n.status==='resolved')notificationCounts.resolved+=1;if(n.active){notificationCounts.active+=1;if(n.severity==='critical')notificationCounts.critical+=1}}
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -985,6 +1041,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
+  if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
+  if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
