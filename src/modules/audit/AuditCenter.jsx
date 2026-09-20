@@ -76,11 +76,13 @@ export default function AuditCenter({go,initialTab=''}) {
  const canMerge=elevated(user)||has(user,'editBookings')||has(user,'editPassenger');
  const canReviewAttendance=elevated(user)||has(user,'attendance_view')||has(user,'attendance_manage_employees');
  const canMergeAttendance=elevated(user)||has(user,'attendance_manage_employees');
+ const canReviewRegistry=canAudit;
  const [auditRows,setAuditRows]=useState([]),[auditSummary,setAuditSummary]=useState({}),[auditScope,setAuditScope]=useState(''),[auditBusy,setAuditBusy]=useState(false);
  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[q,setQ]=useState(''),[category,setCategory]=useState('all'),[auditMode,setAuditMode]=useState('changes');
  const [selectedAudit,setSelectedAudit]=useState(null);
  const [mergeOpen,setMergeOpen]=useState(false),[mergeGroup,setMergeGroup]=useState(null),[canonicalId,setCanonicalId]=useState(''),[duplicateId,setDuplicateId]=useState(''),[preview,setPreview]=useState(null),[previewBusy,setPreviewBusy]=useState(false),[mergeBusy,setMergeBusy]=useState(false),[mergeReason,setMergeReason]=useState(''),[confirmNo,setConfirmNo]=useState('');
  const [employeeGroups,setEmployeeGroups]=useState([]),[employeeBusy,setEmployeeBusy]=useState(false);
+ const [registryGroups,setRegistryGroups]=useState([]),[registrySummary,setRegistrySummary]=useState({}),[registryBusy,setRegistryBusy]=useState(false);
  const [employeeMergeOpen,setEmployeeMergeOpen]=useState(false),[employeeGroup,setEmployeeGroup]=useState(null),[employeeCanonicalId,setEmployeeCanonicalId]=useState(''),[employeeDuplicateId,setEmployeeDuplicateId]=useState(''),[employeePreview,setEmployeePreview]=useState(null),[employeePreviewBusy,setEmployeePreviewBusy]=useState(false),[employeeMergeBusy,setEmployeeMergeBusy]=useState(false),[employeeReason,setEmployeeReason]=useState(''),[employeeConfirm,setEmployeeConfirm]=useState('');
 
  const bookingMap=useMemo(()=>new Map((data.bookings||[]).map(b=>[String(b.id),b])),[data.bookings]);
@@ -107,11 +109,18 @@ export default function AuditCenter({go,initialTab=''}) {
   catch(e){setError(e.message)}finally{setEmployeeBusy(false)}
  }
  useEffect(()=>{if(canReviewAttendance)loadEmployeeDuplicates()},[]);
+ async function loadRegistryDuplicates(){
+  if(!canReviewRegistry)return;
+  setRegistryBusy(true);setError('');
+  try{const x=await api.admin({action:'duplicate_review_registry'});setRegistryGroups(x.groups||[]);setRegistrySummary(x.summary||{})}
+  catch(e){setError(e.message)}finally{setRegistryBusy(false)}
+ }
+ useEffect(()=>{if(canReviewRegistry)loadRegistryDuplicates()},[]);
 
  const tabs=useMemo(()=>[
   ...(canAudit?[{id:'activity',label:'سجل النشاط',icon:History,badge:auditRows.length||null}]:[]),
-  ...((canReviewDuplicates||canReviewAttendance)?[{id:'duplicates',label:'مراجعة التكرارات',icon:GitMerge,badge:(duplicateGroups.length+employeeGroups.length)||null}]:[])
- ],[canAudit,canReviewDuplicates,canReviewAttendance,auditRows.length,duplicateGroups.length,employeeGroups.length]);
+  ...((canReviewDuplicates||canReviewAttendance||canReviewRegistry)?[{id:'duplicates',label:'مراجعة التكرارات',icon:GitMerge,badge:(duplicateGroups.length+employeeGroups.length+registryGroups.length)||null}]:[])
+ ],[canAudit,canReviewDuplicates,canReviewAttendance,canReviewRegistry,auditRows.length,duplicateGroups.length,employeeGroups.length,registryGroups.length]);
  const [tab,setTab]=useModuleTab('almaher:module:audit-center',tabs,initialTab||(canAudit?'activity':'duplicates'));
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setTab(initialTab)},[initialTab,tabs.length]);
 
@@ -214,6 +223,14 @@ export default function AuditCenter({go,initialTab=''}) {
   {key:'branch',label:'الفرع',render:r=>r.branch_id?(branchMap.get(String(r.branch_id))?.name||'—'):'—'},
   {key:'action',label:'',render:r=><Button variant="primary" onClick={()=>openEmployeeMerge(r)}><GitMerge size={14}/> معاينة الدمج</Button>}
  ];
+ const registryCols=[
+  {key:'type',label:'النوع',render:r=><Badge>{r.label}</Badge>},
+  {key:'match',label:'سبب الاشتباه',render:r=><Badge tone="orange">{r.match}</Badge>},
+  {key:'records',label:'السجلات',render:r=><div><strong>{r.records.length}</strong><div className="muted-small">{r.records.map(x=>x.name||x.full_name||x.company_name||x.agent_code||x.username||x.id).join(' · ')}</div></div>},
+  {key:'mode',label:'سياسة الدمج',render:r=><Badge tone="red">مراجعة فقط</Badge>},
+  {key:'warning',label:'سبب الإيقاف',render:r=>r.warning||'—'},
+  {key:'action',label:'',render:r=>r.entity_type==='staff_users'?<Button onClick={()=>go?.('/staff')}>فتح الموظفين</Button>:r.entity_type==='agents'?<Button onClick={()=>go?.('/partners')}>فتح الوكلاء</Button>:r.entity_type==='customer_profiles'?<Button onClick={()=>go?.('/crm')}>فتح CRM</Button>:'—'}
+ ];
 
  const selectedChanges=selectedAudit?normalizeAuditChanges(selectedAudit.metadata?.changes||[],{tripMap,branchMap}):[];
  const selectedMeta=selectedAudit?.metadata||{};
@@ -221,7 +238,7 @@ export default function AuditCenter({go,initialTab=''}) {
  const refTotal=obj=>Object.values(obj||{}).reduce((n,v)=>{const x=refValue(v);return n+(Number.isFinite(x)?x:0)},0);
 
  return <>
-  <ModuleShell title="Timeline / Audit Center" subtitle="من أنشأ السجل، من عدله، متى تغيّر، قبل/بعد، ودمج آمن للتكرارات بدل الحذف" icon={Activity} tabs={tabs} activeTab={tab} onTabChange={setTab} actions={<>{tab==='activity'&&canAudit&&<Button onClick={loadAudit} disabled={auditBusy}><RefreshCw size={16}/> تحديث السجل</Button>}{tab==='duplicates'&&<Button onClick={async()=>{await refresh();if(canReviewAttendance)await loadEmployeeDuplicates()}} disabled={employeeBusy}><RefreshCw size={16}/> تحديث التكرارات</Button>}</>} breadcrumbs={[{label:'الإدارة والمتابعة'},{label:'Audit Center'}]}/>
+  <ModuleShell title="Timeline / Audit Center" subtitle="من أنشأ السجل، من عدله، متى تغيّر، قبل/بعد، ودمج آمن للتكرارات بدل الحذف" icon={Activity} tabs={tabs} activeTab={tab} onTabChange={setTab} actions={<>{tab==='activity'&&canAudit&&<Button onClick={loadAudit} disabled={auditBusy}><RefreshCw size={16}/> تحديث السجل</Button>}{tab==='duplicates'&&<Button onClick={async()=>{await refresh();await Promise.all([canReviewAttendance?loadEmployeeDuplicates():Promise.resolve(),canReviewRegistry?loadRegistryDuplicates():Promise.resolve()])}} disabled={employeeBusy||registryBusy}><RefreshCw size={16}/> تحديث التكرارات</Button>}</>} breadcrumbs={[{label:'الإدارة والمتابعة'},{label:'Audit Center'}]}/>
   <ErrorBox error={error}/>
   {notice&&<div className="success-note">{notice}</div>}
 
@@ -236,14 +253,16 @@ export default function AuditCenter({go,initialTab=''}) {
    <Card><div className="card-title"><div><h3>الخط الزمني للنظام</h3><small>يجمع سجل النشاط العام مع سجل التدقيق التفصيلي. العمليات التي سجلت Snapshot تعرض قبل/بعد تلقائيًا.</small></div><div className="finance-actions"><Badge tone="green">تفصيلي {auditSummary?.sources?.detailed||0}</Badge><Badge>عام {auditSummary?.sources?.activity||0}</Badge></div></div><Table preferenceKey="audit-center" defaultPageSize={25} rows={filteredAudit} columns={auditCols}/></Card>
   </>)}
 
-  {tab==='duplicates'&&(canReviewDuplicates||canReviewAttendance)&&<>
+  {tab==='duplicates'&&(canReviewDuplicates||canReviewAttendance||canReviewRegistry)&&<>
    <div className="stats-grid">
     <Card><div className="stat-card"><GitMerge/><div><span>تكرارات المسافرين</span><strong>{canReviewDuplicates?duplicateGroups.length:'—'}</strong><small>داخل نفس الحجز فقط</small></div></div></Card>
     <Card><div className="stat-card"><UsersRound/><div><span>تكرارات موظفي الحضور</span><strong>{canReviewAttendance?employeeGroups.length:'—'}</strong><small>نفس الفرع والبيئة فقط</small></div></div></Card>
-    <Card><div className="stat-card"><ShieldCheck/><div><span>قاعدة الدمج</span><strong>Merge ≠ Delete</strong><small>السجل المكرر يبقى كأثر مرتبط بالأساسي</small></div></div></Card>
+    <Card><div className="stat-card"><ShieldCheck/><div><span>تكرارات حساسة</span><strong>{canReviewRegistry?registryGroups.length:'—'}</strong><small>موظفون / وكلاء / عملاء — مراجعة فقط</small></div></div></Card>
+    <Card><div className="stat-card"><ShieldCheck/><div><span>قاعدة الدمج</span><strong>Merge ≠ Delete</strong><small>لا تنفيذ تلقائي إذا كانت العلاقات أو المالية حساسة</small></div></div></Card>
    </div>
    {canReviewDuplicates&&<Card><div className="card-title"><div><h3>مسافرون مكررون داخل نفس الحجز</h3><small>المطابقة القوية: نفس الهوية، أو نفس الاسم والجوال. يتوقف الدمج عند تعارض مقعد أو تسكين.</small></div><Badge tone={duplicateGroups.length?'orange':'green'}>{duplicateGroups.length}</Badge></div>{duplicateGroups.length?<Table preferenceKey="passenger-duplicate-candidates" defaultPageSize={25} rows={duplicateGroups} columns={dupCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات مسافرين مكررة داخل نفس الحجز ضمن نطاقك.</div>}</Card>}
    {canReviewAttendance&&<Card><div className="card-title"><div><h3>موظفو حضور مشتبه بتكرارهم</h3><small>المطابقة: نفس حساب الموظف، أو نفس الهوية، أو نفس الاسم والجوال. قبل الدمج يتم فحص الدوام وقرارات المخالفات والروابط والحركات.</small></div><Badge tone={employeeGroups.length?'orange':'green'}>{employeeBusy?'…':employeeGroups.length}</Badge></div>{employeeBusy&&!employeeGroups.length?<Loading text="جاري فحص تكرارات الموظفين..."/>:employeeGroups.length?<Table preferenceKey="attendance-employee-duplicate-candidates" defaultPageSize={25} rows={employeeGroups} columns={employeeCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد حاليًا سجلات موظفين مكررة ضمن نطاقك.</div>}</Card>}
+   {canReviewRegistry&&<Card><div className="card-title"><div><h3>تكرارات حساسة — مراجعة قبل الدمج</h3><small>يفحص حسابات الموظفين والوكلاء والعملاء. لا يسمح بالدمج التلقائي هنا لأن الحسابات والصلاحيات والأرصدة والهوية الخارجية تحتاج معاينة متخصصة أولًا.</small></div><div className="finance-actions"><Badge tone={registryGroups.length?'orange':'green'}>{registryBusy?'…':registryGroups.length}</Badge>{registrySummary?.agents>0&&<Badge>وكلاء {registrySummary.agents}</Badge>}{registrySummary?.staff>0&&<Badge>موظفون {registrySummary.staff}</Badge>}{registrySummary?.customers>0&&<Badge>عملاء {registrySummary.customers}</Badge>}</div></div>{registryBusy&&!registryGroups.length?<Loading text="جاري فحص التكرارات الحساسة..."/>:registryGroups.length?<Table preferenceKey="sensitive-duplicate-review" defaultPageSize={25} rows={registryGroups} columns={registryCols}/>:<div className="success-note"><CheckCircle2 size={16}/> لا توجد تكرارات قوية في الكيانات الحساسة ضمن النطاق الحالي.</div>}</Card>}
    {canReviewDuplicates&&<Card><div className="card-title"><div><h3>سجل العميل المتكرر عبر حجوزات مختلفة</h3><small>هذه ليست أخطاء افتراضيًا؛ نفس الشخص قد يسافر أكثر من مرة، لذلك لا يسمح النظام بدمجها.</small></div><Badge>{repeatGroups.length}</Badge></div>{repeatGroups.length?<Table preferenceKey="repeat-passengers" defaultPageSize={25} rows={repeatGroups} columns={repeatCols}/>:<div className="empty">لا توجد هويات متكررة عبر حجوزات مختلفة.</div>}</Card>}
   </>}
 
