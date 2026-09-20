@@ -105,6 +105,7 @@ export const api={
   agent360:(id)=>request(`/api/agents/${encodeURIComponent(id)}/360`),
   agentLedger:(id)=>request(`/api/agents/${encodeURIComponent(id)}/ledger`),
   agentCredit:(id)=>request(`/api/agents/${encodeURIComponent(id)}/credit`),
+  agentCollectionsCenter:(branch='')=>request(`/api/agent-collections-center${branch?`?branch=${encodeURIComponent(branch)}`:''}`),
   bookingRefundSummaries:()=>request('/api/bookings/refund-summaries'),
   autoHouseBooking:(bookingNumber,tripHotelId)=>request('/api/bookings/auto-house',{method:'POST',body:{booking_number:bookingNumber,trip_hotel_id:tripHotelId},feedback:false}),
   customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
