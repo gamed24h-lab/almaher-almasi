@@ -166,6 +166,45 @@ async function auditList(request,env){
   });
 }
 
+async function snapshotById(env,table,id){
+  if(!id)return null;
+  const params=new URLSearchParams({select:'*',id:`eq.${id}`,limit:'1'});
+  try{return (await restRows(env,table,params))?.[0]||null}catch{return null}
+}
+function detailedWriteDescriptor(path,body={}){
+  if(path!=='/api/admin')return null;
+  const action=String(body?.action||'');
+  if(action==='sync_users'&&Array.isArray(body?.rows)&&body.rows.length){
+    return {table:'staff_users',entityType:'staff_users',items:body.rows.map(x=>({id:txt(x?.id)})).filter(x=>x.id),reason:txt(body?.reason)||'تعديل حساب موظف'};
+  }
+  return null;
+}
+async function captureBefore(env,spec){
+  if(!spec)return new Map();
+  const out=new Map();
+  for(const item of spec.items){out.set(item.id,await snapshotById(env,spec.table,item.id))}
+  return out;
+}
+async function appendDetailedWrites(env,actor,spec,beforeMap){
+  if(!actor||!spec||!base(env))return 0;
+  let count=0;
+  for(const item of spec.items){
+    const before=beforeMap.get(item.id)||null,after=await snapshotById(env,spec.table,item.id);
+    if(!after)continue;
+    const action=spec.entityType==='staff_users'?(before?'staff_updated':'staff_created'):'record_updated';
+    const row={
+      actor_id:String(actor.id||'')||null,actor_name:String(actor.name||actor.username||'')||null,actor_role:String(actor.role||'')||null,
+      branch_id:after?.branch_id||before?.branch_id||actor.branch_id||null,action,entity_type:spec.entityType,entity_id:item.id,
+      before_data:before?redact(before):null,after_data:redact(after),reason:spec.reason||null,created_at:new Date().toISOString()
+    };
+    try{
+      const r=await fetch(`${base(env)}/rest/v1/audit_events`,{method:'POST',headers:{...headers(env),Prefer:'return=minimal'},body:JSON.stringify(row)});
+      if(r.ok)count++;
+    }catch{}
+  }
+  return count;
+}
+
 async function appendAudit(env,actor,{action,path,method,status,table,entityType,entityId}){
   if(!actor||!base(env))return;
   const row={
@@ -178,7 +217,11 @@ async function appendAudit(env,actor,{action,path,method,status,table,entityType
 function auditDescriptor(path,body={}){
   const action=String(body?.action||'');
   const table=String(body?.table||'');
-  if(path==='/api/admin')return {action:action||'admin_write',table:table||null,entityType:table||'admin',entityId:body?.id||body?.row?.id||null};
+  if(path==='/api/admin'){
+    if(action==='sync_users'&&Array.isArray(body?.rows)&&body.rows.length===1)return {action:'sync_users',table:'staff_users',entityType:'staff_users',entityId:body.rows[0]?.id||null};
+    if(action==='sync_trips'&&Array.isArray(body?.rows)&&body.rows.length===1)return {action:'sync_trips',table:'trips',entityType:'trips',entityId:body.rows[0]?.id||null};
+    return {action:action||'admin_write',table:table||null,entityType:table||'admin',entityId:body?.id||body?.row?.id||null};
+  }
   if(path==='/api/module')return {action:action||'module_write',table:table||null,entityType:table||'module',entityId:body?.id||body?.row?.id||null};
   if(path==='/api/mega')return {action:action||'mega_write',table:null,entityType:'mega',entityId:body?.id||null};
   if(path==='/api/platform')return {action:action||'platform_write',table:table||null,entityType:table||'platform',entityId:body?.id||null};
@@ -190,16 +233,21 @@ export default {
     const url=new URL(request.url);
     if(url.pathname==='/api/audit'&&request.method==='GET')return auditList(request,env);
 
-    let actor=null,descriptor=null;
+    let actor=null,descriptor=null,detailedSpec=null,beforeMap=new Map();
     if(request.method!=='GET'&&['/api/admin','/api/module','/api/mega','/api/platform'].includes(url.pathname)){
       actor=await actorFrom(request,env);
       let body={};try{body=await request.clone().json()}catch{}
       descriptor=auditDescriptor(url.pathname,body);
+      detailedSpec=detailedWriteDescriptor(url.pathname,body);
+      if(detailedSpec&&actor)beforeMap=await captureBefore(env,detailedSpec);
     }
 
     const response=await securedWorker.fetch(request,env,ctx);
     if(descriptor&&actor&&response.ok){
-      const task=appendAudit(env,actor,{...descriptor,path:url.pathname,method:request.method,status:response.status});
+      const task=(async()=>{
+        const detailedCount=detailedSpec?await appendDetailedWrites(env,actor,detailedSpec,beforeMap):0;
+        if(!detailedCount)await appendAudit(env,actor,{...descriptor,path:url.pathname,method:request.method,status:response.status});
+      })();
       if(ctx?.waitUntil)ctx.waitUntil(task);else await task;
     }
     return response;
