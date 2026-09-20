@@ -29,6 +29,7 @@ async function rpc(env,name,body){
 const sovereign=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'||u.permissions?.all===true);
 const globalScope=u=>!!u&&(sovereign(u)||u.permissions?.allBranches===true);
 const canReviewRegistry=u=>!!u&&(globalScope(u)||u.permissions?.auditLog===true||u.permissions?.managePermissions===true);
+const canReviewAgents=u=>!!u&&(canReviewRegistry(u)||u.permissions?.agents===true||u.permissions?.finance===true||u.permissions?.suppliers===true);
 const canMergeAgents=u=>!!u&&(sovereign(u)||(u.permissions?.editBookings===true&&u.permissions?.finance===true));
 
 function agentMatch(a,b){
@@ -158,7 +159,7 @@ function friendlyError(e){
 }
 async function handleAgent(request,env,ctx,body){
  const u=await actor(request,env,ctx);if(!u)return json({error:'انتهت الجلسة.'},401);
- if(!canReviewRegistry(u)&&!canMergeAgents(u))return json({error:'لا توجد صلاحية مراجعة تكرارات الوكلاء.'},403);
+ if(!canReviewAgents(u)&&!canMergeAgents(u))return json({error:'لا توجد صلاحية مراجعة تكرارات الوكلاء.'},403);
  const preview=await inspectPair(env,u,String(body.canonical_id||''),String(body.duplicate_id||''));
  if(preview.forbidden)return json({error:preview.reasons?.[0]||'خارج نطاق الفرع.'},403);
  if(body.action==='agent_duplicate_preview')return json({ok:true,...preview,can_execute:canMergeAgents(u)});
