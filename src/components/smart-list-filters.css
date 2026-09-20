@@ -1,0 +1,26 @@
+.smart-list-filters{display:grid;gap:10px;padding:12px;margin:0 0 12px;border:1px solid #dfe6ee;border-radius:14px;background:#fbfdff}
+.smart-list-primary{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.smart-list-search{display:flex;align-items:center;gap:8px;min-width:260px;flex:1;border:1px solid #d7dee7;border-radius:11px;background:#fff;padding-inline:10px}
+.smart-list-search input{border:0!important;box-shadow:none!important;background:transparent!important;min-width:0;width:100%;padding-inline:0}
+.smart-list-clear-search{border:0;background:transparent;display:grid;place-items:center;cursor:pointer;color:#687687;padding:5px}
+.smart-list-count{margin-inline-start:auto;font-size:13px;color:#637083;white-space:nowrap}
+.smart-list-count strong{color:#1f3349}
+.smart-list-filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}
+.smart-list-filter{display:grid;gap:5px;min-width:0}
+.smart-list-filter>span{font-size:12px;font-weight:800;color:#536274}
+.smart-list-active{display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding-top:2px}
+.smart-filter-chip,.smart-filter-reset{border:1px solid #cddbeb;background:#eef5fc;color:#244966;border-radius:999px;padding:6px 9px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:800}
+.smart-filter-reset{background:#fff;color:#6b3d3d;border-color:#e7cccc}
+.smart-list-filter-toggle{display:none}
+.smart-list-filters .saved-views{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.smart-list-filters .saved-views select,.smart-list-filters .saved-views button{min-height:36px}
+@media(max-width:760px){
+ .smart-list-filters{padding:10px}
+ .smart-list-primary{align-items:stretch}
+ .smart-list-search{min-width:100%;order:0}
+ .smart-list-filter-toggle{display:inline-flex;order:1;flex:1}
+ .smart-list-filters .saved-views{order:2;flex:1}
+ .smart-list-count{order:3;width:100%;margin:0}
+ .smart-list-filter-grid{display:none;grid-template-columns:1fr}
+ .smart-list-filters.open .smart-list-filter-grid{display:grid}
+}
