@@ -93,12 +93,13 @@ async function registryWithAgents(request,env,ctx){
 }
 async function agentReferenceRows(env,a,b){
  const ids='('+a.id+','+b.id+')';
- const [bookings,allocations,quotas]=await Promise.all([
+ const [bookings,allocations,quotas,ledgerAccounts]=await Promise.all([
   rows(env,'bookings','agent_id=in.'+ids+'&select='+enc('id,booking_number,agent_id,branch_id,booking_status,status,total_price,paid_amount,data_environment,created_at')+'&limit=1001').catch(()=>[]),
   rows(env,'agent_allocations','agent_id=in.'+ids+'&select='+enc('id,agent_id,trip_id,trip_bus_id,allocation_type,allocated_quantity,used_quantity,status,price_override,commission_override,release_at,created_at')+'&limit=1001').catch(()=>[]),
-  rows(env,'resource_quotas','agent_id=in.'+ids+'&select='+enc('id,agent_id,resource_type,trip_id,branch_id,quantity,used_quantity,status,release_at,created_at')+'&limit=1001').catch(()=>[])
+  rows(env,'resource_quotas','agent_id=in.'+ids+'&select='+enc('id,agent_id,resource_type,trip_id,branch_id,quantity,used_quantity,status,release_at,created_at')+'&limit=1001').catch(()=>[]),
+  rows(env,'agent_ledger_accounts','agent_id=in.'+ids+'&select='+enc('agent_id,data_environment,opening_balance,current_balance,started_at,updated_at')+'&limit=20').catch(()=>[])
  ]);
- return {bookings,agent_allocations:allocations,resource_quotas:quotas};
+ return {bookings,agent_allocations:allocations,resource_quotas:quotas,agent_ledger_accounts:ledgerAccounts};
 }
 function refCounts(refs,id){
  const out={};
@@ -110,7 +111,7 @@ function refCounts(refs,id){
 }
 function policyDifferences(a,b){
  const fields=[
-  ['credit_limit','حد الائتمان'],['current_balance','الرصيد الحالي'],
+  ['credit_limit','حد الائتمان'],['current_balance','الرصيد القديم (Legacy)'],
   ['default_commission_type','نوع العمولة'],['default_commission_value','قيمة العمولة'],
   ['default_discount_type','نوع الخصم'],['default_discount_value','قيمة الخصم'],
   ['allow_credit','السماح بالآجل'],['allow_group_booking','السماح بحجز المجموعات'],['portal_enabled','بوابة الوكيل']
@@ -139,11 +140,14 @@ async function inspectPair(env,u,canonicalId,duplicateId){
  const match=agentMatch(canonical,duplicate);if(!match.ok)reasons.push(match.label);
  if(Math.abs(Number(duplicate.current_balance||0))>0.000001)reasons.push('السجل المكرر عليه رصيد غير صفري. اختر سجل الرصيد كأساسي أو سوِّ الرصيد قبل الدمج.');
  const refs=await agentReferenceRows(env,canonical,duplicate);
+ const duplicateLedger=(refs.agent_ledger_accounts||[]).filter(x=>String(x.agent_id)===String(duplicate.id));
+ const canonicalLedger=(refs.agent_ledger_accounts||[]).filter(x=>String(x.agent_id)===String(canonical.id));
+ if(duplicateLedger.some(x=>Math.abs(Number(x.current_balance||0))>0.000001))reasons.push('السجل المكرر لديه رصيد فعلي غير صفري في كشف حساب الوكيل. صفّر أو سوِّ كشف الحساب قبل الدمج.');
  const conflicts=allocationConflicts(refs,canonical,duplicate);
  if(conflicts.length)reasons.push('يوجد توزيع Active متعارض لنفس الرحلة/الباص/نوع التوزيع. راجع التوزيعات قبل الدمج.');
  const differences=policyDifferences(canonical,duplicate);
  if(differences.length)warnings.push('إعدادات مالية أو تشغيلية مختلفة؛ بعد الدمج ستظل إعدادات السجل الأساسي هي المعتمدة.');
- return {can_merge:reasons.length===0,match,reasons,warnings,canonical,duplicate,policy_differences:differences,allocation_conflicts:conflicts.slice(0,20),references:{canonical:refCounts(refs,canonical.id),duplicate:refCounts(refs,duplicate.id)}};
+ return {can_merge:reasons.length===0,match,reasons,warnings,canonical,duplicate,policy_differences:differences,allocation_conflicts:conflicts.slice(0,20),ledger_balances:{canonical:canonicalLedger,duplicate:duplicateLedger},references:{canonical:refCounts(refs,canonical.id),duplicate:refCounts(refs,duplicate.id)}};
 }
 function friendlyError(e){
  const m=String(e?.message||e||'');
@@ -151,7 +155,8 @@ function friendlyError(e){
  if(/MERGE_AGENT_BRANCH_MISMATCH/i.test(m))return 'دمج الوكلاء مسموح داخل نفس الفرع فقط.';
  if(/MERGE_AGENT_CR_CONFLICT/i.test(m))return 'السجل التجاري مختلف بين الوكيلين، لذلك تم إيقاف الدمج.';
  if(/MERGE_AGENT_TAX_CONFLICT/i.test(m))return 'الرقم الضريبي مختلف بين الوكيلين، لذلك تم إيقاف الدمج.';
- if(/MERGE_AGENT_DUPLICATE_BALANCE_NONZERO/i.test(m))return 'السجل المكرر عليه رصيد غير صفري. اجعل سجل الرصيد هو الأساسي أو سوِّ الرصيد أولًا.';
+ if(/MERGE_AGENT_DUPLICATE_LEDGER_BALANCE_NONZERO/i.test(m))return 'السجل المكرر لديه رصيد فعلي غير صفري في كشف الحساب. سوِّ الرصيد أولًا قبل الدمج.';
+ if(/MERGE_AGENT_DUPLICATE_BALANCE_NONZERO/i.test(m))return 'السجل المكرر عليه رصيد قديم غير صفري. اجعل سجل الرصيد هو الأساسي أو سوِّ الرصيد أولًا.';
  if(/MERGE_AGENT_ACTIVE_ALLOCATION_CONFLICT/i.test(m))return 'يوجد توزيع Active متعارض لنفس الرحلة/الباص/نوع التوزيع.';
  if(/MERGE_AGENT_STRONG_MATCH_REQUIRED/i.test(m))return 'لا توجد مطابقة قوية كافية بين الوكيلين.';
  if(/MERGE_AGENT_NOT_FOUND|MERGE_INACTIVE_AGENT|MERGE_AGENT_ALREADY_MERGED/i.test(m))return 'أحد سجلي الوكيل لم يعد صالحًا للدمج.';
