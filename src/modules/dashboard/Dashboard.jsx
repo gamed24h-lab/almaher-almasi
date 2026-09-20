@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft,Fingerprint,BarChart3,UserCog,Plus,ScanLine,Hotel,Armchair,ShieldCheck,LayoutDashboard,CheckSquare2} from 'lucide-react';
+import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft,Fingerprint,BarChart3,UserCog,Plus,ScanLine,Hotel,Armchair,ShieldCheck,ShieldAlert,LayoutDashboard,CheckSquare2} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {useLanguage} from '../../core/LanguageContext.jsx';
@@ -48,6 +48,7 @@ export default function Dashboard({go}){
  const canAttendance=['attendance_view','attendance_reports','attendance_manage_employees','attendance_review_violations','attendance_close_month'].some(k=>has(user,k));
  const canStaff=has(user,'manageUsers')||has(user,'managePermissions');
  const canActions=['tasks','approvals','approval_requests','refunds','refund_view','refund_approve','refund_complete','attendance_review_violations','attendance_close_month','managePermissions'].some(k=>has(user,k));
+ const canQuality=canBookings||canTrips||canFinance||canAttendance||canStaff||has(user,'housing')||has(user,'seats');
  const profile=roleProfile(user,labels,t);
 
  const quick=useMemo(()=>{
@@ -61,10 +62,11 @@ export default function Dashboard({go}){
   if(canFinance)a.push({label:'المالية',path:'/finance',Icon:WalletCards});
   if(canAttendance)a.push({label:'الحضور والبصمة',path:'/attendance',Icon:Fingerprint});
   if(canActions)a.push({label:'مركز الإجراءات',path:'/workflow',Icon:CheckSquare2});
+  if(canQuality)a.push({label:'جودة البيانات',path:'/quality',Icon:ShieldAlert});
   if(canStaff)a.push({label:'الموظفون والصلاحيات',path:'/staff',Icon:UserCog});
   if(has(user,'reports'))a.push({label:'التقارير',path:'/reports',Icon:BarChart3});
   return a.slice(0,8);
- },[user,canBookings,canTrips,canFinance,canAttendance,canStaff,canActions]);
+ },[user,canBookings,canTrips,canFinance,canAttendance,canStaff,canActions,canQuality]);
 
  if(loading&&!data.scope)return <Loading/>;
  const title=language==='ar'?profile.title:(labels.dashboard_title||t('dashboardTitle'));
@@ -89,8 +91,9 @@ export default function Dashboard({go}){
     {(has(user,'housing')||has(user,'housingManifest'))&&<Alert text={`${data.passengers.filter(x=>String(x.accommodation_status||'').toLowerCase()==='pending').length} ${t('needsHousing')}`} onClick={()=>go('/housing')}/>}
     {canFinance&&<Alert text={`${stats.dueBookings} ${t('bookingDue')}`} onClick={()=>go('/finance')}/>}
     {canAttendance&&<Alert text="متابعة الحضور والمخالفات والإقفال الشهري" onClick={()=>go('/attendance')}/>}
-    {canStaff&&<Alert text="مراجعة حسابات الموظفين والصلاحيات" onClick={()=>go('/staff')}/>}
-    {!has(user,'seats')&&!has(user,'housing')&&!has(user,'housingManifest')&&!canFinance&&!canAttendance&&!canStaff&&<div className="empty-state">لا توجد مهام سريعة ضمن صلاحياتك الحالية.</div>}
+    {canQuality&&<Alert text="فحص جودة البيانات والاستثناءات" onClick={()=>go('/quality')}/>} 
+    {canStaff&&<Alert text="مراجعة حسابات الموظفين والصلاحيات" onClick={()=>go('/staff')}/>} 
+    {!has(user,'seats')&&!has(user,'housing')&&!has(user,'housingManifest')&&!canFinance&&!canAttendance&&!canStaff&&!canQuality&&<div className="empty-state">لا توجد مهام سريعة ضمن صلاحياتك الحالية.</div>}
    </div></Card>
   </div>
  </>;
