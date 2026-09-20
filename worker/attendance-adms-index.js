@@ -100,12 +100,22 @@ async function finalizeEmployeeDeleteGroup(env,groupId){
 }
 async function queueHistoricalFallback(env,cmd,rc){
  if(!cmd||cmd.command_type!=='history_attlog'||rc!==-3)return false;
- const strategy=txt(cmd?.metadata?.history_strategy);
+ const strategy=txt(cmd?.metadata?.history_strategy)||'range_space';
  if(strategy==='plain')return false;
  const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(cmd.device_id)+'&command_type=eq.history_attlog&status=in.(queued,sent)&select=id,metadata&order=id.desc&limit=20').catch(()=>[]);
- if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain'))return false;
- const metadata={...(cmd.metadata||{}),history_strategy:'plain',fallback_from_command_id:cmd.id,fallback_reason:'device_return_-3'};
- await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:cmd.device_id,command_type:'history_attlog',command_text:'DATA QUERY ATTLOG',metadata,created_by:cmd.created_by||null},prefer:'return=minimal'});
+ let nextStrategy,command;
+ if(strategy==='range_space'){
+  if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='range_iso'))return false;
+  const start=txt(cmd?.metadata?.requested_start)||'2000-01-01 00:00:00',end=txt(cmd?.metadata?.requested_end)||deviceLocalNow();
+  nextStrategy='range_iso';
+  command='DATA QUERY ATTLOG StartTime='+start.replace(' ','T')+'\tEndTime='+end.replace(' ','T');
+ }else{
+  if((pending||[]).some(x=>txt(x?.metadata?.history_strategy)==='plain'))return false;
+  nextStrategy='plain';
+  command='DATA QUERY ATTLOG';
+ }
+ const metadata={...(cmd.metadata||{}),history_strategy:nextStrategy,fallback_from_command_id:cmd.id,fallback_reason:'device_return_-3'};
+ await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:cmd.device_id,command_type:'history_attlog',command_text:command,metadata,created_by:cmd.created_by||null},prefer:'return=minimal'});
  return true;
 }
 async function completeDeviceCommand(env,body){
@@ -435,7 +445,7 @@ async function importHistoricalAttendance(env,me,body){
  let queued=false;
  if(!existing?.length){
   const now=deviceLocalNow();
-  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
+  await queueCommands(env,device,me,[{type:'history_attlog',command:'DATA QUERY ATTLOG StartTime=2000-01-01 00:00:00\tEndTime='+now,metadata:{history_strategy:'range_space',requested_start:'2000-01-01 00:00:00',requested_end:now}}]);
   queued=true;
  }
  await audit(env,me,'attendance_history_import_requested','attendance_device',device.id,device.branch_id,null,{linked_pins:linkedPins,queued},'استيراد وربط كامل الحركات القديمة من جهاز البصمة');
