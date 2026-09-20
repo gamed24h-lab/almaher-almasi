@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useState} from 'react';
 import {ArrowRight,Printer,Hotel,Armchair,ScanLine,Users,RotateCcw,RefreshCw,BusFront,WalletCards,MapPin,AlertTriangle,CheckCircle2,FileText} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Card,PageHeader,Button,Loading,ErrorBox,Table} from '../../components/UI.jsx';
+import RecordTimeline from '../../components/RecordTimeline.jsx';
 import {money,statusLabel} from '../../lib/format.js';
 import './trip360.css';
 
@@ -204,7 +205,7 @@ export default function TripCenter({id,go}){
 
  if(!x&&!error)return <Loading text="تحميل Trip 360..."/>;
  return <>
-  <PageHeader title={x?.trip?.trip_code||'Trip 360'} subtitle={`${x?.trip?.from_city||x?.trip?.origin||'—'} ← ${x?.trip?.to_city||x?.trip?.destination||'—'} · ${x?.trip?.departure_date||''} ${x?.trip?.departure_time||''}`} actions={<><Button onClick={()=>go('/trips')}><ArrowRight size={16}/> رجوع</Button><Button onClick={load} disabled={busy}><RefreshCw size={16}/> تحديث</Button><Button onClick={()=>window.print()}><Printer size={16}/> طباعة الكشف</Button></>}/>
+  <PageHeader title={x?.trip?.trip_code||'Trip 360'} subtitle={`${x?.trip?.from_city||x?.trip?.origin||'—'} ← ${x?.trip?.to_city||x?.trip?.destination||'—'} · ${x?.trip?.departure_date||''} ${x?.trip?.departure_time||''}`} actions={<><Button onClick={()=>go('/trips')}><ArrowRight size={16}/> رجوع</Button><Button onClick={load} disabled={busy}><RefreshCw size={16}/> تحديث</Button>{x?.trip?.id&&<RecordTimeline entityId={x.trip.id} title={'تاريخ الرحلة '+(x.trip.trip_code||'')} subtitle="كل التغييرات المسجلة على الرحلة ومن نفذها ومتى." label="سجل التغييرات"/>}<Button onClick={()=>window.print()}><Printer size={16}/> طباعة الكشف</Button></>}/>
   <ErrorBox error={error}/>
   {x&&<div className="trip360">
    <section className={`trip360-health ${critical?'bad':exceptions.length?'warn':'good'}`}>
