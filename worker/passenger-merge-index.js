@@ -8,7 +8,7 @@ const text=v=>String(v??'').trim();
 const lower=v=>text(v).toLowerCase();
 const enc=v=>encodeURIComponent(String(v??''));
 const elevated=u=>!!u&&(lower(u.role)==='developer'||u.role==='مدير عام'||u.permissions?.all===true||u.permissions?.allBranches===true);
-const canPreview=u=>!!u&&(elevated(u)||u.permissions?.viewBookings===true||u.permissions?.editBookings===true||u.permissions?.editPassenger===true);
+const canPreview=u=>!!u&&(elevated(u)||u.permissions?.editBookings===true||u.permissions?.editPassenger===true);
 const canMerge=u=>!!u&&(elevated(u)||u.permissions?.editBookings===true||u.permissions?.editPassenger===true);
 
 async function readJson(r){const t=await r.text();try{return t?JSON.parse(t):{}}catch{return {error:t||('HTTP '+r.status)}}}
