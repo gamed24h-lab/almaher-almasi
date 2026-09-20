@@ -11,6 +11,9 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*", "/iclock/*", "/.netlify/functions/*", "/health", "/healthz"]
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Keep existing Cloudflare dashboard Variables/Secrets.
 # Required at runtime:
 # SUPABASE_URL
