@@ -38,8 +38,9 @@ const blankShift={id:'',device_id:'',name:'',start_time:'08:00',end_time:'17:00'
 export default function AttendanceDeviceData({state,onChanged,onError,onNotice,onOpenLinks}){
  const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[biometricImportBusy,setBiometricImportBusy]=useState(''),[historyBusy,setHistoryBusy]=useState(''),[diagBusy,setDiagBusy]=useState(''),[diagAllBusy,setDiagAllBusy]=useState(false),[diagOpen,setDiagOpen]=useState(false),[diagDeviceId,setDiagDeviceId]=useState(''),[historyOpen,setHistoryOpen]=useState(false),[historyDeviceId,setHistoryDeviceId]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
  const [shiftOpen,setShiftOpen]=useState(false),[shiftDevice,setShiftDevice]=useState(null),[shiftForm,setShiftForm]=useState(blankShift),[shiftBusy,setShiftBusy]=useState(false);
- const timerRef=useRef(null),attemptRef=useRef(0);
- const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[];
+ const [syncReportOpen,setSyncReportOpen]=useState(false),[syncReportDeviceId,setSyncReportDeviceId]=useState(''),[syncReportBatch,setSyncReportBatch]=useState('');
+ const timerRef=useRef(null),attemptRef=useRef(0),watchBatchRef=useRef('');
+ const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[],unlinkedGroups=state.unlinkedGroups||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
  const commandsByDevice=useMemo(()=>{const m=new Map();for(const c of commands){const k=String(c.device_id),a=m.get(k)||[];a.push(c);m.set(k,a)}return m},[commands]);
  const shiftsByDevice=useMemo(()=>{const m=new Map();for(const x of deviceShiftTemplates){const k=String(x.device_id),a=m.get(k)||[];a.push(x);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>Number(x.sequence_no)-Number(y.sequence_no));return m},[deviceShiftTemplates]);
@@ -51,23 +52,42 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const biometricByDevice=useMemo(()=>{const m=new Map();for(const x of biometricProfiles){if(x.status!=='active'||!x.source_device_id)continue;const k=String(x.source_device_id),a=m.get(k)||[];a.push(x);m.set(k,a)}return m},[biometricProfiles]);
  const diagDevice=devices.find(x=>String(x.id)===String(diagDeviceId))||null,diagHealth=healthByDevice.get(String(diagDeviceId))||null,diagCommand=(commandsByDevice.get(String(diagDeviceId))||[]).find(x=>x.command_type==='diagnostic_info')||null;
  const historyDevice=devices.find(x=>String(x.id)===String(historyDeviceId))||null,historySummary=historyByDevice.get(String(historyDeviceId))||null,historyRows=eventsByDevice.get(String(historyDeviceId))||[];
+ const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null;
+ function smartSyncReport(device,batch=syncReportBatch){
+  if(!device)return {users:0,linked:0,unlinkedUsers:0,employeesWithBiometric:0,withoutBiometric:0,fingerprints:0,faces:0,unlinkedMovements:0,success:0,failed:0,pending:0,totalCommands:0};
+  const us=usersByDevice.get(String(device.id))||[],deviceLinks=links.filter(x=>x.active&&String(x.device_id)===String(device.id)&&x.attendance_employee_id),linkedPins=new Set(deviceLinks.map(x=>String(x.device_pin))),linkedEmployees=[...new Set(deviceLinks.map(x=>String(x.attendance_employee_id)))];
+  const bios=biometricByDevice.get(String(device.id))||[],bioEmployees=new Set(bios.map(x=>String(x.attendance_employee_id))),fingerprints=bios.filter(x=>x.biometric_type==='finger').length,faces=bios.filter(x=>x.biometric_type==='face').length;
+  const batchRows=(commandsByDevice.get(String(device.id))||[]).filter(x=>batch?x?.metadata?.smart_sync_batch===batch:x?.metadata?.smart_sync===true);
+  const unlinkedMovements=unlinkedGroups.filter(x=>String(x.device_id)===String(device.id)).reduce((n,x)=>n+Number(x.count||0),0);
+  return {
+   users:us.length,linked:linkedEmployees.length,linkedPins:linkedPins.size,unlinkedUsers:us.filter(u=>!linkMap.get(String(device.id)+'|'+String(u.device_pin))?.attendance_employee_id).length,
+   employeesWithBiometric:linkedEmployees.filter(id=>bioEmployees.has(id)).length,withoutBiometric:linkedEmployees.filter(id=>!bioEmployees.has(id)).length,
+   fingerprints,faces,unlinkedMovements,
+   success:batchRows.filter(x=>x.status==='success').length,failed:batchRows.filter(x=>x.status==='failed').length,pending:batchRows.filter(x=>x.status==='queued'||x.status==='sent').length,totalCommands:batchRows.length
+  };
+ }
 
  useEffect(()=>{
   if(!watching)return;
-  const rows=(commandsByDevice.get(String(watching))||[]).slice(0,4);
+  const batch=watchBatchRef.current,allRows=commandsByDevice.get(String(watching))||[];
+  const rows=batch?allRows.filter(c=>c?.metadata?.smart_sync_batch===batch):allRows.slice(0,4);
   const hasPending=rows.some(c=>c.status==='queued'||c.status==='sent');
-  if(rows.length&&!hasPending){setWatching('');return}
+  if(rows.length&&!hasPending){
+   if(batch){setSyncReportDeviceId(watching);setSyncReportBatch(batch);setSyncReportOpen(true);watchBatchRef.current=''}
+   setWatching('');return
+  }
   clearTimeout(timerRef.current);
-  timerRef.current=setTimeout(async()=>{attemptRef.current+=1;await onChanged?.();if(attemptRef.current>=20)setWatching('')},2000);
+  timerRef.current=setTimeout(async()=>{attemptRef.current+=1;await onChanged?.();if(attemptRef.current>=30){if(batch){setSyncReportDeviceId(watching);setSyncReportBatch(batch);setSyncReportOpen(true);watchBatchRef.current=''}setWatching('')}},2000);
   return()=>clearTimeout(timerRef.current);
  },[watching,commands,onChanged,commandsByDevice]);
 
  async function sync(d){
-  setBusy(d.id);onError?.('');attemptRef.current=0;
+  setBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
   try{
    const out=await api.attendanceWrite({action:'sync_device_data',device_id:d.id});
-   setWatching(d.id);onNotice?.(out?.message||'بدأ سحب بيانات الجهاز. ستتحدث الحالة تلقائيًا.');await onChanged?.();
-  }catch(e){onError?.(e.message)}finally{setBusy('')}
+   if(out?.queued===false){onNotice?.(out?.message||'يوجد Smart Sync قيد التنفيذ بالفعل.');await onChanged?.();return}
+   watchBatchRef.current=out?.batch||'';setWatching(d.id);onNotice?.(out?.message||'بدأ Smart Sync. ستتحدث الحالة تلقائيًا.');await onChanged?.();
+  }catch(e){watchBatchRef.current='';onError?.(e.message)}finally{setBusy('')}
  }
  async function importAll(d){
   if(!confirm('استيراد كل الموظفين المسحوبين من هذا الجهاز كموظفي حضور وربط الـ PIN تلقائيًا؟'))return;
@@ -79,7 +99,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  }
  async function importBiometrics(d){
   if(!confirm('سيتم قراءة البصمات الموجودة فعليًا على هذا الجهاز وربط حالتها بالموظفين حسب PIN. لن يتم حفظ قالب البصمة الخام. هل تريد المتابعة؟'))return;
-  setBiometricImportBusy(d.id);onError?.('');attemptRef.current=0;
+  setBiometricImportBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
   try{
    const out=await api.attendanceWrite({action:'import_device_biometrics',device_id:d.id});
    setWatching(d.id);onNotice?.(out?.message||'تم بدء استيراد البصمات الموجودة على الجهاز.');await onChanged?.();
@@ -87,14 +107,14 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  }
  async function importHistory(d){
   if(!confirm('استيراد وربط كل الحركات القديمة الموجودة على هذا الجهاز؟ العملية آمنة من التكرار لأن كل حركة لها مفتاح منع تكرار.'))return;
-  setHistoryBusy(d.id);onError?.('');attemptRef.current=0;
+  setHistoryBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
   try{
    const out=await api.attendanceWrite({action:'import_historical_attendance',device_id:d.id});
    setWatching(d.id);onNotice?.(out?.message||'تم بدء استيراد الحركات القديمة وربطها بالموظفين.');await onChanged?.();
   }catch(e){onError?.(e.message)}finally{setHistoryBusy('')}
  }
  async function diagnose(d){
-  setDiagDeviceId(d.id);setDiagOpen(true);setDiagBusy(d.id);onError?.('');attemptRef.current=0;
+  setDiagDeviceId(d.id);setDiagOpen(true);setDiagBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
   try{
    const out=await api.attendanceWrite({action:'diagnose_device',device_id:d.id});
    setWatching(d.id);onNotice?.(out?.message||'تم بدء تشخيص الجهاز.');await onChanged?.();
