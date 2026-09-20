@@ -5,6 +5,7 @@ import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../c
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import {DATE_PRESET_OPTIONS,dateRangeForPreset,isWithinDateRange} from '../../lib/dateRangeFilters.js';
 import AttendanceEmployees from './AttendanceEmployees.jsx';
 import AttendanceReports from './AttendanceReports.jsx';
 import AttendanceDeviceData from './AttendanceDeviceData.jsx';
@@ -22,7 +23,7 @@ export default function Attendance({initialTab=''}){
  const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],watchdog:null,deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
- const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:''},unlinked:{q:'',branch:'',device:''}});
+ const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:'',verify:'',statusCode:'',datePreset:'',fromDate:'',toDate:''},unlinked:{q:'',branch:'',device:''}});
  async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
 
@@ -37,8 +38,11 @@ export default function Attendance({initialTab=''}){
  const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
  const deviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
+ const verifyOptions=useMemo(()=>[...new Set(logs.map(r=>String(r.verify_code??'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[logs]);
+ const statusCodeOptions=useMemo(()=>[...new Set(logs.map(r=>String(r.status_code??'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[logs]);
  const setListFilter=(scope,key,value)=>setListFilters(x=>({...x,[scope]:{...x[scope],[key]:value}}));
  const resetListFilter=scope=>setListFilters(x=>({...x,[scope]:Object.fromEntries(Object.keys(x[scope]||{}).map(k=>[k,'']))}));
+ const applyLogDatePreset=v=>setListFilters(x=>{const current=x.logs||{};if(!v)return {...x,logs:{...current,datePreset:'',fromDate:'',toDate:''}};if(v==='custom')return {...x,logs:{...current,datePreset:v}};const r=dateRangeForPreset(v);return {...x,logs:{...current,datePreset:v,fromDate:r.from,toDate:r.to}}});
  const filteredDevices=useMemo(()=>devices.filter(d=>{
   const f=listFilters.devices||{};
   return (!f.branch||String(d.branch_id)===String(f.branch))
@@ -58,6 +62,9 @@ export default function Attendance({initialTab=''}){
    &&(!f.device||String(r.device_id)===String(f.device))
    &&(!f.employee||String(r.attendance_employee_id)===String(f.employee))
    &&(!f.environment||String(r.data_environment||'')===String(f.environment))
+   &&(!f.verify||String(r.verify_code??'')===String(f.verify))
+   &&(!f.statusCode||String(r.status_code??'')===String(f.statusCode))
+   &&isWithinDateRange(r.occurred_at,f.fromDate,f.toDate)
    &&matchesListQuery(f.q,r.device_pin,r.employee_name,r.serial_number,emp?.employee_code,emp?.name,usr?.name,deviceMap.get(String(r.device_id))?.name,branchMap.get(String(r.branch_id)));
  }),[logs,listFilters.logs,employeeMap,userMap,deviceMap,branchMap]);
  const filteredUnlinked=useMemo(()=>unlinkedGroups.filter(r=>{
@@ -152,7 +159,12 @@ export default function Attendance({initialTab=''}){
  {key:'employee',label:'الموظف',value:listFilters.logs.employee,onChange:v=>setListFilter('logs','employee',v),options:employeeOptions},
  {key:'branch',label:'الفرع',value:listFilters.logs.branch,onChange:v=>setListFilter('logs','branch',v),options:branchOptions},
  {key:'device',label:'الجهاز',value:listFilters.logs.device,onChange:v=>setListFilter('logs','device',v),options:deviceOptions},
- {key:'environment',label:'البيئة',value:listFilters.logs.environment,onChange:v=>setListFilter('logs','environment',v),options:[{value:'training',label:'Training'},{value:'production',label:'Production'}]}
+ {key:'environment',label:'البيئة',value:listFilters.logs.environment,onChange:v=>setListFilter('logs','environment',v),options:[{value:'training',label:'Training'},{value:'production',label:'Production'}]},
+ {key:'verify',label:'رمز التحقق',value:listFilters.logs.verify,onChange:v=>setListFilter('logs','verify',v),options:verifyOptions},
+ {key:'statusCode',label:'رمز الحالة',value:listFilters.logs.statusCode,onChange:v=>setListFilter('logs','statusCode',v),options:statusCodeOptions},
+ {key:'datePreset',label:'الفترة',value:listFilters.logs.datePreset,onChange:applyLogDatePreset,options:DATE_PRESET_OPTIONS},
+ {key:'fromDate',label:'من تاريخ',value:listFilters.logs.fromDate,onChange:v=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:v,datePreset:v||x.logs?.toDate?'custom':''}})),render:()=> <Input type="date" value={listFilters.logs.fromDate} onChange={e=>setListFilters(x=>({...x,logs:{...x.logs,fromDate:e.target.value,datePreset:e.target.value||x.logs?.toDate?'custom':''}}))}/>},
+ {key:'toDate',label:'إلى تاريخ',value:listFilters.logs.toDate,onChange:v=>setListFilters(x=>({...x,logs:{...x.logs,toDate:v,datePreset:x.logs?.fromDate||v?'custom':''}})),render:()=> <Input type="date" value={listFilters.logs.toDate} onChange={e=>setListFilters(x=>({...x,logs:{...x.logs,toDate:e.target.value,datePreset:x.logs?.fromDate||e.target.value?'custom':''}}))}/>}
  ]}/><Table preferenceKey="attendance-logs" defaultPageSize={25} rows={filteredLogs} columns={logCols}/></></Card></>}
   {activeTab==='reports'&&state.permissions?.reports&&<AttendanceReports state={state} onError={setError} onNotice={setNotice}/>}
   {activeTab==='policies'&&state.permissions?.manage_policies&&<AttendancePolicies state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
