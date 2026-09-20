@@ -8,6 +8,8 @@ import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,PageHeader,Select,T
 import {dateTime,money} from '../../lib/format.js';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
+import RuleFilterBuilder from '../../components/RuleFilterBuilder.jsx';
+import {matchesRuleSet} from '../../lib/ruleFilters.js';
 
 const s=v=>String(v??'');
 const low=v=>s(v).toLowerCase();
@@ -18,6 +20,7 @@ export default function Fleet(){
  const {user}=useAuth(),{data:app}=useAppData();
  const [data,setData]=useState(null),[drivers,setDrivers]=useState([]),[tab,setTab]=useState('vehicles'),[modal,setModal]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [listFilter,setListFilter]=useState({q:'',branch:'',status:'',trip:'',vehicle:'',driver:''});
+ const [listRules,setListRules]=useState([]),[listRuleMode,setListRuleMode]=useState('all');
  const canViewFleet=has(user,'viewFleet')||has(user,'fleet')||has(user,'vehicles');
  const canAddVehicle=has(user,'addVehicles')||has(user,'vehicles')||has(user,'fleet');
  const canEditVehicle=has(user,'editVehicles')||has(user,'vehicles')||has(user,'fleet');
@@ -76,6 +79,17 @@ export default function Fleet(){
  const vehicleOptions=useMemo(()=>vehicles.map(v=>({value:s(v.id),label:vehicleName(v.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[vehicles,vehicleMap]);
  const driverOptions=useMemo(()=>drivers.map(d=>({value:s(d.id),label:driverName(d.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[drivers,driverMap]);
  const statusOptions=useMemo(()=>[...new Set(currentRows.map(r=>s(r.status).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[currentRows]);
+ const fleetRuleFields=useMemo(()=>[
+  {key:'status',label:'الحالة',options:statusOptions,get:r=>s(r.status)},
+  {key:'branch',label:'الفرع',options:branchOptions,get:r=>s(r.branch_id||vehicleMap.get(s(r.vehicle_id))?.branch_id)},
+  {key:'trip',label:'الرحلة',options:tripOptions,get:r=>s(r.trip_id)},
+  {key:'vehicle',label:'المركبة',options:vehicleOptions,get:r=>s(r.vehicle_id||((tab==='vehicles'||tab==='maintenance')?r.id:''))},
+  {key:'driver',label:'السائق',options:driverOptions,get:r=>s(r.driver_id||((tab==='drivers')?r.id:''))},
+  {key:'code',label:'الكود / اللوحة',get:r=>r.code||r.plate_no},
+  {key:'name',label:'الاسم',get:r=>r.name},
+  {key:'phone',label:'الجوال',get:r=>r.phone},
+  {key:'dueDate',label:'تاريخ الاستحقاق',type:'date',get:r=>r.due_date}
+ ],[statusOptions,branchOptions,tripOptions,vehicleOptions,driverOptions,vehicleMap,tab]);
  const filteredCurrentRows=useMemo(()=>currentRows.filter(r=>{
   if(listFilter.status&&s(r.status)!==listFilter.status)return false;
   if(listFilter.branch){
@@ -88,7 +102,7 @@ export default function Fleet(){
   const vehicle=vehicleMap.get(s(r.vehicle_id||r.id)),driver=driverMap.get(s(r.driver_id||r.id)),extra=driverMap.get(s(r.extra_driver_id)),trip=tripMap.get(s(r.trip_id));
   return matchesListQuery(listFilter.q,r.code,r.name,r.plate_no,r.phone,r.national_id,r.license_no,r.notes,r.maintenance_type,r.due_date,r.bus_label,r.status,vehicle?.code,vehicle?.name,vehicle?.plate_no,driver?.name,driver?.phone,extra?.name,extra?.phone,trip?.trip_code,trip?.from_city,trip?.origin,trip?.to_city,trip?.destination,branchMap.get(s(r.branch_id||vehicle?.branch_id)));
  }),[currentRows,listFilter,tab,vehicleMap,driverMap,tripMap,branchMap]);
- return <><PageHeader title="الأسطول والسائقون" subtitle="كل باص يحسب مقاعده وحده، والسائق لا يتكرر على أكثر من باص في نفس الرحلة" actions={<Button onClick={load}><RefreshCw size={16}/> تحديث</Button>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#ecfdf3',color:'#166534',borderColor:'#bbf7d0'}}>{notice}</div>}{duplicateKeys.size>0&&<div className="error-box">يوجد ربط مكرر قديم لنفس الباص على نفس الرحلة. استخدم «فك الربط» لإزالة النسخة الزائدة؛ النظام يمنع أي تكرار جديد.</div>}{driverConflictIds.size>0&&<div className="error-box">يوجد تعارض قديم في السائقين: نفس السائق معيّن أكثر من مرة داخل نفس الرحلة أو معيّن كأساسي وإضافي. عدّل السائق في الصفوف المعلّمة «تعارض سائق».</div>}<Card><div className="fleet-head"><div><BusFront size={22}/><b>نطاق الأسطول: {allOps(user)?'كل التشغيل المسموح':'فرعك والرحلات المشتركة'}</b></div><div className="finance-actions">{canAddVehicle&&<Button variant="primary" onClick={()=>setModal({type:'vehicle'})}><Plus size={16}/> مركبة</Button>}{canAddDriver&&<Button onClick={()=>setModal({type:'driver'})}><UserRound size={16}/> سائق</Button>}{canAssignFleet&&<Button onClick={()=>setModal({type:'assign'})}><Link2 size={16}/> ربط برحلة</Button>}{canMaintenance&&<Button onClick={()=>setModal({type:'maintenance'})}><Wrench size={16}/> صيانة</Button>}</div></div></Card><div className="module-tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>{setTab(k);setListFilter({q:'',branch:'',status:'',trip:'',vehicle:'',driver:''})}}>{l} <Badge>{n}</Badge></button>)}</div>{!data&&canViewFleet?<Loading/>:<Card><SmartListFilters storageKey={`fleet-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالمركبة أو اللوحة أو السائق أو الرحلة..." totalCount={currentRows.length} resultCount={filteredCurrentRows.length} onReset={()=>setListFilter({q:'',branch:'',status:'',trip:'',vehicle:'',driver:''})} filters={[
+ return <><PageHeader title="الأسطول والسائقون" subtitle="كل باص يحسب مقاعده وحده، والسائق لا يتكرر على أكثر من باص في نفس الرحلة" actions={<Button onClick={load}><RefreshCw size={16}/> تحديث</Button>}/><ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#ecfdf3',color:'#166534',borderColor:'#bbf7d0'}}>{notice}</div>}{duplicateKeys.size>0&&<div className="error-box">يوجد ربط مكرر قديم لنفس الباص على نفس الرحلة. استخدم «فك الربط» لإزالة النسخة الزائدة؛ النظام يمنع أي تكرار جديد.</div>}{driverConflictIds.size>0&&<div className="error-box">يوجد تعارض قديم في السائقين: نفس السائق معيّن أكثر من مرة داخل نفس الرحلة أو معيّن كأساسي وإضافي. عدّل السائق في الصفوف المعلّمة «تعارض سائق».</div>}<Card><div className="fleet-head"><div><BusFront size={22}/><b>نطاق الأسطول: {allOps(user)?'كل التشغيل المسموح':'فرعك والرحلات المشتركة'}</b></div><div className="finance-actions">{canAddVehicle&&<Button variant="primary" onClick={()=>setModal({type:'vehicle'})}><Plus size={16}/> مركبة</Button>}{canAddDriver&&<Button onClick={()=>setModal({type:'driver'})}><UserRound size={16}/> سائق</Button>}{canAssignFleet&&<Button onClick={()=>setModal({type:'assign'})}><Link2 size={16}/> ربط برحلة</Button>}{canMaintenance&&<Button onClick={()=>setModal({type:'maintenance'})}><Wrench size={16}/> صيانة</Button>}</div></div></Card><div className="module-tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>{setTab(k);setListFilter({q:'',branch:'',status:'',trip:'',vehicle:'',driver:''});setListRules([]);setListRuleMode('all')}}>{l} <Badge>{n}</Badge></button>)}</div>{!data&&canViewFleet?<Loading/>:<Card><SmartListFilters storageKey={`fleet-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالمركبة أو اللوحة أو السائق أو الرحلة..." totalCount={currentRows.length} resultCount={filteredCurrentRows.length} onReset={()=>{setListFilter({q:'',branch:'',status:'',trip:'',vehicle:'',driver:''});setListRules([]);setListRuleMode('all')}} advanced={{getValue:()=>({rules:listRules,mode:listRuleMode}),onApply:v=>{setListRules(Array.isArray(v?.rules)?v.rules:[]);setListRuleMode(v?.mode==='any'?'any':'all')},render:()=> <RuleFilterBuilder fields={fleetRuleFields} rules={listRules} mode={listRuleMode} onRulesChange={setListRules} onModeChange={setListRuleMode}/>}} filters={[
  ...((tab==='vehicles'||tab==='drivers')?[{key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions}]:[]),
  {key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:statusOptions},
  ...(tab==='assignments'?[{key:'trip',label:'الرحلة',value:listFilter.trip,onChange:v=>setListFilter(x=>({...x,trip:v})),options:tripOptions},{key:'vehicle',label:'المركبة',value:listFilter.vehicle,onChange:v=>setListFilter(x=>({...x,vehicle:v})),options:vehicleOptions},{key:'driver',label:'السائق',value:listFilter.driver,onChange:v=>setListFilter(x=>({...x,driver:v})),options:driverOptions}]:[]),
