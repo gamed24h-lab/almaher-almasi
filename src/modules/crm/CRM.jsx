@@ -4,6 +4,8 @@ import {api} from '../../lib/api.js';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,PageHeader,Select,Table,Textarea} from '../../components/UI.jsx';
 import {dateTime,statusLabel,tripDisplay} from '../../lib/format.js';
+import SmartListFilters from '../../components/SmartListFilters.jsx';
+import {matchesListQuery} from '../../lib/listFilters.js';
 
 const s=v=>String(v??'');
 const low=v=>s(v).toLowerCase();
@@ -12,11 +14,13 @@ const ticketStatusTone=v=>['resolved','closed','done'].includes(low(v))?'green':
 export default function CRM(){
  const {data:app}=useAppData();
  const [data,setData]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[modal,setModal]=useState(null),[tab,setTab]=useState('tickets');
+ const [listFilter,setListFilter]=useState({q:'',status:'',priority:'',branch:'',source:''});
  async function load(){setError('');try{setData(await api.module('crm'))}catch(e){setError(e.message)}}
  useEffect(()=>{load()},[]);
  const bookings=app.bookings||[],trips=app.trips||[],branches=app.branches||[];
  const bmap=useMemo(()=>new Map(bookings.map(b=>[s(b.id),b])),[bookings]);
  const tmap=useMemo(()=>new Map(trips.map(t=>[s(t.id),t])),[trips]);
+ const branchMap=useMemo(()=>new Map(branches.map(b=>[s(b.id),b.name||b.branch_name||b.id])),[branches]);
  const tickets=data?.service_tickets||[],tasks=data?.tasks||[],leads=data?.leads||[];
  const complaints=useMemo(()=>tickets.filter(x=>low(x.category)==='complaint'),[tickets]);
  const recovery=useMemo(()=>tasks.filter(x=>low(x.entity_type)==='post_trip_rating'||/service recovery|تقييم منخفض/i.test(s(x.title))),[tasks]);
@@ -50,12 +54,29 @@ export default function CRM(){
  const tabs=[['tickets','تذاكر الخدمة',tickets.length],['complaints','الشكاوى',complaints.length],['recovery','استعادة رضا العميل',recovery.length],['leads','العملاء المحتملون',leads.length]];
  const rows=tab==='tickets'?tickets:tab==='complaints'?complaints:tab==='recovery'?recovery:leads;
  const cols=tab==='recovery'?recoveryCols:tab==='leads'?leadCols:ticketCols;
+ const statusOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.status).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
+ const priorityOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.priority).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
+ const sourceOptions=useMemo(()=>[...new Set(rows.map(r=>s(r.source_channel||r.source).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:statusLabel(v)})),[rows]);
+ const branchOptions=useMemo(()=>branches.map(b=>({value:s(b.id),label:b.name||b.branch_name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
+ const filteredRows=useMemo(()=>rows.filter(r=>{
+  if(listFilter.status&&s(r.status)!==listFilter.status)return false;
+  if(listFilter.priority&&s(r.priority)!==listFilter.priority)return false;
+  if(listFilter.branch&&s(r.branch_id)!==listFilter.branch)return false;
+  if(listFilter.source&&s(r.source_channel||r.source)!==listFilter.source)return false;
+  const b=bmap.get(s(r.booking_id)),t=tmap.get(s(b?.trip_id));
+  return matchesListQuery(listFilter.q,r.ticket_no,r.subject,r.description,r.category,r.priority,r.status,r.assigned_to,r.title,r.name,r.phone,r.email,r.source_channel,r.source,r.reason,b?.booking_number,b?.customer_name,b?.customer_phone,t?.trip_code,branchMap.get(s(r.branch_id||b?.branch_id)));
+ }),[rows,listFilter,bmap,tmap,branchMap]);
  return <>
   <PageHeader title="CRM وخدمة العملاء" subtitle="الشكاوى، التقييمات، استعادة رضا العميل والمتابعة بعد الرحلة" actions={<><Button onClick={load}><RefreshCw size={16}/> تحديث</Button><Button onClick={()=>setModal('rating')}><Star size={16}/> تقييم بعد الرحلة</Button><Button variant="primary" onClick={()=>setModal('complaint')}><MessageSquarePlus size={16}/> تسجيل شكوى</Button></>}/>
   <ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#ecfdf3',color:'#166534',borderColor:'#bbf7d0'}}>{notice}</div>}
   <div className="stats-grid"><Mini icon={<TicketCheck/>} label="تذاكر مفتوحة" value={openTickets}/><Mini icon={<AlertTriangle/>} label="شكاوى" value={complaints.length}/><Mini icon={<UsersRound/>} label="متابعات رضا العميل" value={openRecovery}/><Mini icon={<CheckCircle2/>} label="مغلقة/محلولة" value={tickets.length-openTickets}/></div>
-  <div className="tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>setTab(k)}>{l}<span>{n}</span></button>)}</div>
-  {!data&&!error?<Loading/>:<Card><Table rows={rows} columns={cols}/></Card>}
+  <div className="tabs">{tabs.map(([k,l,n])=><button key={k} className={tab===k?'active':''} onClick={()=>{setTab(k);setListFilter({q:'',status:'',priority:'',branch:'',source:''})}}>{l}<span>{n}</span></button>)}</div>
+  {!data&&!error?<Loading/>:<Card><SmartListFilters storageKey={`crm-${tab}-filters`} search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالعميل أو الجوال أو الحجز أو الموضوع أو المسؤول..." totalCount={rows.length} resultCount={filteredRows.length} onReset={()=>setListFilter({q:'',status:'',priority:'',branch:'',source:''})} filters={[
+   {key:'status',label:'الحالة',value:listFilter.status,onChange:v=>setListFilter(x=>({...x,status:v})),options:statusOptions},
+   ...(tab!=='leads'?[{key:'priority',label:'الأولوية',value:listFilter.priority,onChange:v=>setListFilter(x=>({...x,priority:v})),options:priorityOptions}]:[]),
+   ...((tab==='tickets'||tab==='complaints')?[{key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions}]:[]),
+   ...(tab==='leads'?[{key:'source',label:'المصدر',value:listFilter.source,onChange:v=>setListFilter(x=>({...x,source:v})),options:sourceOptions}]:[])
+  ]}/><Table preferenceKey={`crm-${tab}`} defaultPageSize={25} rows={filteredRows} columns={cols}/></Card>}
   <Modal open={modal==='complaint'} onClose={()=>setModal(null)} title="تسجيل شكوى عميل"><form className="form-grid" onSubmit={createComplaint}><Field label="الحجز"><Select name="booking_id"><option value="">بدون ربط بحجز</option>{bookings.map(b=><option key={b.id} value={b.id}>{b.booking_number} — {b.customer_name||b.name||''}</option>)}</Select></Field><Field label="الأولوية"><Select name="priority" defaultValue="normal"><option value="low">منخفضة</option><option value="normal">عادية</option><option value="high">عالية</option><option value="urgent">عاجلة</option></Select></Field><Field label="موضوع الشكوى"><Input name="subject" required placeholder="مثال: تأخير الانطلاق"/></Field><Field label="المسؤول"><Input name="assigned_to" placeholder="اسم الموظف / الفريق"/></Field><Field label="تفاصيل الشكوى"><Textarea name="description" required/></Field><div className="modal-actions"><Button type="button" onClick={()=>setModal(null)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ...':'فتح تذكرة شكوى'}</Button></div></form></Modal>
   <Modal open={modal==='rating'} onClose={()=>setModal(null)} title="تقييم ما بعد الرحلة" wide><form className="form-grid" onSubmit={submitRating}><Field label="الحجز"><Select name="booking_id" required><option value="">اختر الحجز</option>{bookings.map(b=>{const t=tmap.get(s(b.trip_id));return <option key={b.id} value={b.id}>{b.booking_number} — {b.customer_name||b.name||''}{t?` — ${tripDisplay(t)}`:''}</option>})}</Select></Field><Score name="overall_score" label="التقييم العام"/><Score name="bus_score" label="الباص"/><Score name="driver_score" label="السائق"/><Score name="supervisor_score" label="المشرف"/><Score name="hotel_score" label="الفندق"/><Score name="organization_score" label="التنظيم"/><Score name="booking_score" label="الحجز والخدمة"/><Field label="تعليق العميل"><Textarea name="comment" placeholder="ملاحظات العميل بعد الرحلة..."/></Field><Card><b>قاعدة Service Recovery</b><div className="muted-small">أي تقييم عام 1 أو 2 من 5 يفتح تلقائيًا مهمة متابعة عاجلة داخل CRM حتى يتم التواصل مع العميل وإغلاقها.</div></Card><div className="modal-actions"><Button type="button" onClick={()=>setModal(null)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}><Star size={16}/>{busy?'جاري الحفظ...':'حفظ التقييم'}</Button></div></form></Modal>
  </>;
