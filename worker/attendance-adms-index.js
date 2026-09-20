@@ -144,6 +144,73 @@ async function markAttendanceNotificationsSeen(env,me,body){
  await audit(env,me,'attendance_notifications_seen_bulk','attendance_notification','bulk',branchId||null,null,{count:(rows||[]).length},'تحديد تنبيهات الحضور كمشاهدة');
  return {ok:true,count:(rows||[]).length};
 }
+function cleanEscalationRoles(v){
+ const allowed=new Set(['الموارد البشرية','مدير فرع','مدير عام']);
+ const arr=Array.isArray(v)?v:String(v||'').split(',');return [...new Set(arr.map(x=>txt(x)).filter(x=>allowed.has(x)))];
+}
+function escalationRuleScore(rule,notification){
+ if(!rule?.active)return -1;
+ if(rule.branch_id&&txt(rule.branch_id)!==txt(notification.branch_id))return -1;
+ if(rule.category!=='*'&&txt(rule.category)!==txt(notification.category))return -1;
+ if(rule.severity!=='*'&&txt(rule.severity)!==txt(notification.severity))return -1;
+ return (rule.branch_id?8:0)+(rule.category==='*'?0:4)+(rule.severity==='*'?0:2);
+}
+function selectEscalationRule(rules,notification){
+ return (rules||[]).map(r=>({r,score:escalationRuleScore(r,notification)})).filter(x=>x.score>=0).sort((a,b)=>b.score-a.score||new Date(b.r.updated_at||b.r.created_at||0)-new Date(a.r.updated_at||a.r.created_at||0))[0]?.r||null;
+}
+async function applyAttendanceEscalation(env,notifications,rules){
+ const now=new Date(),nowIso=now.toISOString(),out=[];
+ for(const n0 of notifications||[]){
+  const n={...n0};if(!n.active||n.status==='resolved'){n.next_escalation_at=null;out.push(n);continue}
+  const rule=selectEscalationRule(rules,n);if(!rule){out.push(n);continue}
+  const firstMs=new Date(n.first_seen_at||n.created_at||nowIso).getTime(),ageMin=Math.max(0,(now.getTime()-firstMs)/60000);
+  const levels=[
+   {level:1,minutes:rule.level1_minutes,roles:cleanEscalationRoles(rule.level1_roles)},
+   {level:2,minutes:rule.level2_minutes,roles:cleanEscalationRoles(rule.level2_roles)},
+   {level:3,minutes:rule.level3_minutes,roles:cleanEscalationRoles(rule.level3_roles)}
+  ].filter(x=>x.minutes!=null&&Number.isFinite(Number(x.minutes))&&Number(x.minutes)>=0);
+  let due=0;for(const x of levels)if(ageMin>=Number(x.minutes))due=Math.max(due,x.level);
+  const cumulative=[];for(const x of levels.filter(x=>x.level<=due))for(const role of x.roles)if(!cumulative.includes(role))cumulative.push(role);
+  const next=levels.filter(x=>x.level>due).sort((a,b)=>a.level-b.level)[0]||null,nextAt=next?new Date(firstMs+Number(next.minutes)*60000).toISOString():null;
+  const channels=rule.channels&&typeof rule.channels==='object'&&!Array.isArray(rule.channels)?{in_app:rule.channels.in_app!==false,whatsapp:rule.channels.whatsapp===true,email:rule.channels.email===true}:{in_app:true,whatsapp:false,email:false};
+  const current=Math.max(0,Number(n.escalation_level)||0);
+  if(due>current){
+   for(const x of levels.filter(x=>x.level>current&&x.level<=due)){
+    await rest(env,'attendance_notification_escalation_events?on_conflict=event_key',{method:'POST',body:{event_key:'attendance_escalation:'+n.id+':L'+x.level,notification_id:n.id,escalation_level:x.level,target_roles:x.roles,channels,rule_id:rule.id,summary:'تم تصعيد التنبيه إلى المستوى '+x.level+' — '+(x.roles.join('، ')||'بدون مستلمين')},prefer:'resolution=ignore-duplicates,return=minimal'}).catch(()=>{});
+   }
+  }
+  const changed=due!==current||txt(n.escalation_rule_id)!==txt(rule.id)||JSON.stringify(n.target_roles||[])!==JSON.stringify(cumulative)||JSON.stringify(n.escalation_channels||{})!==JSON.stringify(channels)||txt(n.next_escalation_at)!==txt(nextAt);
+  if(changed){
+   const patch={escalation_level:due,target_roles:cumulative,escalation_channels:channels,escalation_rule_id:rule.id,escalated_at:due>current?nowIso:(n.escalated_at||null),next_escalation_at:nextAt,updated_at:nowIso};
+   await rest(env,'attendance_notifications?id=eq.'+enc(n.id),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{});
+   Object.assign(n,patch);
+  }
+  out.push(n);
+ }
+ return out;
+}
+async function saveAttendanceEscalationRule(env,me,body){
+ if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قواعد تصعيد التنبيهات.'),{status:403});
+ const id=txt(body.id),category=['*','device_health','predictive','linking'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
+ const branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
+ const minute=v=>{if(v===null||v===undefined||v==='')return null;const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(10080,Math.round(n))):null};
+ const l1=minute(body.level1_minutes),l2=minute(body.level2_minutes),l3=minute(body.level3_minutes);
+ if(l2!=null&&l1!=null&&l2<l1)throw Object.assign(new Error('المستوى الثاني يجب أن يكون بعد المستوى الأول.'),{status:400});
+ if(l3!=null&&l2!=null&&l3<l2)throw Object.assign(new Error('المستوى الثالث يجب أن يكون بعد المستوى الثاني.'),{status:400});
+ const channels=body.channels&&typeof body.channels==='object'?{in_app:body.channels.in_app!==false,whatsapp:body.channels.whatsapp===true,email:body.channels.email===true}:{in_app:true,whatsapp:false,email:false};
+ const payload={branch_id:branchId,category,severity,active:body.active!==false,level1_minutes:l1,level2_minutes:l2,level3_minutes:l3,level1_roles:cleanEscalationRoles(body.level1_roles),level2_roles:cleanEscalationRoles(body.level2_roles),level3_roles:cleanEscalationRoles(body.level3_roles),channels,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ let before=null,after=null;
+ if(id){
+  const rows=await rest(env,'attendance_notification_escalation_rules?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)throw Object.assign(new Error('قاعدة التصعيد غير موجودة.'),{status:404});if(!elevated(me)&&txt(row.branch_id)!==actorBranch(me))throw Object.assign(new Error('قاعدة التصعيد خارج نطاق الفرع.'),{status:403});before=row;
+  after=(await rest(env,'attendance_notification_escalation_rules?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ }else{
+  const ruleKey='custom-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  after=(await rest(env,'attendance_notification_escalation_rules',{method:'POST',body:{...payload,rule_key:ruleKey,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
+ }
+ if(!after)throw Object.assign(new Error('تعذر حفظ قاعدة التصعيد.'),{status:500});
+ await audit(env,me,before?'attendance_escalation_rule_update':'attendance_escalation_rule_create','attendance_notification_escalation_rule',after.id,branchId,before,after,txt(body.reason)||'إدارة قواعد تصعيد تنبيهات الحضور');
+ return {ok:true,rule:after};
+}
 function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
  const seen=device?.last_command_poll_at||device?.last_seen_at||null,seenAge=ageSeconds(seen),lastLog=latestLog?.occurred_at||null,lastReceived=latestLog?.received_at||null,logAge=ageSeconds(lastLog);
  const recent=(deviceCommands||[]).slice().sort((x,y)=>Number(y.id||0)-Number(x.id||0)),latestCommand=recent[0]||null,pendingRows=recent.filter(x=>x.status==='queued'||x.status==='sent'),pending=pendingRows.length,stuck=pendingRows.filter(x=>(ageSeconds(x.sent_at||x.updated_at||x.created_at)??0)>15*60).length;
@@ -933,9 +1000,13 @@ async function attendanceState(env,me,url){
   devicePredictiveAlerts.push({device_id:device.id,risk_score:risk,level,tone,label,confidence,primary_type:primary,signals,recommended_action:recommendedAction,recommended_label:recommendedLabel,metrics:{failures_24h:fail24,failures_7d:fail7,failures_previous_7d:failPrev7,outages_7d:outage7,outages_previous_7d:outagePrev7,downtime_7d_seconds:downtime7,availability_30d:hist.availability_pct??null,last_log_age_seconds:logAge},evaluated_at:new Date(nowMs).toISOString()});
  }
  devicePredictiveAlerts.sort((x,y)=>Number(y.risk_score)-Number(x.risk_score)||String(x.device_id).localeCompare(String(y.device_id)));
- const notifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0};
- for(const n of notifications||[]){if(n.status==='new')notificationCounts.new+=1;else if(n.status==='seen')notificationCounts.seen+=1;else if(n.status==='resolved')notificationCounts.resolved+=1;if(n.active){notificationCounts.active+=1;if(n.severity==='critical')notificationCounts.critical+=1}}
- return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const rawNotifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts);
+ const allEscalationRules=await rest(env,'attendance_notification_escalation_rules?select=*&active=eq.true&order=created_at.asc').catch(()=>[]);
+ const escalationRules=(allEscalationRules||[]).filter(r=>!r.branch_id||!branchId||txt(r.branch_id)===txt(branchId));
+ const notifications=await applyAttendanceEscalation(env,rawNotifications,escalationRules),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0,level1:0,level2:0,level3:0};
+ for(const n of notifications||[]){if(n.status==='new')notificationCounts.new+=1;else if(n.status==='seen')notificationCounts.seen+=1;else if(n.status==='resolved')notificationCounts.resolved+=1;if(n.active){notificationCounts.active+=1;if(n.severity==='critical')notificationCounts.critical+=1;if(Number(n.escalation_level)>=1)notificationCounts.level1+=1;if(Number(n.escalation_level)>=2)notificationCounts.level2+=1;if(Number(n.escalation_level)>=3)notificationCounts.level3+=1}}
+ const notificationIds=(notifications||[]).map(x=>x.id).filter(Boolean),escalationEvents=notificationIds.length?await rest(env,'attendance_notification_escalation_events?notification_id=in.('+notificationIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=500').catch(()=>[]):[];
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1043,6 +1114,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
   if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
+  if(action==='save_escalation_rule')return json(await saveAttendanceEscalationRule(env,me,body));
   return json({error:'إجراء غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ عملية الحضور والبصمة'},e.status||500)}
 }
