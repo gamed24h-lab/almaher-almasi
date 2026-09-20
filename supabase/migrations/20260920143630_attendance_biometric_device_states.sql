@@ -37,3 +37,15 @@ create index if not exists attendance_biometric_device_states_branch_idx
 alter table public.attendance_biometric_device_states enable row level security;
 revoke all on table public.attendance_biometric_device_states from anon, authenticated;
 grant select, insert, update, delete on table public.attendance_biometric_device_states to service_role;
+
+
+insert into public.attendance_biometric_device_states
+(device_id,attendance_employee_id,branch_id,device_pin,biometric_type,biometric_key,finger_code,slot_no,status,last_seen_at,last_result_code,data_environment,metadata,created_at,updated_at)
+select
+ p.source_device_id,p.attendance_employee_id,p.branch_id,p.device_pin,p.biometric_type,p.biometric_key,p.finger_code,p.slot_no,p.status,
+ coalesce(p.last_sync_at,p.last_enrolled_at,p.updated_at),p.last_result_code,p.data_environment,
+ jsonb_build_object('source','profile_backfill','raw_template_stored',false),
+ p.created_at,p.updated_at
+from public.attendance_biometric_profiles p
+where p.source_device_id is not null and nullif(trim(p.device_pin),'') is not null
+on conflict (device_id,attendance_employee_id,biometric_key,data_environment) do nothing;
