@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft,Fingerprint,BarChart3,UserCog,Plus,ScanLine,Hotel,Armchair,ShieldCheck,LayoutDashboard} from 'lucide-react';
+import {BusFront,ClipboardList,Users,WalletCards,AlertTriangle,ArrowLeft,Fingerprint,BarChart3,UserCog,Plus,ScanLine,Hotel,Armchair,ShieldCheck,LayoutDashboard,CheckSquare2} from 'lucide-react';
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {useLanguage} from '../../core/LanguageContext.jsx';
@@ -47,6 +47,7 @@ export default function Dashboard({go}){
  const canFinance=has(user,'finance')||has(user,'payments')||has(user,'expenses')||has(user,'reports');
  const canAttendance=['attendance_view','attendance_reports','attendance_manage_employees','attendance_review_violations','attendance_close_month'].some(k=>has(user,k));
  const canStaff=has(user,'manageUsers')||has(user,'managePermissions');
+ const canActions=['tasks','approvals','approval_requests','refunds','refund_view','refund_approve','refund_complete','attendance_review_violations','attendance_close_month','managePermissions'].some(k=>has(user,k));
  const profile=roleProfile(user,labels,t);
 
  const quick=useMemo(()=>{
@@ -59,10 +60,11 @@ export default function Dashboard({go}){
   if(has(user,'scanner'))a.push({label:'QR والصعود',path:'/scanner',Icon:ScanLine});
   if(canFinance)a.push({label:'المالية',path:'/finance',Icon:WalletCards});
   if(canAttendance)a.push({label:'الحضور والبصمة',path:'/attendance',Icon:Fingerprint});
+  if(canActions)a.push({label:'مركز الإجراءات',path:'/workflow',Icon:CheckSquare2});
   if(canStaff)a.push({label:'الموظفون والصلاحيات',path:'/staff',Icon:UserCog});
   if(has(user,'reports'))a.push({label:'التقارير',path:'/reports',Icon:BarChart3});
   return a.slice(0,8);
- },[user,canBookings,canTrips,canFinance,canAttendance,canStaff]);
+ },[user,canBookings,canTrips,canFinance,canAttendance,canStaff,canActions]);
 
  if(loading&&!data.scope)return <Loading/>;
  const title=language==='ar'?profile.title:(labels.dashboard_title||t('dashboardTitle'));
