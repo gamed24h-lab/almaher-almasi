@@ -842,7 +842,44 @@ async function attendanceState(env,me,url){
   const availability=Math.max(0,Math.min(100,((periodSeconds-downtime)/periodSeconds)*100));
   return {device_id:device.id,period_days:Math.max(1,Math.ceil(periodSeconds/86400)),availability_pct:Number(availability.toFixed(2)),outage_count:outages,downtime_seconds:downtime,current_outage_seconds:currentOutageSeconds,command_failures:failures,last_event_at:events?.[0]?.started_at||null};
  });
- return {ok:true,devices,deviceHealth,deviceHealthHistory,healthEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const historySummaryMap=new Map(deviceHealthHistory.map(x=>[String(x.device_id),x])),dayMs=86400000,devicePredictiveAlerts=[];
+ for(const device of devices||[]){
+  if(device.status!=='active')continue;
+  const id=String(device.id),health=healthMap.get(id)||{},hist=historySummaryMap.get(id)||{},events=eventsMap.get(id)||[],profile=device?.metadata?.history_profile||{};
+  const expectedCompatibilityFailure=ev=>ev.event_type==='command_failed'&&Number(ev.result_code)===-3&&profile.preferred_mode==='push_replay'&&txt(ev?.metadata?.command_type)==='history_attlog';
+  const operationalFailures=events.filter(ev=>ev.event_type==='command_failed'&&!expectedCompatibilityFailure(ev));
+  const gaps=events.filter(ev=>ev.event_type==='disconnect_gap');
+  const inWindow=(ev,from,to=nowMs)=>{const t=new Date(ev.started_at).getTime();return Number.isFinite(t)&&t>=from&&t<to};
+  const fail24=operationalFailures.filter(ev=>inWindow(ev,nowMs-dayMs)).length;
+  const fail7=operationalFailures.filter(ev=>inWindow(ev,nowMs-7*dayMs)).length;
+  const failPrev7=operationalFailures.filter(ev=>inWindow(ev,nowMs-14*dayMs,nowMs-7*dayMs)).length;
+  const outage7=gaps.filter(ev=>inWindow(ev,nowMs-7*dayMs)).length;
+  const outagePrev7=gaps.filter(ev=>inWindow(ev,nowMs-14*dayMs,nowMs-7*dayMs)).length;
+  const downtime7=gaps.filter(ev=>inWindow(ev,nowMs-7*dayMs)).reduce((n,ev)=>n+Math.max(0,Number(ev.duration_seconds)||0),0);
+  const logAge=ageSeconds(health.last_log_at),createdAge=ageSeconds(device.created_at),signals=[];let risk=0,primary='watch',recommendedAction='diagnose',recommendedLabel='تشخيص الآن';
+  if(Number(health.stuck_commands)>0){risk+=40;primary='stuck_commands';signals.push(String(health.stuck_commands)+' أمر معلق لأكثر من 15 دقيقة.')}
+  if(fail24>=3){risk+=45;primary='repeated_failures';signals.push(fail24+' أوامر تشغيلية فشلت خلال آخر 24 ساعة.')}
+  else if(fail24>=2){risk+=28;primary='repeated_failures';signals.push('تكرر فشل الأوامر مرتين خلال آخر 24 ساعة.')}
+  else if(fail7>=3){risk+=20;signals.push(fail7+' حالات فشل تشغيلية خلال آخر 7 أيام.')}
+  if(fail7>=2&&fail7>failPrev7){risk+=10;signals.push('معدل فشل الأوامر أعلى من الأسبوع السابق.')}
+  if(outage7>=3){risk+=38;if(primary==='watch')primary='connection_flapping';recommendedAction='health_log';recommendedLabel='عرض سجل الاتصال';signals.push(outage7+' انقطاعات اتصال خلال آخر 7 أيام.')}
+  else if(outage7>=2){risk+=22;if(primary==='watch')primary='connection_flapping';recommendedAction='health_log';recommendedLabel='عرض سجل الاتصال';signals.push('اتصال الجهاز تذبذب أكثر من مرة خلال الأسبوع.')}
+  if(outage7>=2&&outage7>outagePrev7){risk+=10;signals.push('عدد الانقطاعات ارتفع مقارنة بالأسبوع السابق.')}
+  if(downtime7>=2*3600){risk+=15;signals.push('إجمالي الانقطاع خلال 7 أيام تجاوز ساعتين.')}
+  if(health.connection==='online'&&health.last_log_at&&logAge!=null&&logAge>72*3600){risk+=35;primary='stalled_attlog';recommendedAction='diagnose';recommendedLabel='فحص تدفق البصمات';signals.push('الجهاز Online لكن لا توجد بصمات جديدة منذ أكثر من 72 ساعة.')}
+  else if(health.connection==='online'&&health.last_log_at&&logAge!=null&&logAge>36*3600){risk+=18;if(primary==='watch')primary='stalled_attlog';recommendedAction='diagnose';recommendedLabel='فحص تدفق البصمات';signals.push('تدفق البصمات هادئ لأكثر من 36 ساعة رغم اتصال الجهاز.')}
+  else if(health.connection==='online'&&!health.last_log_at&&createdAge!=null&&createdAge>24*3600){risk+=25;primary='no_attlog';recommendedAction='diagnose';recommendedLabel='فحص استقبال البصمات';signals.push('الجهاز متصل منذ أكثر من يوم ولم تصل منه أي حركة حضور.')}
+  if(Number(hist.availability_pct)<99){risk+=25;signals.push('اعتمادية الاتصال خلال 30 يوم أقل من 99%.')}
+  else if(Number(hist.availability_pct)<99.8){risk+=10;signals.push('اعتمادية الاتصال خلال 30 يوم بدأت تنخفض عن المستوى المعتاد.')}
+  if(Number(health.score)<70){risk+=20;signals.push('درجة صحة الجهاز الحالية منخفضة.')}
+  else if(Number(health.score)<85){risk+=8}
+  risk=Math.max(0,Math.min(100,risk));
+  if(risk<20)continue;
+  const level=risk>=60?'high':risk>=35?'medium':'watch',tone=level==='high'?'red':level==='medium'?'orange':'blue',label=level==='high'?'خطر مرتفع':level==='medium'?'يحتاج متابعة مبكرة':'مراقبة مبكرة',confidence=(fail24>=2||outage7>=2||Number(health.stuck_commands)>0)?'high':'medium';
+  devicePredictiveAlerts.push({device_id:device.id,risk_score:risk,level,tone,label,confidence,primary_type:primary,signals,recommended_action:recommendedAction,recommended_label:recommendedLabel,metrics:{failures_24h:fail24,failures_7d:fail7,failures_previous_7d:failPrev7,outages_7d:outage7,outages_previous_7d:outagePrev7,downtime_7d_seconds:downtime7,availability_30d:hist.availability_pct??null,last_log_age_seconds:logAge},evaluated_at:new Date(nowMs).toISOString()});
+ }
+ devicePredictiveAlerts.sort((x,y)=>Number(y.risk_score)-Number(x.risk_score)||String(x.device_id).localeCompare(String(y.device_id)));
+ return {ok:true,devices,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
