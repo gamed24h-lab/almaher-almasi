@@ -232,6 +232,16 @@ export default {
   async fetch(request,env,ctx){
     const url=new URL(request.url);
     if(url.pathname==='/api/audit'&&request.method==='GET')return auditList(request,env);
+    if(url.pathname==='/api/audit/query'&&request.method==='POST'){
+      const body=await request.clone().json().catch(()=>({}));
+      const u=new URL('/api/audit',request.url);
+      const ids=Array.isArray(body?.entity_ids)?body.entity_ids.map(txt).filter(Boolean):[];
+      if(ids.length)u.searchParams.set('entity_ids',ids.join(','));
+      if(body?.entity_id)u.searchParams.set('entity_id',txt(body.entity_id));
+      if(body?.entity_type)u.searchParams.set('entity_type',txt(body.entity_type));
+      if(body?.limit)u.searchParams.set('limit',String(body.limit));
+      return auditList(new Request(u,{method:'GET',headers:request.headers}),env);
+    }
 
     let actor=null,descriptor=null,detailedSpec=null,beforeMap=new Map();
     if(request.method!=='GET'&&['/api/admin','/api/module','/api/mega','/api/platform'].includes(url.pathname)){
