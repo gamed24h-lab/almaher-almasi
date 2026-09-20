@@ -14,7 +14,7 @@ function fmtDate(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar
 function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(v)),m=Object.fromEntries(p.map(x=>[x.type,x.value]));return m.year+'-'+m.month+'-'+m.day}catch{return ''}}
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
-export default function Attendance(){
+export default function Attendance({initialTab=''}){
  const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],employees:[],shiftPeriods:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
@@ -36,7 +36,8 @@ export default function Attendance(){
   ...(state.permissions?.reports?[{id:'reports',label:'التقارير والمخالفات',icon:BarChart3}]:[]),
   ...(state.permissions?.manage_policies?[{id:'policies',label:'السياسات',icon:SlidersHorizontal}]:[])
  ],[employees.length,devices.length,unlinked,state.permissions?.reports,state.permissions?.manage_policies]);
- const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,'overview');
+ const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,initialTab||'overview');
+ useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,tabs.length]);
 
  function addDevice(){setDeviceForm({...blankDevice});setDeviceOpen(true)}
  function editDevice(row){setDeviceForm({...blankDevice,...row,branch_id:row.branch_id||'',reason:''});setDeviceOpen(true)}
