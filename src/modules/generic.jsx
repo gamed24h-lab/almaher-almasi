@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {RefreshCw,Plus,Pencil} from 'lucide-react';
+import {RefreshCw,Plus,Pencil,Eye} from 'lucide-react';
 import {api} from '../lib/api.js';
 import {Card,PageHeader,Button,Loading,ErrorBox,Table,Modal,Field,Input,Textarea,Select} from '../components/UI.jsx';
 import {statusLabel} from '../lib/format.js';
@@ -10,11 +10,11 @@ const DEFAULT_LABELS={
 const VALUE_LABELS={walkin:'زيارة فرع',whatsapp:'واتساب',phone:'اتصال',website:'الموقع',referral:'ترشيح',campaign:'حملة',booking:'حجز',housing:'تسكين',transport:'نقل',payment:'دفع',complaint:'شكوى',other:'أخرى'};
 const displayValue=(key,v)=>{if(v===null||v===undefined||v==='')return '—';if(typeof v==='object')return JSON.stringify(v);const s=String(v);if(key==='status'||key==='priority')return statusLabel(s);return VALUE_LABELS[s.toLowerCase()]||s};
 
-export default function GenericModule({title,subtitle,resource,tabs,defaultTable}){
+export default function GenericModule({title,subtitle,resource,tabs,defaultTable,go}){
  const [data,setData]=useState(null),[table,setTable]=useState(defaultTable||tabs?.[0]?.table),[error,setError]=useState(''),[open,setOpen]=useState(false),[editing,setEditing]=useState(null),[busy,setBusy]=useState(false);
  async function load(){setError('');setData(null);try{setData(await api.module(resource))}catch(e){setError(e.message)}}useEffect(()=>{load()},[resource]);
  const active=tabs?.find(x=>x.table===table)||tabs?.[0];const rows=data?.[table]||[];
- const columns=useMemo(()=>{const preferred=active?.columns||[];const cols=preferred.map(k=>({key:k,label:active?.labels?.[k]||DEFAULT_LABELS[k]||k.replaceAll('_',' '),render:r=>displayValue(k,r[k])}));if(active?.writable)cols.push({key:'__edit',label:'',render:r=><Button onClick={e=>{e.stopPropagation();setEditing(r);setOpen(true)}}><Pencil size={14}/> تعديل</Button>});return cols},[active]);
+ const columns=useMemo(()=>{const preferred=active?.columns||[];const cols=preferred.map(k=>({key:k,label:active?.labels?.[k]||DEFAULT_LABELS[k]||k.replaceAll('_',' '),render:r=>displayValue(k,r[k])}));if(active?.writable||active?.detailPath)cols.push({key:'__actions',label:'',render:r=><div className="finance-actions">{active?.detailPath&&go&&<Button onClick={e=>{e.stopPropagation();const p=typeof active.detailPath==='function'?active.detailPath(r):active.detailPath;if(p)go(p)}}><Eye size={14}/> فتح 360</Button>}{active?.writable&&<Button onClick={e=>{e.stopPropagation();setEditing(r);setOpen(true)}}><Pencil size={14}/> تعديل</Button>}</div>});return cols},[active,go]);
  function add(){setEditing(null);setOpen(true);setError('')}
  async function save(e){e.preventDefault();setBusy(true);setError('');const f=Object.fromEntries(new FormData(e.currentTarget));let row={};for(const [k,v] of Object.entries(f)){if(k==='json')continue;const cfg=(active?.fields||[]).find(x=>x.name===k);if(cfg?.type==='number')row[k]=v===''?null:Number(v);else if(cfg?.type==='checkbox')row[k]=v==='on'||v==='true';else row[k]=v===''&&cfg?.nullable?null:v}if(f.json){try{row={...row,...JSON.parse(f.json)}}catch{setBusy(false);setError('JSON غير صالح');return}}try{if(editing?.id)await api.moduleWrite({action:'update',table,id:editing.id,row});else await api.moduleWrite({action:'insert',table,row});setOpen(false);setEditing(null);await load()}catch(e2){setError(e2.message)}finally{setBusy(false)}}
  return <><PageHeader title={title} subtitle={subtitle} actions={<><Button onClick={load}><RefreshCw size={16}/> تحديث</Button>{active?.writable&&<Button variant="primary" onClick={add}><Plus size={16}/> إضافة</Button>}</>}/><ErrorBox error={error}/>{tabs&&<div className="tabs">{tabs.map(t=><button key={t.table} onClick={()=>{setTable(t.table);setEditing(null)}} className={table===t.table?'active':''}>{t.label}<span>{data?.[t.table]?.length??0}</span></button>)}</div>}{!data&&!error?<Loading/>:<Card>{data?._missing_tables?.includes(table)?<div className="empty">الجدول المطلوب غير موجود في قاعدة البيانات الحالية.</div>:<Table rows={rows} columns={columns}/>}</Card>}
