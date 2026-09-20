@@ -3,7 +3,7 @@ import {Plus,Search,RefreshCw,FilterX,Ticket,RotateCcw,MessageCircle,Pencil,User
 import {useAppData} from '../../core/AppDataContext.jsx';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
-import {Card,Button,Table,Input,Badge,Select,Modal} from '../../components/UI.jsx';
+import {Card,Button,Table,Input,Badge,Select,Modal,SavedViews} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
 import {money,statusLabel,journeyLabel,tripDisplay,phoneWa} from '../../lib/format.js';
 import {has} from '../../lib/permissions.js';
@@ -60,6 +60,7 @@ export default function Bookings({go,query=''}){
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:bookings',moduleTabs,query?'bookings':'overview');
  useEffect(()=>{if(query)setActiveTab('bookings')},[query]);
  function clear(){setQ('');setStatus('active');setTripId('');setBranchId('');setFinancial('all');setSort('newest')}
+ function applySavedView(v={}){setQ(v.q||'');setStatus(v.status||'active');setTripId(v.tripId||'');setBranchId(v.branchId||'');setFinancial(v.financial||'all');setSort(v.sort||'newest');setActiveTab('bookings')}
  async function refreshAll(){await refresh();await loadRefundSummary()}
  function wa(b,e){e.stopPropagation();const href=`https://wa.me/${phoneWa(b.customer_phone)}?text=${encodeURIComponent(`شركة الماهر الماسي\nرقم الحجز: ${b.booking_number}\nالعميل: ${b.customer_name||''}`)}`;window.open(href,'_blank')}
  async function openTimeline(b,e){e?.stopPropagation();setTimeline({booking:b,events:[]});setTimelineBusy(true);setTimelineError('');try{const out=await api.bookingTimeline(b.booking_number);setTimeline({booking:out.booking||b,events:out.events||[],count:out.count||0})}catch(x){setTimelineError(x.message)}finally{setTimelineBusy(false)}}
@@ -88,9 +89,10 @@ export default function Bookings({go,query=''}){
     <Select value={branchId} onChange={e=>setBranchId(e.target.value)}><option value="">كل الفروع المتاحة</option>{(data.branches||[]).map(b=><option key={b.id} value={b.id}>{b.name||b.branch_name}</option>)}</Select>
     <Select value={sort} onChange={e=>setSort(e.target.value)}><option value="newest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option><option value="remaining">الأعلى متبقيًا</option></Select>
     <Button onClick={clear}><FilterX size={16}/> مسح الفلاتر</Button>
+    <SavedViews storageKey="bookings-register" current={{q,status,tripId,branchId,financial,sort}} onApply={applySavedView}/>
    </div>
    <div className="table-summary"><span>الحجوزات: <b>{rows.length}</b></span><span><UsersRound size={14}/> المسافرون: <b>{totals.passengers}</b></span><span>الإجمالي: <b>{money(totals.total)}</b></span><span>التحصيل التاريخي: <b>{money(totals.gross)}</b></span><span>المحصل الصافي: <b>{money(totals.net)}</b></span><span>المسترد: <b>{money(totals.refunded)}</b></span><span>المتبقي: <b>{money(totals.remaining)}</b></span>{totals.credit>0&&<span>رصيد العملاء: <b>{money(totals.credit)}</b></span>}</div>
-   <Table rows={rows} onRow={r=>go('/bookings/'+r.booking_number)} columns={[
+   <Table preferenceKey="bookings-register" defaultPageSize={25} rows={rows} onRow={r=>go('/bookings/'+r.booking_number)} columns={[
     {key:'booking_number',label:'رقم الحجز',render:r=><strong>{r.booking_number}</strong>},
     {key:'customer_name',label:'العميل',render:r=><div><strong>{r.customer_name||'—'}</strong><div className="muted-small">{r.customer_phone||'—'} · {r.customer_nationality||'—'}</div></div>},
     {key:'passengers',label:'المسافرون',render:r=><Badge>{(passengerMap.get(String(r.id))||[]).filter(p=>lower(p.status)!=='cancelled').length}</Badge>},
