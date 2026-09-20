@@ -102,6 +102,7 @@ export const api={
   seatAtomicSilent:(body)=>request('/api/seats/atomic',{method:'POST',body,feedback:false}),
   bookingTimeline:(bookingNo)=>request(`/api/bookings/timeline?bookingNo=${encodeURIComponent(bookingNo)}`),
   auditRecord:(entityIds,{limit=250}={})=>{const ids=(Array.isArray(entityIds)?entityIds:[entityIds]).map(x=>String(x||'').trim()).filter(Boolean);return request('/api/audit/query',{method:'POST',body:{entity_ids:ids,limit},feedback:false})},
+  agent360:(id)=>request(`/api/agents/${encodeURIComponent(id)}/360`),
   bookingRefundSummaries:()=>request('/api/bookings/refund-summaries'),
   autoHouseBooking:(bookingNumber,tripHotelId)=>request('/api/bookings/auto-house',{method:'POST',body:{booking_number:bookingNumber,trip_hotel_id:tripHotelId},feedback:false}),
   customerAccessToken:(bookingNo)=>request(`/api/customer/access-token?bookingNo=${encodeURIComponent(bookingNo)}`),
