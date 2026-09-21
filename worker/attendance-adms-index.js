@@ -1241,6 +1241,23 @@ async function pushEmployeeToDevices(env,me,body){
  await audit(env,me,'attendance_employee_push_to_devices','attendance_employee',employee.id,employee.branch_id,null,{devices:links.map(x=>x.device_id)},'رفع بيانات موظف الحضور إلى أجهزة البصمة');
  return {ok:true,queued:true,count:queued.length};
 }
+async function versionEmployeesAfterShiftTemplateChange(env,me,templateId,effectiveFrom,reason){
+ const linked=await rest(env,'attendance_employee_shift_periods?device_shift_template_id=eq.'+enc(templateId)+'&select=attendance_employee_id&limit=2000').catch(()=>[]),ids=[...new Set((linked||[]).map(x=>txt(x.attendance_employee_id)).filter(Boolean))],updated=[];
+ for(const employeeId of ids){
+  const employee=(await rest(env,'attendance_employees?id=eq.'+enc(employeeId)+'&select=id,branch_id,weekly_off_days,data_environment,name,status&limit=1').catch(()=>[]))?.[0]||null;if(!employee)continue;
+  const mode=employee.data_environment==='production'?'production':'training';
+  await assertAttendanceMonthOpen(env,employee.branch_id,effectiveFrom,effectiveFrom,mode);
+  const periodRows=await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(employee.id)+'&active=eq.true&select=*&order=sequence_no.asc').catch(()=>[]),periods=cleanShiftPeriods(periodRows);
+  await rest(env,'rpc/attendance_set_employee_schedule_version',{method:'POST',body:{
+   p_employee_id:employee.id,p_branch_id:employee.branch_id||null,p_effective_from:effectiveFrom,
+   p_shift_periods:periods,p_weekly_off_days:cleanOffDays(employee.weekly_off_days),p_environment:mode,
+   p_reason:reason||('تعديل فترة جهاز مرتبطة بالموظف ساري من '+effectiveFrom),
+   p_actor:actorId(me)||actorName(me)||null
+  }});
+  updated.push(employee.id);
+ }
+ return updated;
+}
 async function saveDeviceShiftTemplate(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة فترات دوام الجهاز.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
@@ -1252,13 +1269,16 @@ async function saveDeviceShiftTemplate(env,me,body){
   if(!before)throw Object.assign(new Error('فترة الجهاز غير موجودة.'),{status:404});
  }
  const payload={device_id:device.id,name,start_time:start,end_time:end,grace_minutes:grace,sequence_no:Math.max(1,Number(body.sequence_no||1)),active:body.active!==false,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ const scheduleFieldsChanged=!before||['name','start_time','end_time','grace_minutes','sequence_no','active'].some(k=>String(before?.[k]??'')!==String(payload[k]??'')),effectiveFrom=txt(body.schedule_effective_from)||saudiTodayKey();
+ if(scheduleFieldsChanged&&!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom))throw Object.assign(new Error('حدد تاريخ سريان صحيح لتعديل فترة الدوام.'),{status:400});
  let after;
  if(id)after=(await rest(env,'attendance_device_shift_templates?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
  else after=(await rest(env,'attendance_device_shift_templates',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
  if(!after)throw Object.assign(new Error('تعذر حفظ فترة الجهاز.'),{status:500});
- await rest(env,'attendance_employee_shift_periods?device_shift_template_id=eq.'+enc(after.id),{method:'PATCH',body:{label:after.name,start_time:after.start_time,end_time:after.end_time,grace_minutes:after.grace_minutes,source_type:'device_template',updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
- await audit(env,me,id?'attendance_device_shift_update':'attendance_device_shift_create','attendance_device_shift_template',after.id,device.branch_id,before,after,'إدارة فترات دوام الجهاز');
- return {ok:true,template:after};
+ await rest(env,'attendance_employee_shift_periods?device_shift_template_id=eq.'+enc(after.id),{method:'PATCH',body:{label:after.name,start_time:after.start_time,end_time:after.end_time,grace_minutes:after.grace_minutes,sequence_no:after.sequence_no,active:after.active,source_type:'device_template',updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()},prefer:'return=minimal'}).catch(()=>{});
+ const scheduleEmployees=scheduleFieldsChanged?await versionEmployeesAfterShiftTemplateChange(env,me,after.id,effectiveFrom,txt(body.reason)||('تعديل فترة جهاز «'+after.name+'» ساري من '+effectiveFrom)):[];
+ await audit(env,me,id?'attendance_device_shift_update':'attendance_device_shift_create','attendance_device_shift_template',after.id,device.branch_id,before,{...after,schedule_effective_from:scheduleFieldsChanged?effectiveFrom:null,schedule_employees:scheduleEmployees},'إدارة فترات دوام الجهاز');
+ return {ok:true,template:after,schedule_effective_from:scheduleFieldsChanged?effectiveFrom:null,schedule_employees:scheduleEmployees};
 }
 async function deleteDeviceShiftTemplate(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة فترات دوام الجهاز.'),{status:403});
