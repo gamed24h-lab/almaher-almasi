@@ -677,6 +677,63 @@ async function saveAttendanceEscalationRule(env,me,body){
  await audit(env,me,before?'attendance_escalation_rule_update':'attendance_escalation_rule_create','attendance_notification_escalation_rule',after.id,branchId,before,after,txt(body.reason)||'إدارة قواعد تصعيد تنبيهات الحضور');
  return {ok:true,rule:after};
 }
+function clockDriftText(seconds){
+ const n=Math.round(Number(seconds)||0),abs=Math.abs(n),dir=n>0?'متقدمة':'متأخرة';
+ if(abs<120)return 'مضبوطة';
+ if(abs>=3600){const h=abs/3600;return dir+' '+(Math.abs(h-Math.round(h))<0.03?Math.round(h):h.toFixed(1))+' ساعة'}
+ return dir+' '+Math.round(abs/60)+' دقيقة';
+}
+async function hasAttendanceHistoryTransfer(env,device){
+ if(device?.metadata?.force_attlog_replay)return true;
+ const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&command_type=in.(sync_attlog,history_attlog,history_attlog_replay)&select=id&limit=1').catch(()=>[]);
+ return !!rows?.length;
+}
+async function recordDeviceClockSample(env,device,serial,body,source='attlog_live'){
+ if(!device?.id||await hasAttendanceHistoryTransfer(env,device))return null;
+ const serverMs=Date.now(),samples=[];
+ for(const raw of String(body||'').split(/\r?\n/)){const f=raw.trim().split('\t'),rawTime=txt(f[1]),iso=parseSaudiDeviceTime(rawTime);if(!iso)continue;const ms=new Date(iso).getTime();if(!Number.isFinite(ms))continue;samples.push({rawTime,ms,drift:Math.round((ms-serverMs)/1000)})}
+ if(!samples.length)return null;
+ samples.sort((a,b)=>b.ms-a.ms);const sample=samples[0],abs=Math.abs(sample.drift);
+ if(abs>48*3600)return null;
+ const now=new Date(serverMs).toISOString(),prev=device?.metadata?.clock_drift&&typeof device.metadata.clock_drift==='object'?device.metadata.clock_drift:{},prevAge=prev.checked_at?serverMs-new Date(prev.checked_at).getTime():Infinity,consistent=Number.isFinite(Number(prev.drift_seconds))&&prevAge<=24*3600*1000&&Math.abs(Number(prev.drift_seconds)-sample.drift)<=90,count=consistent?Math.max(1,Number(prev.consecutive_consistent)||1)+1:1,confirmed=abs<=120||count>=2,status=abs<=120?'ok':abs<=15*60?'warning':'critical';
+ const clock={drift_seconds:sample.drift,drift_minutes:Math.round(sample.drift/60*10)/10,status,confirmed,consecutive_consistent:count,checked_at:now,source,device_time_raw:sample.rawTime,server_time:now,timezone:device.timezone||'Asia/Riyadh'};
+ const meta={...(device.metadata||{}),clock_drift:clock};
+ await Promise.all([
+  rest(env,'attendance_device_clock_checks',{method:'POST',body:{device_id:device.id,branch_id:device.branch_id||null,serial_number:serial||device.serial_number||null,source,device_time_raw:sample.rawTime,server_time:now,drift_seconds:sample.drift,status,confirmed,sample_count:count,metadata:{timezone:clock.timezone,batch_lines:samples.length}},prefer:'return=minimal'}).catch(()=>{}),
+  rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{})
+ ]);
+ const wasBad=prev.confirmed===true&&Math.abs(Number(prev.drift_seconds)||0)>120;
+ if(confirmed&&abs>120&&(!wasBad||Math.abs((Number(prev.drift_seconds)||0)-sample.drift)>90))await recordDeviceHealthEvent(env,{event_key:'clock_drift:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_drift',severity:abs>15*60?'critical':'warning',status:'open',started_at:now,summary:'ساعة الجهاز '+clockDriftText(sample.drift)+'.',metadata:clock});
+ if(confirmed&&abs<=120&&wasBad)await recordDeviceHealthEvent(env,{event_key:'clock_recovered:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_recovered',severity:'info',status:'closed',started_at:now,ended_at:now,summary:'عادت ساعة الجهاز إلى فرق مقبول عن وقت السيرفر.',metadata:{previous_drift_seconds:prev.drift_seconds,current_drift_seconds:sample.drift}});
+ device.metadata=meta;
+ return clock;
+}
+async function probeDeviceClock(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لفحص ساعة جهاز البصمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.clock_probe&status=in.(queued,sent)&select=id&limit=1').catch(()=>[]);
+ if(pending?.length)return {ok:true,queued:false,command_id:pending[0].id,message:'يوجد فحص للساعة قيد التنفيذ بالفعل.'};
+ const created=await queueCommands(env,device,me,[{type:'clock_probe',command:'GET OPTIONS DateTime,ServerTZ',metadata:{clock_probe:true,requested_at:new Date().toISOString()}}]);
+ await audit(env,me,'attendance_device_clock_probe','attendance_device',device.id,device.branch_id,null,{command_id:created?.[0]?.id||null},'فحص وقت الجهاز والمنطقة الزمنية');
+ return {ok:true,queued:true,command_id:created?.[0]?.id||null,message:'تم إرسال طلب قراءة ساعة الجهاز والمنطقة الزمنية.'};
+}
+async function handleClockOptionsPayload(env,device,url,body){
+ const type=lower(url.searchParams.get('type'));if(type!=='options')return false;
+ const info=parseDeviceInfo(body),dateTime=txt(info.datetime),serverTz=txt(info.servertz),now=new Date().toISOString(),meta={...(device.metadata||{})},probe={checked_at:now,datetime:dateTime||null,server_tz:serverTz||null,raw:String(body||'').slice(0,2000),datetime_mode:/^\d{9,12}$/.test(dateTime)?'unix':/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(dateTime)?'text':'unknown'};
+ meta.clock_probe=probe;await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.clock_probe&status=in.(queued,sent,success)&select=id&order=id.desc&limit=1').catch(()=>[]),cmd=pending?.[0];
+ if(cmd?.id)await rest(env,'attendance_device_commands?id=eq.'+enc(cmd.id),{method:'PATCH',body:{status:'success',result_code:0,result_body:String(body||'').slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ return true;
+}
+async function syncDeviceClock(env,me,body){
+ if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لمزامنة ساعة جهاز البصمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const probe=device?.metadata?.clock_probe||{};if(probe.datetime_mode!=='unix')throw Object.assign(new Error('لن يتم تعديل الساعة تلقائيًا قبل تأكيد صيغة الوقت التي يدعمها هذا الجهاز. شغّل «فحص الساعة» أولًا.'),{status:409});
+ const nowUnix=Math.floor(Date.now()/1000),command='SET OPTIONS DateTime='+nowUnix+',ServerTZ=+0300',created=await queueCommands(env,device,me,[{type:'clock_sync',command,metadata:{clock_sync:true,server_tz:'+0300',unix_time:nowUnix,requested_at:new Date().toISOString()}}]);
+ await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:created?.[0]?.id||null,server_tz:'+0300'},'مزامنة ساعة جهاز البصمة مع وقت السيرفر والمنطقة الزمنية');
+ return {ok:true,queued:true,command_id:created?.[0]?.id||null,message:'تم تجهيز مزامنة الساعة. سيتم التحقق تلقائيًا من أول حركة جديدة.'};
+}
+
 function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
  const seen=device?.last_command_poll_at||device?.last_seen_at||null,seenAge=ageSeconds(seen),lastLog=latestLog?.occurred_at||null,lastReceived=latestLog?.received_at||null,logAge=ageSeconds(lastLog);
  const recent=(deviceCommands||[]).slice().sort((x,y)=>Number(y.id||0)-Number(x.id||0)),latestCommand=recent[0]||null,pendingRows=recent.filter(x=>x.status==='queued'||x.status==='sent'),pending=pendingRows.length,stuck=pendingRows.filter(x=>(ageSeconds(x.sent_at||x.updated_at||x.created_at)??0)>15*60).length;
@@ -691,18 +748,21 @@ function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0
  if(stuck>0){severity=Math.max(severity,2);if(severity<3){label='يحتاج متابعة';tone='orange'}score-=15;issues.push(String(stuck)+' أمر معلق منذ أكثر من 15 دقيقة.')}
  if(Number(unlinkedCount)>0){severity=Math.max(severity,1);if(severity<3){label='يحتاج متابعة';tone='orange'}score-=10;issues.push(String(unlinkedCount)+(unlinkedTruncated?'+':'')+' حركة تحتاج ربط موظف.')}
  if(device?.metadata?.force_attlog_replay){severity=Math.max(severity,1);if(severity<3){label='جاري معالجة';tone='orange'}score-=5;issues.push('إعادة إرسال سجل الحضور التاريخي قيد التنفيذ.')}
+ const clock=device?.metadata?.clock_drift||{},clockSec=Number(clock.drift_seconds),clockConfirmed=clock.confirmed===true&&Number.isFinite(clockSec),clockBad=clockConfirmed&&Math.abs(clockSec)>120;
+ if(clockBad){const clockSeverity=Math.abs(clockSec)>15*60?3:2;severity=Math.max(severity,clockSeverity);if(connection!=='offline'){label=clockSeverity>=3?'خلل في الساعة':'يحتاج ضبط الساعة';tone=clockSeverity>=3?'red':'orange'}score-=clockSeverity>=3?35:20;issues.push('ساعة الجهاز '+clockDriftText(clockSec)+' مقارنة بوقت السيرفر.')}
  if(!lastLog){severity=Math.max(severity,1);if(severity<3){label='يحتاج متابعة';tone='orange'}score-=15;issues.push('لم يستقبل النظام أي حركة حضور من هذا الجهاز حتى الآن.')}
  else if(logAge!=null&&logAge>72*3600){severity=Math.max(severity,1);if(severity<3){label='يحتاج متابعة';tone='orange'}score-=10;issues.push('لا توجد حركة حضور جديدة منذ أكثر من 72 ساعة.')}
  score=Math.max(0,Math.min(100,score));
  const compat=profile.preferred_mode==='push_replay'?'push_replay':profile.preferred_mode==='data_query'?'data_query':'auto';
  let recommended_action=null,recommended_label=null;
  if(device?.status==='active'&&connection!=='offline'){
-  if(Number(unlinkedCount)>0){recommended_action='links';recommended_label='مراجعة الربط'}
+  if(clockBad){recommended_action='clock';recommended_label='فحص / مزامنة الساعة'}
+  else if(Number(unlinkedCount)>0){recommended_action='links';recommended_label='مراجعة الربط'}
   else if(latestCommand?.status==='failed'&&latestCommandAge!=null&&latestCommandAge<=3600){recommended_action='diagnose';recommended_label='إعادة التشخيص'}
   else if(!lastLog||(logAge!=null&&logAge>72*3600)){recommended_action='history';recommended_label=compat==='push_replay'?'إعادة إرسال الحركات':'استيراد الحركات القديمة'}
   else if(severity>0){recommended_action='diagnose';recommended_label='تشخيص الجهاز'}
  }
- return {device_id:device?.id||null,severity,tone,label,score,connection,connection_age_seconds:seenAge,last_seen_at:seen,last_log_at:lastLog,last_received_at:lastReceived,unlinked_count:Number(unlinkedCount)||0,unlinked_truncated:!!unlinkedTruncated,pending_commands:pending,stuck_commands:stuck,last_command_type:latestCommand?.command_type||null,last_command_status:latestCommand?.status||null,last_command_at:latestCommand?.completed_at||latestCommand?.updated_at||latestCommand?.created_at||null,last_command_code:latestCommand?.result_code??null,compatibility_mode:compat,compatibility_strategy:profile.preferred_strategy||null,recommended_action,recommended_label,issues};
+ return {device_id:device?.id||null,severity,tone,label,score,connection,connection_age_seconds:seenAge,last_seen_at:seen,last_log_at:lastLog,last_received_at:lastReceived,unlinked_count:Number(unlinkedCount)||0,unlinked_truncated:!!unlinkedTruncated,pending_commands:pending,stuck_commands:stuck,last_command_type:latestCommand?.command_type||null,last_command_status:latestCommand?.status||null,last_command_at:latestCommand?.completed_at||latestCommand?.updated_at||latestCommand?.created_at||null,last_command_code:latestCommand?.result_code??null,compatibility_mode:compat,compatibility_strategy:profile.preferred_strategy||null,clock_drift_seconds:clockConfirmed?clockSec:null,clock_drift_minutes:clockConfirmed?Math.round(clockSec/60*10)/10:null,clock_status:clockConfirmed?(clockBad?(Math.abs(clockSec)>15*60?'critical':'warning'):'ok'):'unknown',clock_confirmed:clockConfirmed,clock_checked_at:clock.checked_at||null,recommended_action,recommended_label,issues};
 }
 async function updateDeviceInfoFromInfoCommand(env,cmd,raw,rc){
  if(!cmd?.device_id||!['sync_info','diagnostic_info'].includes(cmd.command_type))return;
