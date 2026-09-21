@@ -101,6 +101,7 @@ async function reconcileAttendanceNotifications(env,devices,deviceHealth,deviceP
   if(h.connection==='offline')add({notification_key:'device_offline:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'device_health',severity:'critical',title:'جهاز البصمة غير متصل — '+d.name,message:'لم يصل اتصال حديث من الجهاز خلال آخر 30 دقيقة.',metadata:{type:'offline',health_score:h.score,last_seen_at:h.last_seen_at}});
   if(Number(h.stuck_commands)>0)add({notification_key:'stuck_commands:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'device_health',severity:'critical',title:'أوامر معلقة على جهاز البصمة — '+d.name,message:String(h.stuck_commands)+' أمر/أوامر معلقة لأكثر من 15 دقيقة.',metadata:{type:'stuck_commands',count:Number(h.stuck_commands),health_score:h.score}});
   if(Number(h.unlinked_count)>0)add({notification_key:'unlinked_movements:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'linking',severity:'warning',title:'حركات بصمة تحتاج ربط — '+d.name,message:String(h.unlinked_count)+(h.unlinked_truncated?'+':'')+' حركة تحتاج ربط موظف.',metadata:{type:'unlinked_movements',count:Number(h.unlinked_count),truncated:!!h.unlinked_truncated}});
+  if(h.clock_confirmed&&Math.abs(Number(h.clock_drift_seconds)||0)>120)add({notification_key:'device_clock_drift:'+d.id,device_id:d.id,branch_id:d.branch_id||null,category:'device_health',severity:Math.abs(Number(h.clock_drift_seconds))>15*60?'critical':'warning',title:'ساعة جهاز البصمة غير مضبوطة — '+d.name,message:'ساعة الجهاز '+clockDriftText(h.clock_drift_seconds)+' مقارنة بوقت السيرفر.',metadata:{type:'clock_drift',drift_seconds:h.clock_drift_seconds,drift_minutes:h.clock_drift_minutes,checked_at:h.clock_checked_at}});
  }
  for(const p of devicePredictiveAlerts||[]){
   const d=deviceMap.get(String(p.device_id));if(!d)continue;
@@ -934,10 +935,17 @@ async function admsRequest(request,env){
    await completeDeviceCommand(env,body);
    return plain('OK');
  }
+ if(request.method==='POST'&&url.pathname==='/iclock/querydata'){
+   const body=await request.text();
+   await touchDevice(env,device,request,url).catch(()=>{});
+   if(await handleClockOptionsPayload(env,device,url,body))return plain('OK');
+   return plain('OK');
+ }
  if(request.method==='POST'&&url.pathname==='/iclock/cdata'){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
    if(table==='ATTLOG'){
+    await recordDeviceClockSample(env,device,serial,body,'attlog_live').catch(()=>null);
     const n=await storeAttendanceLogs(env,device,serial,request,body);
     if(n){
      await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');
@@ -1578,12 +1586,13 @@ async function attendanceState(env,me,url){
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
  const historySince=new Date(Date.now()-90*86400000).toISOString();
- const [deviceUsers,commands,deviceShiftTemplates,healthEvents]=deviceIds.length?await Promise.all([
+ const [deviceUsers,commands,deviceShiftTemplates,healthEvents,clockChecks]=deviceIds.length?await Promise.all([
    rest(env,'attendance_device_users?select=id,device_id,serial_number,device_pin,name,privilege,card_number,group_no,timezone_raw,verify_mode,data_environment,source_table,first_seen_at,last_seen_at'+inFilter+'&order=device_pin.asc'),
    rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,result_body,command_text,metadata,created_at,sent_at,completed_at,updated_at'+inFilter+'&order=id.desc&limit=100'),
    rest(env,'attendance_device_shift_templates?select=*&active=eq.true'+inFilter+'&order=device_id.asc,sequence_no.asc,name.asc'),
-   rest(env,'attendance_device_health_events?select=id,event_key,device_id,branch_id,event_type,severity,status,started_at,ended_at,duration_seconds,command_id,result_code,summary,metadata,created_at'+inFilter+'&started_at=gte.'+enc(historySince)+'&order=started_at.desc&limit=1000').catch(()=>[])
- ]):[[],[],[],[]];
+   rest(env,'attendance_device_health_events?select=id,event_key,device_id,branch_id,event_type,severity,status,started_at,ended_at,duration_seconds,command_id,result_code,summary,metadata,created_at'+inFilter+'&started_at=gte.'+enc(historySince)+'&order=started_at.desc&limit=1000').catch(()=>[]),
+   rest(env,'attendance_device_clock_checks?select=id,device_id,branch_id,serial_number,source,device_time_raw,server_time,drift_seconds,status,confirmed,sample_count,metadata,created_at'+inFilter+'&order=created_at.desc&limit=500').catch(()=>[])
+ ]):[[],[],[],[],[]];
  const latestDeviceLogs=deviceIds.length?await Promise.all(deviceIds.map(async id=>({device_id:id,row:(await rest(env,'attendance_raw_logs?device_id=eq.'+enc(id)+'&select=occurred_at,received_at&order=occurred_at.desc&limit=1').catch(()=>[]))?.[0]||null}))):[];
  const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
  const unlinkedMap=new Map();
@@ -1703,7 +1712,7 @@ async function attendanceState(env,me,url){
  const biometricDeviceStates=await rest(env,'attendance_biometric_device_states?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricInventory=await rest(env,'attendance_biometric_inventory?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -2228,6 +2237,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='diagnose_device')return json(await diagnoseDevice(env,me,body));
   if(action==='diagnose_all_devices')return json(await diagnoseAllDevices(env,me,body));
+  if(action==='probe_device_clock')return json(await probeDeviceClock(env,me,body));
+  if(action==='sync_device_clock')return json(await syncDeviceClock(env,me,body));
   if(action==='preview_device_user_matches')return json(await deviceUserMatchPreview(env,me,body));
   if(action==='apply_device_user_matches')return json(await applyDeviceUserMatches(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
