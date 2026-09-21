@@ -28,6 +28,21 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
   {key:'page-partners',kind:'صفحة',title:'الوكلاء والموردون',sub:'إدارة الشركاء والوكلاء',path:'/partners',Icon:Handshake,show:has(user,'agents')||has(user,'suppliers')||has(user,'finance')},
   {key:'page-branches',kind:'صفحة',title:'الفروع',sub:'إدارة الفروع وبياناتها',path:'/branches',Icon:Building2,show:has(user,'manageBranches')}
  ].filter(x=>x.show),[user]);
+ const smartCommands=useMemo(()=>{
+  const query=q.trim();if(!query)return[];
+  const out=[],branches=safeArray(data.branches);
+  const branch=branches.find(b=>matchesListQuery(query,b.name,b.branch_name,b.city));
+  const bid=branch?.id?encodeURIComponent(branch.id):'';
+  const add=(key,title,sub,path,Icon=Search)=>out.push({key:'smart-'+key,kind:'أمر ذكي',title,sub,path,Icon});
+  const hasWord=(...words)=>words.some(w=>matchesListQuery(query,w));
+  if((hasWord('حجوزات','الحجوزات','حجز'))&&branch&&(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking')))add('bookings-branch','حجوزات '+(branch.name||branch.branch_name),'فتح سجل الحجوزات مفلترًا على الفرع',`/bookings?branch=${bid}`,ClipboardList);
+  if(hasWord('غير مسددة','غير مسدد','متبقي','جزئي')&&(has(user,'viewBookings')||has(user,'finance')))add('bookings-unpaid','الحجوزات غير المسددة','فتح الحجوزات غير المسددة أو المسددة جزئيًا','/bookings?financial=unpaid',ClipboardList);
+  if(hasWord('رحلات اليوم','رحلة اليوم')&&(has(user,'trips')||has(user,'operations')))add('trips-today','رحلات اليوم','فتح الرحلات والبحث بتاريخ اليوم','/trips?date='+new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}),BusFront);
+  if(hasWord('رحلات','الرحلات')&&branch&&(has(user,'trips')||has(user,'operations')))add('trips-branch','رحلات '+(branch.name||branch.branch_name),'فتح الرحلات مفلترة على الفرع',`/trips?branch=${bid}`,BusFront);
+  if(hasWord('موظفين','الموظفين','موظفي')&&branch&&(has(user,'manageUsers')||has(user,'managePermissions')))add('staff-branch','موظفو '+(branch.name||branch.branch_name),'فتح حسابات الموظفين مفلترة على الفرع',`/staff?tab=accounts&branch=${bid}`,UserRoundCog);
+  if(hasWord('بصمة','الحضور','حضور')&&(has(user,'attendance_view')||has(user,'attendance_manage_employees')))add('attendance','الحضور والبصمة','فتح مركز الحضور والبصمة','/attendance',UserRoundCog);
+  return out;
+ },[q,data.branches,user]);
  const records=useMemo(()=>{
   const out=[];
   if(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking'))for(const b of safeArray(data.bookings))out.push({key:'booking-'+b.id,kind:'حجز',title:b.booking_number||b.booking_no||'حجز',sub:[b.customer_name,b.customer_phone,b.status].filter(Boolean).join(' · '),search:[b.booking_number,b.booking_no,b.customer_name,b.customer_phone,b.customer_identity,b.customer_nationality,b.status],path:'/bookings/'+encodeURIComponent(b.booking_number||b.booking_no||b.id),Icon:ClipboardList});
@@ -44,8 +59,8 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
   if(!query)return pageCommands.slice(0,8);
   const pages=pageCommands.filter(x=>matchesListQuery(query,x.title,x.sub,x.kind));
   const rows=records.filter(x=>matchesListQuery(query,x.title,x.sub,x.search,x.kind));
-  return [...pages,...rows].slice(0,24);
- },[q,pageCommands,records]);
+  return [...smartCommands,...pages,...rows].slice(0,24);
+ },[q,pageCommands,records,smartCommands]);
  useEffect(()=>{setActive(0)},[q]);
  if(!open)return null;
  const choose=item=>{if(!item)return;const next=[{key:item.key,title:item.title,sub:item.sub,path:item.path,kind:item.kind},...recent.filter(x=>x.key!==item.key)].slice(0,6);setRecent(next);writeRecent(next);onClose();go(item.path)};
