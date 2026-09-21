@@ -340,6 +340,16 @@ async function retryAttendanceDelivery(env,me,body){
  return {ok:true,delivery:after};
 }
 
+async function autoSyncDriftedDeviceClocks(env,state,systemActor){
+ const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,errors=0;
+ for(const h of health){
+  const drift=Number(h?.clock_drift_seconds),fresh=ageSeconds(h?.clock_checked_at);
+  if(h?.clock_confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||h.connection==='offline'||fresh==null||fresh>6*3600)continue;
+  const device=map.get(String(h.device_id));if(!device||device.status!=='active')continue;
+  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else errors+=1}
+ }
+ return {queued,skipped,errors};
+}
 async function runAttendanceWatchdog(env,source='scheduled'){
  const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env);
  const runRows=await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source,status:'running',runtime_mode:mode,started_at:startedIso,created_at:startedIso},prefer:'return=representation'}).catch(()=>[]);
@@ -347,9 +357,10 @@ async function runAttendanceWatchdog(env,source='scheduled'){
  try{
   const systemActor={id:'system:attendance-watchdog',name:'Attendance Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}};
   const state=await attendanceState(env,systemActor,new URL('https://attendance-watchdog.internal/api/attendance'));
+  const clockSync=await autoSyncDriftedDeviceClocks(env,state,systemActor);
   const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),activeNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved').length,criticalNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&x.severity==='critical').length,activeEscalations=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&Number(x.escalation_level)>0).length;
-  const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
-  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0)}},prefer:'return=minimal'}).catch(()=>{});
+  const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
+  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0),clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors}},prefer:'return=minimal'}).catch(()=>{});
   if(source==='scheduled'&&startedAt.getUTCMinutes()<5){const cutoff=new Date(startedAt.getTime()-30*86400000).toISOString();await rest(env,'attendance_watchdog_runs?started_at=lt.'+enc(cutoff),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{})}
   return summary;
  }catch(e){
@@ -736,7 +747,18 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
  if(abs>48*3600)return null;
  const now=new Date(serverMs).toISOString(),prev=device?.metadata?.clock_drift&&typeof device.metadata.clock_drift==='object'?device.metadata.clock_drift:{},prevAge=prev.checked_at?serverMs-new Date(prev.checked_at).getTime():Infinity,consistent=Number.isFinite(Number(prev.drift_seconds))&&prevAge<=24*3600*1000&&Math.abs(Number(prev.drift_seconds)-sample.drift)<=90,count=consistent?Math.max(1,Number(prev.consecutive_consistent)||1)+1:1,confirmed=abs<=120||count>=2,status=abs<=120?'ok':abs<=15*60?'warning':'critical';
  const clock={drift_seconds:sample.drift,drift_minutes:Math.round(sample.drift/60*10)/10,status,confirmed,consecutive_consistent:count,checked_at:now,source,device_time_raw:sample.rawTime,server_time:now,timezone:device.timezone||'Asia/Riyadh'};
- const meta={...(device.metadata||{}),clock_drift:clock};
+ const meta={...(device.metadata||{}),clock_drift:clock},lastSync=meta.last_clock_sync&&typeof meta.last_clock_sync==='object'?meta.last_clock_sync:null;
+ if(lastSync?.awaiting_verification){
+  const acceptedMs=new Date(lastSync.accepted_at||lastSync.requested_at||0).getTime();
+  if(Number.isFinite(acceptedMs)&&serverMs>=acceptedMs-5000){
+   const verificationSamples=Math.max(0,Number(lastSync.verification_samples)||0)+1;
+   if(abs<=120){
+    meta.last_clock_sync={...lastSync,status:'verified',awaiting_verification:false,verification_samples:verificationSamples,verified_at:now,verified_drift_seconds:sample.drift,verified_device_time_raw:sample.rawTime};
+   }else{
+    meta.last_clock_sync={...lastSync,status:'accepted_unverified',awaiting_verification:true,verification_samples:verificationSamples,last_verification_at:now,last_verification_drift_seconds:sample.drift,last_verification_device_time_raw:sample.rawTime};
+   }
+  }
+ }
  await Promise.all([
   rest(env,'attendance_device_clock_checks',{method:'POST',body:{device_id:device.id,branch_id:device.branch_id||null,serial_number:serial||device.serial_number||null,source,device_time_raw:sample.rawTime,server_time:now,drift_seconds:sample.drift,status,confirmed,sample_count:count,metadata:{timezone:clock.timezone,batch_lines:samples.length}},prefer:'return=minimal'}).catch(()=>{}),
   rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{})
@@ -744,6 +766,7 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
  const wasBad=prev.confirmed===true&&Math.abs(Number(prev.drift_seconds)||0)>120;
  if(confirmed&&abs>120&&(!wasBad||Math.abs((Number(prev.drift_seconds)||0)-sample.drift)>90))await recordDeviceHealthEvent(env,{event_key:'clock_drift:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_drift',severity:abs>15*60?'critical':'warning',status:'open',started_at:now,summary:'ساعة الجهاز '+clockDriftText(sample.drift)+'.',metadata:clock});
  if(confirmed&&abs<=120&&wasBad)await recordDeviceHealthEvent(env,{event_key:'clock_recovered:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_recovered',severity:'info',status:'closed',started_at:now,ended_at:now,summary:'عادت ساعة الجهاز إلى فرق مقبول عن وقت السيرفر.',metadata:{previous_drift_seconds:prev.drift_seconds,current_drift_seconds:sample.drift}});
+ if(meta.last_clock_sync?.status==='verified'&&lastSync?.status!=='verified')await recordDeviceHealthEvent(env,{event_key:'clock_sync_verified:'+String(meta.last_clock_sync.command_id||now),device_id:device.id,branch_id:device.branch_id,event_type:'clock_sync_verified',severity:'info',status:'closed',started_at:now,ended_at:now,command_id:meta.last_clock_sync.command_id||null,result_code:0,summary:'تم التحقق من مزامنة ساعة الجهاز فعليًا من حركة Live جديدة.',metadata:{drift_seconds:sample.drift,device_time_raw:sample.rawTime}});
  device.metadata=meta;
  return clock;
 }
@@ -900,7 +923,7 @@ async function completeDeviceCommand(env,body){
   const now=new Date().toISOString();
   const rows=await rest(env,'attendance_device_commands?id=eq.'+enc(id),{method:'PATCH',body:{status:rc===0?'success':'failed',result_code:rc,result_body:line.slice(0,2000),completed_at:now,updated_at:now},prefer:'return=representation'}).catch(()=>[]);
   const cmd=rows?.[0];
-  if(cmd&&rc!==0)await recordDeviceHealthEvent(env,{event_key:'command_failed:'+cmd.id,device_id:cmd.device_id,branch_id:null,event_type:'command_failed',severity:['history_attlog','history_attlog_replay','sync_attlog','sync_users','diagnostic_info'].includes(cmd.command_type)?'warning':'info',started_at:now,ended_at:now,duration_seconds:0,command_id:cmd.id,result_code:rc,summary:'فشل أمر '+cmd.command_type+(rc!=null?' (Code '+rc+')':''),metadata:{command_type:cmd.command_type,history_strategy:cmd?.metadata?.history_strategy||null}});
+  if(cmd&&rc!==0)await recordDeviceHealthEvent(env,{event_key:'command_failed:'+cmd.id,device_id:cmd.device_id,branch_id:null,event_type:'command_failed',severity:['history_attlog','history_attlog_replay','sync_attlog','sync_users','diagnostic_info','clock_sync'].includes(cmd.command_type)?'warning':'info',started_at:now,ended_at:now,duration_seconds:0,command_id:cmd.id,result_code:rc,summary:'فشل أمر '+cmd.command_type+(rc!=null?' (Code '+rc+')':''),metadata:{command_type:cmd.command_type,history_strategy:cmd?.metadata?.history_strategy||null}});
   if(cmd&&['sync_info','diagnostic_info'].includes(cmd.command_type))await updateDeviceInfoFromInfoCommand(env,cmd,raw,rc).catch(()=>{});
   if(cmd?.command_type==='clock_sync')await updateClockSyncResult(env,cmd,rc,line).catch(()=>{});
   if(cmd?.command_type==='history_attlog'&&rc===0){
