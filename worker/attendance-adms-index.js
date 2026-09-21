@@ -2330,7 +2330,7 @@ async function resolveLinkIdentityReview(env,me,body){
   p_actor:actorValue,p_environment:device.data_environment||'training',p_review_until:reviewUntil
  }}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر حفظ قرار المراجعة.'),{status:409})});
  const after=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=*&limit=1').catch(()=>[]))?.[0]||link;
- await rest(env,'attendance_self_service_biometric_requests?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&status=eq.pending',{method:'PATCH',body:{status:'approved',resolved_at:new Date().toISOString(),resolved_by:actorId(me)||actorName(me)||null,resolution_note:'تمت معالجة طلب الموظف من Review Wizard: '+resolution},prefer:'return=minimal'}).catch(()=>{});
+ if(resolution!=='snooze')await rest(env,'attendance_self_service_biometric_requests?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&status=eq.pending',{method:'PATCH',body:{status:resolution==='relink'?'approved':'rejected',resolved_at:new Date().toISOString(),resolved_by:actorId(me)||actorName(me)||null,resolution_note:resolution==='relink'?'تم اعتماد تصحيح الموظف وإعادة الربط':'تمت مراجعة طلب الموظف وتأكيد أن الربط الحالي صحيح'},prefer:'return=minimal'}).catch(()=>{});
  await audit(env,me,'attendance_link_identity_review','attendance_employee_link',link.id,device.branch_id,link,{...after,identity_review:{resolution,reason,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,device_user_name:deviceUser?.name||null}},reason).catch(()=>{});
  return {
   ok:true,resolution,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,
@@ -2395,6 +2395,7 @@ async function employeeSelfServiceStatus(env,me){
    continue;
   }
   if(link?.attendance_employee_id||otherPin&&txt(otherPin)!==txt(u.device_pin))continue;
+  if(!bios.length)continue;
   if(bios.some(x=>x.attendance_employee_id&&txt(x.attendance_employee_id)!==txt(employee.id)))continue;
   safeCandidates.push({device_id:u.device_id,device_name:deviceMap.get(txt(u.device_id))?.name||'جهاز بصمة',device_pin:u.device_pin,device_user_name:u.name||null,match_score:match.score,match_reasons:match.reasons,biometric_count:bios.length});
  }
@@ -2402,6 +2403,7 @@ async function employeeSelfServiceStatus(env,me){
 }
 async function bindEmployeeSelfService(env,me,body){
  const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
+ if(!account.branch_id)throw Object.assign(new Error('حسابك غير مرتبط بفرع. اطلب من الإدارة تحديد فرع الحساب أولًا.'),{status:409});
  const mode=account.account_mode==='production'?'production':accountMode(me),code=txt(body.employee_code).toUpperCase();
  if(!code)throw Object.assign(new Error('أدخل الكود الوظيفي الموجود في ملف الحضور.'),{status:400});
  const already=await selfServiceEmployee(env,account,mode);if(already)return {ok:true,bound:true,employee:{id:already.id,name:already.name,employee_code:already.employee_code},message:'حسابك مربوط بملف الحضور بالفعل.'};
