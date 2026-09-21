@@ -340,6 +340,17 @@ async function retryAttendanceDelivery(env,me,body){
  return {ok:true,delivery:after};
 }
 
+async function runDeviceClockSyncWatchdog(env){
+ const mode=await runtimeMode(env),systemActor={id:'system:clock-watchdog',name:'Clock Sync Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}},devices=await rest(env,'attendance_devices?status=eq.active&select=*&order=created_at.asc').catch(()=>[]);
+ let queued=0,skipped=0,errors=0,eligible=0;
+ for(const device of devices||[]){
+  const clock=device?.metadata?.clock_drift||{},drift=Number(clock.drift_seconds),fresh=ageSeconds(clock.checked_at),seenAge=ageSeconds(device.last_command_poll_at||device.last_seen_at);
+  if(clock.confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||fresh==null||fresh>6*3600||seenAge==null||seenAge>1800)continue;
+  eligible+=1;
+  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else errors+=1}
+ }
+ return {ok:true,devices:(devices||[]).length,eligible,queued,skipped,errors,checked_at:new Date().toISOString()};
+}
 async function autoSyncDriftedDeviceClocks(env,state,systemActor){
  const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,errors=0;
  for(const h of health){
@@ -2408,6 +2419,7 @@ async function attendanceApi(request,env,ctx){
 export default {
  async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname.startsWith('/iclock/'))return admsRequest(request,env);if(url.pathname==='/api/attendance')return attendanceApi(request,env,ctx);return appWorker.fetch(request,env,ctx)},
  async scheduled(controller,env,ctx){
+  await runDeviceClockSyncWatchdog(env).catch(()=>({ok:false}));
   const inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
   await Promise.all([inherited,runAttendanceWatchdog(env,'scheduled')]);
  }
