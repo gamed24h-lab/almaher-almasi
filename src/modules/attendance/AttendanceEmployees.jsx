@@ -10,14 +10,14 @@ import AttendanceBiometrics from './AttendanceBiometrics.jsx';
 const DAYS=[['0','الأحد'],['1','الاثنين'],['2','الثلاثاء'],['3','الأربعاء'],['4','الخميس'],['5','الجمعة'],['6','السبت']];
 const ALL_DAYS=[0,1,2,3,4,5,6];
 const defaultPeriod=()=>({label:'فترة مخصصة',start_time:'08:00',end_time:'17:00',grace_minutes:10,device_shift_template_id:'',source_type:'custom',weekdays:[...ALL_DAYS]});
-const blank={id:'',employee_code:'',name:'',branch_id:'',phone:'',national_id:'',department:'',job_title:'',staff_user_id:'',weekly_off_days:[5],status:'active',data_environment:'training',notes:'',reason:'',shift_periods:[defaultPeriod()]};
+const blank={id:'',employee_code:'',name:'',branch_id:'',phone:'',national_id:'',department:'',job_title:'',staff_user_id:'',weekly_off_days:[5],status:'active',data_environment:'training',notes:'',reason:'',schedule_effective_from:today(),shift_periods:[defaultPeriod()]};
 function today(){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}catch{return new Date().toISOString().slice(0,10)}}
 const blankRule=()=>({id:'',rule_type:'leave',label:'',start_date:today(),end_date:today(),start_time:'08:00',end_time:'17:00',grace_minutes:10,notes:'',reason:''});
 const ruleLabel=t=>t==='leave'?'إجازة':t==='permission'?'استئذان':t==='overtime'?'عمل إضافي':t==='work_override'?'دوام مؤقت':t==='off'?'راحة / إجازة إضافية':t||'—';
 const ruleTone=t=>t==='leave'||t==='off'?'blue':t==='overtime'?'green':t==='permission'?'orange':'blue';
 
 export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
- const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[];
+ const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],scheduleVersions=state.scheduleVersions||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[];
  const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState('');
  const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false);
  const deleteTimer=useRef(null);
@@ -64,7 +64,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   return()=>clearTimeout(deleteTimer.current);
  },[deleteWatching,deleteRequests,deleteMap,onChanged]);
 
- function add(){setForm({...blank,branch_id:state.scope?.branch_id||branches[0]?.id||'',data_environment:state.scope?.environment||'training',shift_periods:[defaultPeriod()]});setOpen(true)}
+ function add(){setForm({...blank,branch_id:state.scope?.branch_id||branches[0]?.id||'',data_environment:state.scope?.environment||'training',schedule_effective_from:today(),shift_periods:[defaultPeriod()]});setOpen(true)}
  function edit(r){
   const periods=(periodsMap.get(String(r.id))||[]).map((p,i)=>({
    label:p.label||('الفترة '+String(i+1)),
@@ -76,7 +76,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
    weekdays:Array.isArray(p.weekdays)&&p.weekdays.length?p.weekdays.map(Number):[...ALL_DAYS]
   }));
   if(!periods.length&&r.shift_start&&r.shift_end)periods.push({label:'فترة مخصصة',start_time:String(r.shift_start).slice(0,5),end_time:String(r.shift_end).slice(0,5),grace_minutes:Number(r.grace_minutes??10),device_shift_template_id:'',source_type:'custom',weekdays:[...ALL_DAYS]});
-  setForm({...blank,...r,branch_id:r.branch_id||'',staff_user_id:r.staff_user_id||'',weekly_off_days:Array.isArray(r.weekly_off_days)?r.weekly_off_days:[],shift_periods:periods.length?periods:[defaultPeriod()],reason:''});setOpen(true);
+  setForm({...blank,...r,branch_id:r.branch_id||'',staff_user_id:r.staff_user_id||'',weekly_off_days:Array.isArray(r.weekly_off_days)?r.weekly_off_days:[],schedule_effective_from:today(),shift_periods:periods.length?periods:[defaultPeriod()],reason:''});setOpen(true);
  }
  function updatePeriod(i,key,value){
   setForm(x=>({...x,shift_periods:(x.shift_periods||[]).map((p,idx)=>{
@@ -221,12 +221,21 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
    </div>
   </div>
 
+  {form.id&&<div className="field" style={{gridColumn:'1/-1'}}>
+   <span>سجل تغييرات الدوام</span>
+   <div className="finance-actions">
+    {scheduleVersions.filter(v=>String(v.attendance_employee_id)===String(form.id)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,6).map(v=><Badge key={v.id} tone={v.effective_to?'blue':'green'}>{v.effective_from}{v.effective_to?' ← '+v.effective_to:' ← مستمر'}</Badge>)}
+    {!scheduleVersions.some(v=>String(v.attendance_employee_id)===String(form.id))&&<span className="muted-small">لا يوجد تاريخ سابق مسجل بعد.</span>}
+   </div>
+  </div>}
+
+  {form.id&&<Field label="سريان جدول الدوام من تاريخ" hint="لو غيرت مواعيد الدوام، التقارير قبل هذا التاريخ ستستخدم الجدول القديم"><Input type="date" value={form.schedule_effective_from||today()} onChange={e=>setForm(x=>({...x,schedule_effective_from:e.target.value}))} required/></Field>}
   <Field label="الحالة"><Select value={form.status||'active'} onChange={e=>setForm(x=>({...x,status:e.target.value}))}><option value="active">نشط</option><option value="inactive">موقوف</option></Select></Field>
   <Field label="البيئة"><Select value={form.data_environment||'training'} onChange={e=>setForm(x=>({...x,data_environment:e.target.value}))}><option value="training">Training</option><option value="production">Production</option></Select></Field>
   <div className="field" style={{gridColumn:'1/-1'}}><span>الإجازة الأسبوعية</span><div className="finance-actions">{DAYS.map(([v,label])=><label key={v} style={{display:'inline-flex',alignItems:'center',gap:5}}><input type="checkbox" checked={(form.weekly_off_days||[]).includes(Number(v))} onChange={e=>setForm(x=>({...x,weekly_off_days:e.target.checked?[...(x.weekly_off_days||[]),Number(v)]:(x.weekly_off_days||[]).filter(n=>n!==Number(v))}))}/>{label}</label>)}</div></div>
   <Field label="ملاحظات"><Textarea value={form.notes||''} onChange={e=>setForm(x=>({...x,notes:e.target.value}))}/></Field>
   <Field label="سبب التعديل"><Input value={form.reason||''} onChange={e=>setForm(x=>({...x,reason:e.target.value}))} placeholder="اختياري"/></Field>
-  <div className="success-note" style={{gridColumn:'1/-1'}}><UploadCloud size={16}/> عند الحفظ، النظام يحفظ الجدول ويجهّز رفع بيانات الموظف تلقائيًا لكل جهاز مربوط به. قواعد الدوام نفسها تُحسب داخل نظام الماهر.</div>
+  <div className="success-note" style={{gridColumn:'1/-1'}}><UploadCloud size={16}/> عند الحفظ، النظام يحفظ الجدول ويجهّز رفع بيانات الموظف تلقائيًا لكل جهاز مربوط به. إذا تغير الدوام، يُحفظ كنسخة جديدة من تاريخ السريان وتظل التقارير الأقدم على النسخة السابقة.</div>
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ والرفع...':'حفظ ورفع تلقائيًا'}</Button></div>
  </form></Modal>
 
