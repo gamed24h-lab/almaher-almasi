@@ -764,11 +764,14 @@ async function queueClockSync(env,device,me,{source='manual',force=false}={}){
  if(await hasAttendanceHistoryTransfer(env,device))throw Object.assign(new Error('يوجد نقل سجل حضور تاريخي قيد التنفيذ. انتظر اكتماله قبل تعديل ساعة الجهاز.'),{status:409});
  const previous=device?.metadata?.last_clock_sync||{},lastMs=new Date(previous.requested_at||previous.accepted_at||0).getTime();
  if(!force&&Number.isFinite(lastMs)&&Date.now()-lastMs<6*3600000)return {ok:true,queued:false,cooldown:true,command_id:previous.command_id||null,message:'تمت محاولة مزامنة الساعة خلال آخر 6 ساعات؛ لن يكررها النظام تلقائيًا الآن.'};
- const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),created=await queueCommands(env,device,me,[{type:'clock_sync',command:spec.command,metadata:{clock_sync:true,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null}}]),cmd=created?.[0]||null;
- const meta={...(device.metadata||{}),last_clock_sync:{status:'queued',command_id:cmd?.id||null,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null,awaiting_verification:true,verification_samples:0}};
+ const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),group='clock-sync:'+device.id+':'+Date.now(),created=await queueCommands(env,device,me,[
+  {type:'clock_timezone_sync',command:'SET OPTIONS TimeZone=3',operation_group_id:group,metadata:{clock_timezone_sync:true,source,requested_at:requestedAt,timezone:'Asia/Riyadh',offset_hours:3}},
+  {type:'clock_sync',command:spec.command,operation_group_id:group,metadata:{clock_sync:true,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null}}
+ ]),timezoneCmd=created?.find(x=>x.command_type==='clock_timezone_sync')||null,cmd=created?.find(x=>x.command_type==='clock_sync')||null;
+ const meta={...(device.metadata||{}),last_clock_sync:{status:'queued',command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,timezone:'Asia/Riyadh',timezone_offset_hours:3,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null,awaiting_verification:true,verification_samples:0}};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:requestedAt},prefer:'return=minimal'}).catch(()=>{});device.metadata=meta;
  await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:cmd?.id||null,source,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm},source==='auto'?'مزامنة تلقائية لساعة جهاز البصمة':'مزامنة ساعة جهاز البصمة مع وقت السيرفر');
- return {ok:true,queued:true,command_id:cmd?.id||null,encoded_time:spec.encoded,server_tz:spec.serverTz,message:'تم إرسال تحديث الساعة الفعلية للجهاز من السيرفر. سيتم التحقق من النتيجة مع أول حركة Live جديدة.'};
+ return {ok:true,queued:true,command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,encoded_time:spec.encoded,server_tz:spec.serverTz,message:'تم إرسال ضبط المنطقة الزمنية للسعودية ثم تحديث الساعة الفعلية من السيرفر. سيتم التحقق من النتيجة من حركات Live الجديدة.'};
 }
 async function updateClockSyncResult(env,cmd,rc,resultBody){
  if(!cmd?.device_id||cmd.command_type!=='clock_sync')return;
@@ -819,7 +822,9 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
   if(Number.isFinite(acceptedMs)&&serverMs>=acceptedMs-5000){
    const verificationSamples=Math.max(0,Number(lastSync.verification_samples)||0)+1;
    if(abs<=120){
-    meta.last_clock_sync={...lastSync,status:'verified',awaiting_verification:false,verification_samples:verificationSamples,verified_at:now,verified_drift_seconds:sample.drift,verified_device_time_raw:sample.rawTime};
+    meta.last_clock_sync={...lastSync,status:'verified',awaiting_verification:false,verification_samples:verificationSamples,verified_at:now,verified_drift_seconds:sample.drift,verified_device_time_raw:sample.rawTime,failure_reason:null};
+   }else if(verificationSamples>=2){
+    meta.last_clock_sync={...lastSync,status:'verification_failed',awaiting_verification:false,verification_samples:verificationSamples,failed_at:now,failure_reason:'fresh_live_drift_persisted',last_verification_at:now,last_verification_drift_seconds:sample.drift,last_verification_device_time_raw:sample.rawTime};
    }else{
     meta.last_clock_sync={...lastSync,status:'accepted_unverified',awaiting_verification:true,verification_samples:verificationSamples,last_verification_at:now,last_verification_drift_seconds:sample.drift,last_verification_device_time_raw:sample.rawTime};
    }
@@ -833,6 +838,7 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
  if(confirmed&&abs>120&&(!wasBad||Math.abs((Number(prev.drift_seconds)||0)-sample.drift)>90)){await normalizeClockDriftedLogs(env,device,sample.drift,180).catch(()=>null);await recordDeviceHealthEvent(env,{event_key:'clock_drift:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_drift',severity:abs>15*60?'critical':'warning',status:'open',started_at:now,summary:'ساعة الجهاز '+clockDriftText(sample.drift)+'.',metadata:clock})}
  if(confirmed&&abs<=120&&wasBad)await recordDeviceHealthEvent(env,{event_key:'clock_recovered:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_recovered',severity:'info',status:'closed',started_at:now,ended_at:now,summary:'عادت ساعة الجهاز إلى فرق مقبول عن وقت السيرفر.',metadata:{previous_drift_seconds:prev.drift_seconds,current_drift_seconds:sample.drift}});
  if(meta.last_clock_sync?.status==='verified'&&lastSync?.status!=='verified')await recordDeviceHealthEvent(env,{event_key:'clock_sync_verified:'+String(meta.last_clock_sync.command_id||now),device_id:device.id,branch_id:device.branch_id,event_type:'clock_sync_verified',severity:'info',status:'closed',started_at:now,ended_at:now,command_id:meta.last_clock_sync.command_id||null,result_code:0,summary:'تم التحقق من مزامنة ساعة الجهاز فعليًا من حركة Live جديدة.',metadata:{drift_seconds:sample.drift,device_time_raw:sample.rawTime}});
+ if(meta.last_clock_sync?.status==='verification_failed'&&lastSync?.status!=='verification_failed')await recordDeviceHealthEvent(env,{event_key:'clock_sync_verification_failed:'+String(meta.last_clock_sync.command_id||now),device_id:device.id,branch_id:device.branch_id,event_type:'clock_sync_verification_failed',severity:'warning',status:'open',started_at:now,command_id:meta.last_clock_sync.command_id||null,summary:'استلم الجهاز أمر مزامنة الساعة لكن الوقت الفعلي ظل غير صحيح بعد عينتين Live؛ لن يعتبر النظام المزامنة ناجحة.',metadata:{drift_seconds:sample.drift,verification_samples:meta.last_clock_sync.verification_samples,failure_reason:meta.last_clock_sync.failure_reason}});
  device.metadata=meta;
  return clock;
 }
