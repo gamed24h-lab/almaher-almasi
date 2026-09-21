@@ -49,11 +49,12 @@ const permLabel=k=>GENERAL_PERMS.find(x=>x[0]===k)?.[1]||ID_STUDIO_PERMISSIONS.f
 function defaultForm(){return {id:'',name:'',username:'',phone:'',role:'موظف',branch_id:'',status:'نشط',password:'',accountMode:'training',permissions:{},reauthPassword:''}}
 function newStaffId(){try{return `staff-${crypto.randomUUID()}`}catch{return `staff-${Date.now()}-${Math.random().toString(36).slice(2,10)}`}}
 
-export default function Staff({initialTab=''}){
+export default function Staff({initialTab='',branchParam='',query=''}){
  const {user}=useAuth();const {data,refresh}=useAppData();
  const [open,setOpen]=useState(false),[form,setForm]=useState(defaultForm()),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
  const [approvals,setApprovals]=useState([]),[approvalBusy,setApprovalBusy]=useState('');const [review,setReview]=useState(null),[reviewBusy,setReviewBusy]=useState(false);
  const [accountFilter,setAccountFilter]=useState({q:'',branch:'',role:'',mode:'',status:''});
+ useEffect(()=>{if(branchParam||query)setAccountFilter(x=>({...x,branch:branchParam||x.branch,q:query||x.q}))},[branchParam,query]);
  const [approvalFilter,setApprovalFilter]=useState({q:'',requester:''});
  const [reviewFilter,setReviewFilter]=useState({q:'',severity:''});
  const [accountRules,setAccountRules]=useState([]),[accountRuleMode,setAccountRuleMode]=useState('all');
