@@ -13,7 +13,7 @@ export function dateKeyInTimeZone(value,timeZone=DEFAULT_TZ){
  }catch{return raw.slice(0,10)}
 }
 
-function shiftDay(key,days){
+export function shiftDay(key,days){
  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(key||'')))return '';
  const [y,m,d]=key.split('-').map(Number);
  const dt=new Date(Date.UTC(y,m-1,d));
@@ -21,7 +21,7 @@ function shiftDay(key,days){
  return dt.toISOString().slice(0,10);
 }
 
-function startOfWeekSunday(key){
+export function startOfWeekSunday(key){
  const [y,m,d]=key.split('-').map(Number);
  const dt=new Date(Date.UTC(y,m-1,d));
  return shiftDay(key,-dt.getUTCDay());
@@ -31,7 +31,7 @@ function startOfMonth(key){
  return String(key||'').slice(0,7)+'-01';
 }
 
-function endOfMonth(key){
+export function endOfMonth(key){
  const [y,m]=String(key||'').split('-').map(Number);
  if(!y||!m)return '';
  return new Date(Date.UTC(y,m,0)).toISOString().slice(0,10);
@@ -53,6 +53,9 @@ export function dateRangeForPreset(preset,now=new Date(),timeZone=DEFAULT_TZ){
  if(!today)return {from:'',to:''};
  if(preset==='today')return {from:today,to:today};
  if(preset==='yesterday'){const d=shiftDay(today,-1);return {from:d,to:d}}
+ if(preset==='tomorrow'){const d=shiftDay(today,1);return {from:d,to:d}}
+ if(preset==='next_7_days')return {from:today,to:shiftDay(today,6)};
+ if(preset==='next_week'){const thisStart=startOfWeekSunday(today),from=shiftDay(thisStart,7);return {from,to:shiftDay(from,6)}}
  if(preset==='this_week')return {from:startOfWeekSunday(today),to:today};
  if(preset==='last_7_days')return {from:shiftDay(today,-6),to:today};
  if(preset==='this_month')return {from:startOfMonth(today),to:today};

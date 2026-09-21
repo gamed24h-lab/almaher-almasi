@@ -4,6 +4,7 @@ import {useAppData} from '../core/AppDataContext.jsx';
 import {useAuth} from '../core/AuthContext.jsx';
 import {has} from '../lib/permissions.js';
 import {matchesListQuery} from '../lib/listFilters.js';
+import {dateRangeForPreset} from '../lib/dateRangeFilters.js';
 import './global-command-center.css';
 
 const RECENT_KEY='almaher-command-center-recent-v1';
@@ -37,14 +38,14 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
   const hasWord=(...words)=>words.some(w=>matchesListQuery(query,w));
   const wantsBookings=hasWord('حجوزات','الحجوزات','حجز'),wantsTrips=hasWord('رحلات','الرحلات','رحلة'),wantsStaff=hasWord('موظفين','الموظفين','موظفي','موظف');
   const wantsUnpaid=hasWord('غير مسددة','غير مسدد','غير مدفوع','متبقي','جزئي'),wantsPaid=hasWord('مسددة','مسدد بالكامل','مدفوع بالكامل');
-  const wantsToday=hasWord('اليوم','اليومية'),wantsActive=hasWord('النشطين','نشطين','النشطة','نشطة','نشط'),wantsPending=hasWord('معلقة','معلق','قيد المراجعة','بانتظار');
+  const wantsToday=hasWord('اليوم','اليومية'),wantsTomorrow=hasWord('بكرة','غدا','غداً'),wantsLast7=hasWord('آخر 7 أيام','اخر 7 ايام','آخر سبعة أيام'),wantsThisMonth=hasWord('الشهر ده','هذا الشهر','الشهر الحالي'),wantsNextWeek=hasWord('الأسبوع الجاي','الاسبوع الجاي','الأسبوع القادم','الاسبوع القادم'),wantsActive=hasWord('النشطين','نشطين','النشطة','نشطة','نشط'),wantsPending=hasWord('معلقة','معلق','قيد المراجعة','بانتظار');
   if(wantsBookings&&(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking'))){
-   const params=[];if(branch)params.push('branch='+bid);if(wantsUnpaid)params.push('financial=unpaid');else if(wantsPaid)params.push('financial=paid');if(wantsPending)params.push('status=pending');
-   if(params.length)add('bookings-'+params.join('-'),'الحجوزات'+(branch?' · '+branchName:'')+(wantsUnpaid?' · غير مسددة':wantsPaid?' · مسددة':'')+(wantsPending?' · قيد المراجعة':''),'فتح سجل الحجوزات مع تطبيق الفلاتر المطلوبة','/bookings?'+params.join('&'),ClipboardList,[branch&&`الفرع: ${branchName}`,wantsUnpaid?'المالية: غير مسددة':wantsPaid?'المالية: مسددة':'',wantsPending?'الحالة: قيد المراجعة':''].filter(Boolean));
+   const params=[];if(branch)params.push('branch='+bid);if(wantsUnpaid)params.push('financial=unpaid');else if(wantsPaid)params.push('financial=paid');if(wantsPending)params.push('status=pending');let bookingDate='';if(wantsLast7)bookingDate='last_7_days';else if(wantsThisMonth)bookingDate='this_month';else if(wantsToday)bookingDate='today';if(bookingDate){const r=dateRangeForPreset(bookingDate);params.push('datePreset='+bookingDate,'fromDate='+r.from,'toDate='+r.to)}
+   if(params.length)add('bookings-'+params.join('-'),'الحجوزات'+(branch?' · '+branchName:'')+(wantsUnpaid?' · غير مسددة':wantsPaid?' · مسددة':'')+(wantsPending?' · قيد المراجعة':''),'فتح سجل الحجوزات مع تطبيق الفلاتر المطلوبة','/bookings?'+params.join('&'),ClipboardList,[branch&&`الفرع: ${branchName}`,wantsUnpaid?'المالية: غير مسددة':wantsPaid?'المالية: مسددة':'',wantsPending?'الحالة: قيد المراجعة':'',bookingDate==='last_7_days'?'الفترة: آخر 7 أيام':bookingDate==='this_month'?'الفترة: هذا الشهر':bookingDate==='today'?'الفترة: اليوم':''].filter(Boolean));
   }
   if(wantsTrips&&(has(user,'trips')||has(user,'operations'))){
-   const params=[];if(branch)params.push('branch='+bid);if(wantsToday)params.push('date='+new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}));if(wantsActive)params.push('status=active');
-   if(params.length)add('trips-'+params.join('-'),'الرحلات'+(branch?' · '+branchName:'')+(wantsToday?' · اليوم':'')+(wantsActive?' · النشطة':''),'فتح الرحلات مع تطبيق الفلاتر المطلوبة','/trips?'+params.join('&'),BusFront,[branch&&`الفرع: ${branchName}`,wantsToday?'التاريخ: اليوم':'',wantsActive?'الحالة: نشطة':''].filter(Boolean));
+   const params=[];if(branch)params.push('branch='+bid);let tripDate='';if(wantsTomorrow)tripDate='tomorrow';else if(wantsNextWeek)tripDate='next_week';else if(wantsToday)tripDate='today';if(tripDate){const r=dateRangeForPreset(tripDate);params.push('fromDate='+r.from,'toDate='+r.to)}if(wantsActive)params.push('status=active');
+   if(params.length)add('trips-'+params.join('-'),'الرحلات'+(branch?' · '+branchName:'')+(tripDate==='today'?' · اليوم':tripDate==='tomorrow'?' · بكرة':tripDate==='next_week'?' · الأسبوع الجاي':'')+(wantsActive?' · النشطة':''),'فتح الرحلات مع تطبيق الفلاتر المطلوبة','/trips?'+params.join('&'),BusFront,[branch&&`الفرع: ${branchName}`,tripDate==='today'?'التاريخ: اليوم':tripDate==='tomorrow'?'التاريخ: بكرة':tripDate==='next_week'?'الفترة: الأسبوع الجاي':'',wantsActive?'الحالة: نشطة':''].filter(Boolean));
   }
   if(wantsStaff&&branch&&(has(user,'manageUsers')||has(user,'managePermissions'))){
    const params=['tab=accounts','branch='+bid];if(wantsActive)params.push('status=active');
