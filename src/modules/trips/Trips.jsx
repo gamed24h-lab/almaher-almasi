@@ -55,8 +55,11 @@ export default function Trips({go,query='',branchParam='',statusParam='',datePar
    &&(!f.status||String(t.status||'')===f.status)
    &&(!f.from||String(t.from_city||t.origin||'')===f.from)
    &&(!f.to||String(t.to_city||t.destination||'')===f.to)
+   &&(!f.dateFrom||String(t.departure_date||'')>=f.dateFrom)
+   &&(!f.dateTo||String(t.departure_date||'')<=f.dateTo)
+   &&matchesRuleSet(t,listRules,tripRuleFields,listRuleMode)
    &&matchesListQuery(f.q,t.trip_code,t.code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date,t.return_date,t.status,branch?.name,branch?.branch_name);
- });if(listFilter.sort==='nearest')out.sort((a,b)=>String(a.departure_date||'').localeCompare(String(b.departure_date||'')));return limitParam?out.slice(0,Math.max(1,Number(limitParam)||25)):out},[visibleTrips,listFilter,branchMap,limitParam]);
+ });if(listFilter.sort==='nearest')out.sort((a,b)=>String(a.departure_date||'').localeCompare(String(b.departure_date||'')));return limitParam?out.slice(0,Math.max(1,Number(limitParam)||25)):out},[visibleTrips,listFilter,branchMap,limitParam,listRules,tripRuleFields,listRuleMode]);
  const cities=useMemo(()=>{const out=(destinationCatalog.destinations||[]).filter(x=>x.active!==false).map(x=>String(x.city||x.name||'').trim()).filter(Boolean);for(const v of [editing?.from_city,editing?.origin,editing?.to_city,editing?.destination])if(v&&!out.includes(v))out.push(v);return [...new Set(out)]},[destinationCatalog,editing]);
  const activeRoutes=useMemo(()=>(destinationCatalog.routes||[]).filter(x=>x.active!==false),[destinationCatalog]);
  const destinationById=useMemo(()=>new Map((destinationCatalog.destinations||[]).map(x=>[String(x.id),x])),[destinationCatalog]);
