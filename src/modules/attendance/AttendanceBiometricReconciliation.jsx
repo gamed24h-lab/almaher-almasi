@@ -1,4 +1,4 @@
-import React,{useMemo,useState} from 'react';
+import React,{useEffect,useMemo,useState} from 'react';
 import {AlertTriangle,Fingerprint,Link2,RefreshCw,ShieldCheck,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
@@ -24,11 +24,33 @@ const typeLabel=t=>({
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
  const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState(''),[autoBusy,setAutoBusy]=useState(false),[lastAuto,setLastAuto]=useState(null);
  const [reviewOpen,setReviewOpen]=useState(false),[reviewIssue,setReviewIssue]=useState(null),[reviewBusy,setReviewBusy]=useState(false),[reviewForm,setReviewForm]=useState({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''}),[requestBusy,setRequestBusy]=useState('');
- const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[],selfRequests=(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending'),users=state.users||[];
+ const devices=state.devices||[],commands=state.commands||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[],selfRequests=(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending'),users=state.users||[];
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
+ const syncStateByDevice=useMemo(()=>{
+  const out=new Map(),now=Date.now(),graceMs=8*60*1000;
+  for(const d of devices){
+   const did=String(d.id),meta=d.metadata||{},smart=meta.last_smart_sync||{};
+   const smartReq=Date.parse(smart.requested_at||''),directReq=Date.parse(meta.last_biometric_import_requested_at||'');
+   const reqs=[smartReq,directReq].filter(Number.isFinite),latestRequest=reqs.length?Math.max(...reqs):null;
+   const received=Date.parse(meta.last_biometric_import_received_at||'');
+   const expectedCount=Math.max(0,Number(d.reported_fp_count)||0)+Math.max(0,Number(d.reported_face_count)||0);
+   const biometricsRequested=(smart.biometrics_included===true&&Number.isFinite(smartReq))||Number.isFinite(directReq);
+   const pending=commands.some(cmd=>String(cmd.device_id)===did&&['queued','sent'].includes(cmd.status)&&(cmd?.metadata?.smart_sync===true||String(cmd.command_type||'').startsWith('biometric_import_')));
+   const awaitingInventory=biometricsRequested&&expectedCount>0&&Number.isFinite(latestRequest)&&(!Number.isFinite(received)||received<latestRequest);
+   const withinGrace=Number.isFinite(latestRequest)&&(now-latestRequest)<=graceMs;
+   out.set(did,{syncing:pending||(awaitingInventory&&withinGrace),timed_out:awaitingInventory&&!pending&&!withinGrace,awaiting_inventory:awaitingInventory,pending,latest_request:latestRequest,received_at:Number.isFinite(received)?received:null});
+  }
+  return out;
+ },[devices,commands]);
+ const syncingDevices=useMemo(()=>devices.filter(d=>syncStateByDevice.get(String(d.id))?.syncing),[devices,syncStateByDevice]);
+ useEffect(()=>{
+  if(!syncingDevices.length||!onChanged)return;
+  const timer=setTimeout(()=>{Promise.resolve(onChanged()).catch(()=>{})},5000);
+  return ()=>clearTimeout(timer);
+ },[syncingDevices.length,onChanged]);
  const reviewsByDevicePin=useMemo(()=>{const m=new Map();for(const r of reviews){const k=String(r.device_id)+'|'+String(r.device_pin),a=m.get(k)||[];a.push(r);m.set(k,a)}return m},[reviews]);
  const reviewCandidates=useMemo(()=>{
   if(!reviewIssue)return [];
@@ -38,7 +60,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
  },[employees,reviewIssue]);
 
  const issues=useMemo(()=>{
-  const out=[],linkByDevicePin=new Map(),linksByDeviceEmployee=new Map(),statesByDeviceEmployee=new Map(),statesByDevice=new Map(),inventoryByDevice=new Map(),inventoryByDevicePin=new Map(),deviceUsersByDevice=new Map();
+  const out=[],linkByDevicePin=new Map(),linksByDeviceEmployee=new Map(),statesByDeviceEmployee=new Map(),statesByDevice=new Map(),inventoryByDevice=new Map(),inventoryByDevicePin=new Map(),deviceUsersByDevice=new Map(),inventoryReadyByDevice=new Map();
   for(const l of links){
    const pinKey=String(l.device_id)+'|'+String(l.device_pin),arr=linkByDevicePin.get(pinKey)||[];arr.push(l);linkByDevicePin.set(pinKey,arr);
    if(l.attendance_employee_id){const k=String(l.device_id)+'|'+String(l.attendance_employee_id),a=linksByDeviceEmployee.get(k)||[];a.push(l);linksByDeviceEmployee.set(k,a)}
@@ -52,18 +74,19 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
 
   for(const d of devices.filter(x=>x.status==='active')){
    const did=String(d.id),deviceStates=statesByDevice.get(did)||[],deviceInventory=inventoryByDevice.get(did)||[],fps=deviceInventory.filter(x=>x.biometric_type==='finger').length,faces=deviceInventory.filter(x=>x.biometric_type==='face').length;
-   const linked=links.filter(x=>String(x.device_id)===did&&x.attendance_employee_id),reportedFp=Number(d.reported_fp_count),reportedFace=Number(d.reported_face_count);
-   if(Number.isFinite(reportedFp)&&reportedFp>0&&deviceInventory.length===0){
+   const linked=links.filter(x=>String(x.device_id)===did&&x.attendance_employee_id),reportedFp=Number(d.reported_fp_count),reportedFace=Number(d.reported_face_count),syncState=syncStateByDevice.get(did)||{},syncing=!!syncState.syncing;
+   const inventoryReady=(!Number.isFinite(reportedFp)||reportedFp===fps)&&(!Number.isFinite(reportedFace)||reportedFace===faces);inventoryReadyByDevice.set(did,inventoryReady);
+   if(!syncing&&Number.isFinite(reportedFp)&&reportedFp>0&&deviceInventory.length===0){
     out.push({id:'baseline:'+did,type:'baseline_missing',severity:'warning',device_id:d.id,branch_id:d.branch_id,title:'الجهاز لديه بصمات لكن لا يوجد خط أساس داخل النظام',detail:'الجهاز يعلن عن '+reportedFp+' قالب بصمة، ولم يتم سحب Inventory للقوالب من الجهاز حتى الآن.',reported:reportedFp,known:fps,action:'device_scan'});
-   }else if(Number.isFinite(reportedFp)&&reportedFp!==fps){
-    out.push({id:'fp-gap:'+did,type:'count_gap',severity:Math.abs(reportedFp-fps)>=3?'critical':'warning',device_id:d.id,branch_id:d.branch_id,title:'فرق في عدد بصمات الأصابع',detail:'الجهاز يعلن '+reportedFp+' قالب، والـInventory المكتشف من الجهاز '+fps+'.',reported:reportedFp,known:fps,action:'device_scan'});
+   }else if(!syncing&&Number.isFinite(reportedFp)&&reportedFp!==fps){
+    out.push({id:'fp-gap:'+did,type:'count_gap',severity:Math.abs(reportedFp-fps)>=3?'critical':'warning',device_id:d.id,branch_id:d.branch_id,title:syncState.timed_out?'لم يكتمل جرد بصمات الجهاز':'فرق في عدد بصمات الأصابع',detail:syncState.timed_out?'انتهت مهلة انتظار الجرد. الجهاز يعلن '+reportedFp+' قالب، بينما وصل للنظام '+fps+' فقط. أعد فحص الجهاز مرة واحدة.':'الجهاز يعلن '+reportedFp+' قالب، والـInventory المكتشف من الجهاز '+fps+'.',reported:reportedFp,known:fps,action:'device_scan'});
    }
-   if(Number.isFinite(reportedFace)&&reportedFace>0&&reportedFace!==faces){
+   if(!syncing&&Number.isFinite(reportedFace)&&reportedFace>0&&reportedFace!==faces){
     out.push({id:'face-gap:'+did,type:'count_gap',severity:'warning',device_id:d.id,branch_id:d.branch_id,title:'فرق في عدد بصمات الوجه',detail:'الجهاز يعلن '+reportedFace+' وجه، والـInventory المكتشف من الجهاز '+faces+'.',reported:reportedFace,known:faces,action:'device_scan'});
    }
    for(const l of linked){
     const key=did+'|'+String(l.attendance_employee_id),bio=statesByDeviceEmployee.get(key)||[];
-    if(!bio.length){
+    if(!bio.length&&inventoryReady){
      const emp=employeeMap.get(String(l.attendance_employee_id));
      out.push({id:'missing:'+did+':'+l.attendance_employee_id,type:'missing_employee_biometric',severity:'warning',device_id:d.id,branch_id:l.branch_id||d.branch_id,attendance_employee_id:l.attendance_employee_id,device_pin:l.device_pin,title:'موظف مربوط بدون بصمة مكتشفة',detail:(emp?.name||l.display_name||'الموظف')+' مربوط على PIN '+l.device_pin+' لكن لم تُكتشف له بصمة على هذا الجهاز.',action:'employee_scan'});
     }
@@ -108,13 +131,13 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
 
   for(const s of states){
    const key=String(s.device_id)+'|'+String(s.device_pin),pinLinks=linkByDevicePin.get(key)||[],same=pinLinks.some(l=>String(l.attendance_employee_id)===String(s.attendance_employee_id));
-   if(!same){
+   if(!same&&inventoryReadyByDevice.get(String(s.device_id))!==false){
     const emp=employeeMap.get(String(s.attendance_employee_id)),d=deviceMap.get(String(s.device_id));
     out.push({id:'mismatch:'+s.id,type:'link_mismatch',severity:'critical',device_id:s.device_id,branch_id:s.branch_id||d?.branch_id,attendance_employee_id:s.attendance_employee_id,device_pin:s.device_pin,title:'بصمة مكتشفة وربط PIN غير متطابق',detail:'البصمة تخص '+(emp?.name||'موظف')+' حسب السجل، لكن PIN '+s.device_pin+' على '+(d?.name||'الجهاز')+' لا يطابق الربط النشط.',action:'links',last_seen_at:s.last_seen_at});
    }
   }
   return out.sort((a,b)=>({critical:0,warning:1,info:2}[a.severity]??3)-({critical:0,warning:1,info:2}[b.severity]??3)||String(a.title).localeCompare(String(b.title),'ar'));
- },[devices,deviceUsers,links,states,inventory,employeeMap,deviceMap,reviewsByDevicePin]);
+ },[devices,deviceUsers,links,states,inventory,employeeMap,deviceMap,reviewsByDevicePin,syncStateByDevice]);
 
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
  const deviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
@@ -128,9 +151,9 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
  ),[issues,filters,deviceMap,branchMap,employeeMap]);
 
  const deviceSummary=useMemo(()=>devices.map(d=>{
-  const ds=inventory.filter(x=>String(x.device_id)===String(d.id)),fps=ds.filter(x=>x.biometric_type==='finger').length,faces=ds.filter(x=>x.biometric_type==='face').length,deviceIssues=issues.filter(x=>String(x.device_id)===String(d.id));
-  return {...d,known_fp:fps,known_face:faces,issue_count:deviceIssues.length,critical_count:deviceIssues.filter(x=>x.severity==='critical').length};
- }),[devices,inventory,issues]);
+  const ds=inventory.filter(x=>String(x.device_id)===String(d.id)),fps=ds.filter(x=>x.biometric_type==='finger').length,faces=ds.filter(x=>x.biometric_type==='face').length,deviceIssues=issues.filter(x=>String(x.device_id)===String(d.id)),sync=syncStateByDevice.get(String(d.id))||{};
+  return {...d,known_fp:fps,known_face:faces,issue_count:deviceIssues.length,critical_count:deviceIssues.filter(x=>x.severity==='critical').length,biometric_syncing:!!sync.syncing,biometric_sync_timeout:!!sync.timed_out};
+ }),[devices,inventory,issues,syncStateByDevice]);
 
  async function scan(row){
   const key=row.id;setBusy(key);onError?.('');
@@ -208,9 +231,9 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
  const deviceCols=[
   {key:'device',label:'الجهاز',render:r=><div><strong>{r.name}</strong><div className="muted-small">{branchMap.get(String(r.branch_id))?.name||'—'} · {r.serial_number}</div></div>},
   {key:'reported',label:'المعلن من الجهاز',render:r=><div><strong>{r.reported_fp_count??'—'} إصبع</strong><div className="muted-small">{r.reported_face_count??'—'} وجه</div></div>},
-  {key:'known',label:'المكتشف لكل جهاز',render:r=><div><strong>{r.known_fp} إصبع</strong><div className="muted-small">{r.known_face} وجه</div></div>},
-  {key:'issues',label:'المشاكل',render:r=>r.issue_count?<div><Badge tone={r.critical_count?'red':'orange'}>{r.issue_count} حالة</Badge>{r.critical_count>0&&<div className="muted-small">{r.critical_count} حرجة</div>}</div>:<Badge tone="green">متطابق</Badge>},
-  {key:'sync',label:'آخر Smart Sync',render:r=><div>{fmt(r.metadata?.last_smart_sync?.requested_at)}<div className="muted-small">{r.metadata?.last_smart_sync?.batch||'—'}</div></div>},
+  {key:'known',label:'المكتشف لكل جهاز',render:r=><div><strong>{r.known_fp} إصبع</strong><div className="muted-small">{r.known_face} وجه</div>{r.biometric_syncing&&<div className="muted-small">جاري تحديث الجرد…</div>}</div>},
+  {key:'issues',label:'المشاكل',render:r=>r.biometric_syncing?<Badge tone="blue">جاري جرد البصمات</Badge>:r.issue_count?<div><Badge tone={r.critical_count?'red':'orange'}>{r.issue_count} حالة</Badge>{r.critical_count>0&&<div className="muted-small">{r.critical_count} حرجة</div>}</div>:<Badge tone="green">متطابق</Badge>},
+  {key:'sync',label:'آخر Smart Sync',render:r=><div>{fmt(r.metadata?.last_smart_sync?.requested_at)}<div className="muted-small">{r.biometric_syncing?'جاري التحقق من Inventory…':r.biometric_sync_timeout?'انتهت مهلة الجرد — يحتاج إعادة فحص':r.metadata?.last_smart_sync?.batch||'—'}</div></div>},
   {key:'action',label:'',render:r=><div className="finance-actions">{state.permissions?.manage_biometrics&&<Button onClick={()=>scan({id:'device:'+r.id,device_id:r.id,action:'device_scan'})} disabled={busy==='device:'+r.id}><Fingerprint size={14}/> فحص البصمات</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>onOpenDevices?.()}><Users size={14}/> الأجهزة</Button>}</div>}
  ];
 
@@ -245,8 +268,8 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
   </Card>
 
   <Card>
-   <div className="card-title"><div><h3><Fingerprint size={19}/> Biometric Reconciliation Center</h3><small>مطابقة ما يعلنه كل جهاز مع الموظفين والـPIN وحالة كل بصمة على كل جهاز، بدون تخزين القالب البيومتري الخام.</small></div><Badge tone={critical?'red':warnings?'orange':'green'}>{issues.length?issues.length+' حالة':'متطابق'}</Badge></div>
-   {!issues.length?<div className="success-note"><ShieldCheck size={16}/> لا توجد فروقات ظاهرة في البيانات التي تم اكتشافها من الأجهزة.</div>:<>
+   <div className="card-title"><div><h3><Fingerprint size={19}/> Biometric Reconciliation Center</h3><small>مطابقة ما يعلنه كل جهاز مع الموظفين والـPIN وحالة كل بصمة على كل جهاز، بدون تخزين القالب البيومتري الخام.</small></div>{syncingDevices.length?<Badge tone="blue">{syncingDevices.length} جهاز جاري جرده</Badge>:<Badge tone={critical?'red':warnings?'orange':'green'}>{issues.length?issues.length+' حالة':'متطابق'}</Badge>}</div>
+   {!issues.length?(syncingDevices.length?<div className="training-banner"><RefreshCw size={16}/> جاري استكمال جرد البصمات من {syncingDevices.length} جهاز. لن تُسجل مشاكل «موظف بدون بصمة» قبل اكتمال الجرد، وستتحدث الصفحة تلقائيًا.</div>:<div className="success-note"><ShieldCheck size={16}/> لا توجد فروقات ظاهرة في البيانات التي تم اكتشافها من الأجهزة.</div>):<>
     <SmartListFilters storageKey="attendance-biometric-reconciliation-filters" search={filters.q} onSearchChange={v=>setFilters(x=>({...x,q:v}))} searchPlaceholder="ابحث بالموظف أو PIN أو الجهاز أو نوع المشكلة..." totalCount={issues.length} resultCount={filtered.length} onReset={()=>setFilters({q:'',branch:'',device:'',type:'',severity:''})} filters={[
      {key:'branch',label:'الفرع',value:filters.branch,onChange:v=>setFilters(x=>({...x,branch:v})),options:branchOptions},
      {key:'device',label:'الجهاز',value:filters.device,onChange:v=>setFilters(x=>({...x,device:v})),options:deviceOptions},
