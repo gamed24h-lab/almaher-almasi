@@ -30,16 +30,26 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
  ].filter(x=>x.show),[user]);
  const smartCommands=useMemo(()=>{
   const query=q.trim();if(!query)return[];
-  const out=[],branches=safeArray(data.branches);
+  const out=[],branches=safeArray(data.branches),enc=encodeURIComponent;
   const branch=branches.find(b=>matchesListQuery(query,b.name,b.branch_name,b.city));
-  const bid=branch?.id?encodeURIComponent(branch.id):'';
+  const branchName=branch?.name||branch?.branch_name||'',bid=branch?.id?enc(branch.id):'';
   const add=(key,title,sub,path,Icon=Search)=>out.push({key:'smart-'+key,kind:'أمر ذكي',title,sub,path,Icon});
   const hasWord=(...words)=>words.some(w=>matchesListQuery(query,w));
-  if((hasWord('حجوزات','الحجوزات','حجز'))&&branch&&(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking')))add('bookings-branch','حجوزات '+(branch.name||branch.branch_name),'فتح سجل الحجوزات مفلترًا على الفرع',`/bookings?branch=${bid}`,ClipboardList);
-  if(hasWord('غير مسددة','غير مسدد','متبقي','جزئي')&&(has(user,'viewBookings')||has(user,'finance')))add('bookings-unpaid','الحجوزات غير المسددة','فتح الحجوزات غير المسددة أو المسددة جزئيًا','/bookings?financial=unpaid',ClipboardList);
-  if(hasWord('رحلات اليوم','رحلة اليوم')&&(has(user,'trips')||has(user,'operations')))add('trips-today','رحلات اليوم','فتح الرحلات والبحث بتاريخ اليوم','/trips?date='+new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}),BusFront);
-  if(hasWord('رحلات','الرحلات')&&branch&&(has(user,'trips')||has(user,'operations')))add('trips-branch','رحلات '+(branch.name||branch.branch_name),'فتح الرحلات مفلترة على الفرع',`/trips?branch=${bid}`,BusFront);
-  if(hasWord('موظفين','الموظفين','موظفي')&&branch&&(has(user,'manageUsers')||has(user,'managePermissions')))add('staff-branch','موظفو '+(branch.name||branch.branch_name),'فتح حسابات الموظفين مفلترة على الفرع',`/staff?tab=accounts&branch=${bid}`,UserRoundCog);
+  const wantsBookings=hasWord('حجوزات','الحجوزات','حجز'),wantsTrips=hasWord('رحلات','الرحلات','رحلة'),wantsStaff=hasWord('موظفين','الموظفين','موظفي','موظف');
+  const wantsUnpaid=hasWord('غير مسددة','غير مسدد','غير مدفوع','متبقي','جزئي'),wantsPaid=hasWord('مسددة','مسدد بالكامل','مدفوع بالكامل');
+  const wantsToday=hasWord('اليوم','اليومية'),wantsActive=hasWord('النشطين','نشطين','النشطة','نشطة','نشط'),wantsPending=hasWord('معلقة','معلق','قيد المراجعة','بانتظار');
+  if(wantsBookings&&(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking'))){
+   const params=[];if(branch)params.push('branch='+bid);if(wantsUnpaid)params.push('financial=unpaid');else if(wantsPaid)params.push('financial=paid');if(wantsPending)params.push('status=pending');
+   if(params.length)add('bookings-'+params.join('-'),'الحجوزات'+(branch?' · '+branchName:'')+(wantsUnpaid?' · غير مسددة':wantsPaid?' · مسددة':'')+(wantsPending?' · قيد المراجعة':''),'فتح سجل الحجوزات مع تطبيق الفلاتر المطلوبة','/bookings?'+params.join('&'),ClipboardList);
+  }
+  if(wantsTrips&&(has(user,'trips')||has(user,'operations'))){
+   const params=[];if(branch)params.push('branch='+bid);if(wantsToday)params.push('date='+new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}));if(wantsActive)params.push('status=active');
+   if(params.length)add('trips-'+params.join('-'),'الرحلات'+(branch?' · '+branchName:'')+(wantsToday?' · اليوم':'')+(wantsActive?' · النشطة':''),'فتح الرحلات مع تطبيق الفلاتر المطلوبة','/trips?'+params.join('&'),BusFront);
+  }
+  if(wantsStaff&&branch&&(has(user,'manageUsers')||has(user,'managePermissions'))){
+   const params=['tab=accounts','branch='+bid];if(wantsActive)params.push('status=active');
+   add('staff-'+bid+(wantsActive?'-active':''),'موظفو '+branchName+(wantsActive?' · النشطون':''),'فتح حسابات الموظفين مع تطبيق الفلاتر المطلوبة','/staff?'+params.join('&'),UserRoundCog);
+  }
   if(hasWord('بصمة','الحضور','حضور')&&(has(user,'attendance_view')||has(user,'attendance_manage_employees')))add('attendance','الحضور والبصمة','فتح مركز الحضور والبصمة','/attendance',UserRoundCog);
   return out;
  },[q,data.branches,user]);
