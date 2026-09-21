@@ -49,7 +49,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
     if(/^[0-9a-f-]{36}$/i.test(raw))return 'مستخدم محفوظ بالنظام';
     return raw;
    };
-   return {...v,previous,sameSchedule,created_actor_label:actorName(v.created_by),updated_actor_label:actorName(v.updated_by)};
+   return {...v,previous,sameSchedule,isFuture:String(v.effective_from)>today(),created_actor_label:actorName(v.created_by),updated_actor_label:actorName(v.updated_by)};
   }).reverse();
  },[scheduleVersions,scheduleHistoryEmployee,userMap]);
 
@@ -132,7 +132,8 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
    const out=await api.attendanceWrite({action:'save_employee',...form,auto_push:true});
    setOpen(false);
    const queued=Number(out?.devices_queued||0);
-   onNotice?.(queued>0?'تم حفظ الموظف وجدوله وتم تجهيز رفع بياناته تلقائيًا إلى '+queued+' جهاز/أجهزة.':'تم حفظ الموظف وجدول الدوام. لا يوجد جهاز مربوط به للرفع التلقائي.');
+   if(out?.scheduled_for_future)onNotice?.('تم حفظ جدول الدوام المستقبلي. سيظل الجدول الحالي مطبقًا حتى '+String(out.activates_on||form.schedule_effective_from)+'، ثم يتفعّل الجديد تلقائيًا.');
+   else onNotice?.(queued>0?'تم حفظ الموظف وجدوله وتم تجهيز رفع بياناته تلقائيًا إلى '+queued+' جهاز/أجهزة.':'تم حفظ الموظف وجدول الدوام. لا يوجد جهاز مربوط به للرفع التلقائي.');
    await onChanged?.();
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
  }
@@ -245,12 +246,13 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   {form.id&&<div className="field" style={{gridColumn:'1/-1'}}>
    <span>سجل تغييرات الدوام</span>
    <div className="finance-actions">
-    {scheduleVersions.filter(v=>String(v.attendance_employee_id)===String(form.id)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,4).map(v=><Badge key={v.id} tone={v.effective_to?'blue':'green'}>{v.effective_from}{v.effective_to?' ← '+v.effective_to:' ← مستمر'}</Badge>)}
+    {scheduleVersions.filter(v=>String(v.attendance_employee_id)===String(form.id)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,4).map(v=>{const future=String(v.effective_from)>today();return <Badge key={v.id} tone={future?'orange':v.effective_to?'blue':'green'}>{future?'مجدول '+v.effective_from:v.effective_from+(v.effective_to?' ← '+v.effective_to:' ← مستمر')}</Badge>})}
     {scheduleVersions.some(v=>String(v.attendance_employee_id)===String(form.id))?<Button type="button" onClick={()=>setScheduleHistoryEmployee(employees.find(e=>String(e.id)===String(form.id))||form)}><CalendarClock size={14}/> فتح سجل الدوام الكامل</Button>:<span className="muted-small">لا يوجد تاريخ سابق مسجل بعد.</span>}
    </div>
   </div>}
 
-  {form.id&&<Field label="سريان جدول الدوام من تاريخ" hint="لو غيرت مواعيد الدوام، التقارير قبل هذا التاريخ ستستخدم الجدول القديم"><Input type="date" value={form.schedule_effective_from||today()} onChange={e=>setForm(x=>({...x,schedule_effective_from:e.target.value}))} required/></Field>}
+  {form.id&&<Field label="سريان جدول الدوام من تاريخ" hint="لو التاريخ مستقبلي، يُحفظ الجدول الآن لكن لا يتطبق قبل يوم السريان"><Input type="date" value={form.schedule_effective_from||today()} onChange={e=>setForm(x=>({...x,schedule_effective_from:e.target.value}))} required/></Field>}
+  {form.id&&String(form.schedule_effective_from||'')>today()&&<div className="success-note"><CalendarClock size={16}/> جدول مستقبلي: سيظل جدول الموظف الحالي كما هو حتى {form.schedule_effective_from}، ثم يتفعّل الجدول الجديد تلقائيًا.</div>}
   <Field label="الحالة"><Select value={form.status||'active'} onChange={e=>setForm(x=>({...x,status:e.target.value}))}><option value="active">نشط</option><option value="inactive">موقوف</option></Select></Field>
   <Field label="البيئة"><Select value={form.data_environment||'training'} onChange={e=>setForm(x=>({...x,data_environment:e.target.value}))}><option value="training">Training</option><option value="production">Production</option></Select></Field>
   <div className="field" style={{gridColumn:'1/-1'}}><span>الإجازة الأسبوعية</span><div className="finance-actions">{DAYS.map(([v,label])=><label key={v} style={{display:'inline-flex',alignItems:'center',gap:5}}><input type="checkbox" checked={(form.weekly_off_days||[]).includes(Number(v))} onChange={e=>setForm(x=>({...x,weekly_off_days:e.target.checked?[...(x.weekly_off_days||[]),Number(v)]:(x.weekly_off_days||[]).filter(n=>n!==Number(v))}))}/>{label}</label>)}</div></div>
@@ -266,7 +268,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
    {scheduleTimeline.length?scheduleTimeline.map(v=><Card key={v.id}>
     <div className="card-title">
      <div><h3>{v.effective_from}{v.effective_to?' → '+v.effective_to:' → مستمر'}</h3><small>{versionSourceLabel(v.source_type)}</small></div>
-     <div className="finance-actions"><Badge tone={v.effective_to?'blue':'green'}>{v.effective_to?'نسخة تاريخية':'النسخة الحالية'}</Badge>{v.sameSchedule&&<Badge tone="orange">تثبيت/تصحيح تاريخ — بدون تغيير المواعيد</Badge>}</div>
+     <div className="finance-actions">{v.isFuture?<Badge tone="orange">مجدول للمستقبل</Badge>:<Badge tone={v.effective_to?'blue':'green'}>{v.effective_to?'نسخة تاريخية':'النسخة الحالية'}</Badge>}{v.sameSchedule&&<Badge tone="orange">تثبيت/تصحيح تاريخ — بدون تغيير المواعيد</Badge>}</div>
     </div>
     <div className="detail-grid" style={{marginTop:10}}>
      <div><span>أنشأها</span><strong>{v.created_actor_label}</strong><div className="muted-small">{fmtDateTime(v.created_at)}</div></div>
