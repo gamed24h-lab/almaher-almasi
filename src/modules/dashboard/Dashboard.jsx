@@ -53,6 +53,7 @@ export default function Dashboard({go}){
 
  const quick=useMemo(()=>{
   const a=[];
+  if(user?.role!=='developer')a.push({label:'بصمتي',path:'/my-attendance',Icon:Fingerprint});
   if(has(user,'branchBooking'))a.push({label:'حجز جديد',path:'/bookings/new',Icon:Plus,primary:true});
   if(canBookings)a.push({label:'الحجوزات',path:'/bookings',Icon:ClipboardList});
   if(canTrips)a.push({label:'التشغيل',path:'/operations',Icon:BusFront});

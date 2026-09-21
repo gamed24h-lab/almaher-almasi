@@ -1787,7 +1787,8 @@ async function attendanceState(env,me,url){
  const biometricInventory=await rest(env,'attendance_biometric_inventory?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
  const linkIdentityReviews=await rest(env,'attendance_link_identity_reviews?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=reviewed_at.desc&limit=2000').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,linkIdentityReviews,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const selfServiceBiometricRequests=await rest(env,'attendance_self_service_biometric_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=2000').catch(()=>[]);
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -2343,6 +2344,7 @@ async function resolveLinkIdentityReview(env,me,body){
   p_actor:actorValue,p_environment:device.data_environment||'training',p_review_until:reviewUntil
  }}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر حفظ قرار المراجعة.'),{status:409})});
  const after=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=*&limit=1').catch(()=>[]))?.[0]||link;
+ if(resolution!=='snooze')await rest(env,'attendance_self_service_biometric_requests?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&status=eq.pending',{method:'PATCH',body:{status:resolution==='relink'?'approved':'rejected',resolved_at:new Date().toISOString(),resolved_by:actorId(me)||actorName(me)||null,resolution_note:resolution==='relink'?'تم اعتماد تصحيح الموظف وإعادة الربط':'تمت مراجعة طلب الموظف وتأكيد أن الربط الحالي صحيح'},prefer:'return=minimal'}).catch(()=>{});
  await audit(env,me,'attendance_link_identity_review','attendance_employee_link',link.id,device.branch_id,link,{...after,identity_review:{resolution,reason,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,device_user_name:deviceUser?.name||null}},reason).catch(()=>{});
  return {
   ok:true,resolution,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,
@@ -2356,6 +2358,167 @@ async function resolveLinkIdentityReview(env,me,body){
 }
 
 async function deleteLink(env,me,body){if(!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة روابط موظفي البصمة.'),{status:403});const id=txt(body.id),rows=await rest(env,'attendance_employee_links?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الرابط غير موجود.'),{status:404});const device=await scopedDevice(env,me,before.device_id);if(!device)throw Object.assign(new Error('الرابط خارج نطاق الفرع.'),{status:403});await rest(env,'attendance_employee_links?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});await audit(env,me,'attendance_link_delete','attendance_employee_link',id,before.branch_id,before,null,'حذف ربط البصمة');return {ok:true}}
+
+
+async function selfServiceAccount(env,me){
+ const id=actorId(me);if(!id||isDeveloper(me))return null;
+ const row=(await rest(env,'staff_users?id=eq.'+enc(id)+'&select=id,name,username,phone,role,branch_id,status,account_mode&limit=1').catch(()=>[]))?.[0]||null;
+ if(!row||txt(row.status)==='موقوف'||lower(row.status)==='inactive')return null;
+ return row;
+}
+async function selfServiceEmployee(env,account,mode){
+ if(!account?.id)return null;
+ const rows=await rest(env,'attendance_employees?staff_user_id=eq.'+enc(account.id)+'&status=eq.active&data_environment=eq.'+enc(mode)+'&select=*&limit=2').catch(()=>[]);
+ if((rows||[]).length>1)throw Object.assign(new Error('حسابك مربوط بأكثر من ملف حضور. يحتاج مراجعة الموارد البشرية.'),{status:409});
+ return rows?.[0]||null;
+}
+async function createSelfServiceRequest(env,{account,employee=null,deviceId=null,pin=null,type,reason='',evidence={},mode='training'}){
+ const path='attendance_self_service_biometric_requests?staff_user_id=eq.'+enc(account.id)+'&request_type=eq.'+enc(type)+'&status=eq.pending&select=*&order=requested_at.desc&limit=20';
+ const existing=await rest(env,path).catch(()=>[]);
+ const same=(existing||[]).find(x=>txt(x.device_id)===txt(deviceId)&&txt(x.device_pin)===txt(pin)&&txt(x.attendance_employee_id)===txt(employee?.id));
+ if(same)return same;
+ const body={staff_user_id:account.id,attendance_employee_id:employee?.id||null,branch_id:employee?.branch_id||account.branch_id||null,device_id:deviceId||null,device_pin:pin||null,request_type:type,status:'pending',requested_reason:txt(reason)||null,evidence:evidence&&typeof evidence==='object'?evidence:{},data_environment:mode,requested_at:new Date().toISOString()};
+ return (await rest(env,'attendance_self_service_biometric_requests',{method:'POST',body,prefer:'return=representation'}))?.[0]||body;
+}
+async function employeeSelfServiceStatus(env,me){
+ const account=await selfServiceAccount(env,me);if(!account)return {ok:true,available:false,message:'هذا الحساب ليس حساب موظف عادي قابل للربط بملف حضور.'};
+ const mode=account.account_mode==='production'?'production':accountMode(me),requests=await rest(env,'attendance_self_service_biometric_requests?staff_user_id=eq.'+enc(account.id)+'&data_environment=eq.'+enc(mode)+'&select=*&order=requested_at.desc&limit=50').catch(()=>[]);
+ const employee=await selfServiceEmployee(env,account,mode);
+ if(!employee)return {ok:true,available:true,binding_required:true,account:{id:account.id,name:account.name,branch_id:account.branch_id},requests,message:'اربط حسابك بملف الحضور مرة واحدة لتفعيل خدمة «بصمتي».'};
+ const devices=employee.branch_id?await rest(env,'attendance_devices?branch_id=eq.'+enc(employee.branch_id)+'&status=eq.active&data_environment=eq.'+enc(mode)+'&select=id,name,serial_number,branch_id,status,data_environment&order=name.asc').catch(()=>[]):[];
+ const deviceIds=devices.map(x=>x.id),inFilter=deviceIds.length?'device_id=in.('+deviceIds.map(enc).join(',')+')':'device_id=eq.00000000-0000-0000-0000-000000000000';
+ const [deviceUsers,links,inventory,profiles]=await Promise.all([
+  rest(env,'attendance_device_users?'+inFilter+'&select=device_id,device_pin,name,last_seen_at&limit=5000').catch(()=>[]),
+  rest(env,'attendance_employee_links?'+inFilter+'&active=eq.true&select=id,device_id,device_pin,attendance_employee_id,staff_user_id,branch_id,display_name,active&limit=5000').catch(()=>[]),
+  rest(env,'attendance_biometric_inventory?'+inFilter+'&data_environment=eq.'+enc(mode)+'&status=eq.active&select=id,device_id,device_pin,attendance_employee_id,biometric_type,biometric_key,last_seen_at&limit=5000').catch(()=>[]),
+  rest(env,'attendance_biometric_profiles?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&select=id,source_device_id,device_pin,biometric_type,biometric_key,status,last_sync_at&limit=500').catch(()=>[])
+ ]);
+ const deviceMap=new Map(devices.map(x=>[txt(x.id),x])),userMap=new Map((deviceUsers||[]).map(x=>[txt(x.device_id)+'|'+txt(x.device_pin),x])),linkMap=new Map((links||[]).map(x=>[txt(x.device_id)+'|'+txt(x.device_pin),x])),inventoryMap=new Map(),ownPinsByDevice=new Map();
+ for(const inv of inventory||[]){const k=txt(inv.device_id)+'|'+txt(inv.device_pin),a=inventoryMap.get(k)||[];a.push(inv);inventoryMap.set(k,a)}
+ for(const l of links||[]){if(txt(l.attendance_employee_id)===txt(employee.id))ownPinsByDevice.set(txt(l.device_id),txt(l.device_pin))}
+ const ownLinks=(links||[]).filter(l=>txt(l.attendance_employee_id)===txt(employee.id)).map(l=>{
+  const d=deviceMap.get(txt(l.device_id)),u=userMap.get(txt(l.device_id)+'|'+txt(l.device_pin)),bios=inventoryMap.get(txt(l.device_id)+'|'+txt(l.device_pin))||[],match=deviceEmployeeMatch(u||{name:l.display_name,device_pin:l.device_pin},employee);
+  return {id:l.id,device_id:l.device_id,device_name:d?.name||'جهاز بصمة',device_pin:l.device_pin,device_user_name:u?.name||null,biometric_count:bios.length,match_score:match.score,match_reasons:match.reasons,mismatch:!!u?.name&&match.score<48,last_seen_at:u?.last_seen_at||null};
+ });
+ const safeCandidates=[],conflicts=[];
+ for(const u of deviceUsers||[]){
+  const key=txt(u.device_id)+'|'+txt(u.device_pin),link=linkMap.get(key)||null,match=deviceEmployeeMatch(u,employee),bios=inventoryMap.get(key)||[],otherPin=ownPinsByDevice.get(txt(u.device_id));
+  if(match.score<68)continue;
+  if(link?.attendance_employee_id&&txt(link.attendance_employee_id)!==txt(employee.id)){
+   conflicts.push({device_id:u.device_id,device_name:deviceMap.get(txt(u.device_id))?.name||'جهاز بصمة',device_pin:u.device_pin,device_user_name:u.name||null,match_score:match.score,match_reasons:match.reasons,biometric_count:bios.length});
+   continue;
+  }
+  if(link?.attendance_employee_id||otherPin&&txt(otherPin)!==txt(u.device_pin))continue;
+  if(!bios.length)continue;
+  if(bios.some(x=>x.attendance_employee_id&&txt(x.attendance_employee_id)!==txt(employee.id)))continue;
+  safeCandidates.push({device_id:u.device_id,device_name:deviceMap.get(txt(u.device_id))?.name||'جهاز بصمة',device_pin:u.device_pin,device_user_name:u.name||null,match_score:match.score,match_reasons:match.reasons,biometric_count:bios.length});
+ }
+ return {ok:true,available:true,binding_required:false,account:{id:account.id,name:account.name,branch_id:account.branch_id},employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code,branch_id:employee.branch_id,department:employee.department,job_title:employee.job_title},links:ownLinks,safe_candidates:safeCandidates,conflicts,biometric_profiles:(profiles||[]).filter(x=>x.status==='active'),requests,auto_correct_available:safeCandidates.length>0};
+}
+async function bindEmployeeSelfService(env,me,body){
+ const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
+ if(!account.branch_id)throw Object.assign(new Error('حسابك غير مرتبط بفرع. اطلب من الإدارة تحديد فرع الحساب أولًا.'),{status:409});
+ const mode=account.account_mode==='production'?'production':accountMode(me),code=txt(body.employee_code).toUpperCase();
+ if(!code)throw Object.assign(new Error('أدخل الكود الوظيفي الموجود في ملف الحضور.'),{status:400});
+ const already=await selfServiceEmployee(env,account,mode);if(already)return {ok:true,bound:true,employee:{id:already.id,name:already.name,employee_code:already.employee_code},message:'حسابك مربوط بملف الحضور بالفعل.'};
+ let path='attendance_employees?employee_code=eq.'+enc(code)+'&status=eq.active&data_environment=eq.'+enc(mode)+'&select=*&limit=2';
+ if(account.branch_id)path+='&branch_id=eq.'+enc(account.branch_id);
+ const rows=await rest(env,path).catch(()=>[]),employee=rows?.[0]||null;
+ if(!employee||rows.length!==1)throw Object.assign(new Error('الكود الوظيفي غير موجود في فرع حسابك أو غير فريد.'),{status:404});
+ if(employee.staff_user_id&&txt(employee.staff_user_id)!==txt(account.id))throw Object.assign(new Error('ملف الحضور هذا مربوط بحساب آخر. أرسل طلب مراجعة للموارد البشرية.'),{status:409});
+ const match=deviceEmployeeMatch({name:account.name,device_pin:''},employee),actorValue='self:'+account.id;
+ if(match.score>=56){
+  const other=await rest(env,'attendance_employees?staff_user_id=eq.'+enc(account.id)+'&id=neq.'+enc(employee.id)+'&status=eq.active&data_environment=eq.'+enc(mode)+'&select=id&limit=1').catch(()=>[]);
+  if(other?.length)throw Object.assign(new Error('الحساب مربوط بملف حضور آخر. يحتاج مراجعة الموارد البشرية.'),{status:409});
+  const now=new Date().toISOString();
+  await rest(env,'attendance_employees?id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:account.id,updated_by:actorValue,updated_at:now},prefer:'return=minimal'});
+  await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:account.id,updated_by:actorValue,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:account.id},prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_self_service_biometric_requests',{method:'POST',body:{staff_user_id:account.id,attendance_employee_id:employee.id,branch_id:employee.branch_id,request_type:'account_binding',status:'auto_resolved',requested_reason:'ربط ذاتي بالكود الوظيفي',evidence:{account_name:account.name,employee_name:employee.name,employee_code:employee.employee_code,match_score:match.score,reasons:match.reasons},data_environment:mode,requested_at:now,resolved_at:now,resolved_by:actorValue,resolution_note:'تم الربط تلقائيًا بعد تحقق الكود والفرع وتشابه الاسم'},prefer:'return=minimal'}).catch(()=>{});
+  await audit(env,me,'attendance_self_service_account_bound','attendance_employee',employee.id,employee.branch_id,null,{staff_user_id:account.id,employee_code:employee.employee_code,match_score:match.score},'ربط حساب الموظف بملف الحضور عبر الخدمة الذاتية').catch(()=>{});
+  return {ok:true,bound:true,employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code},message:'تم ربط حسابك بملف الحضور بنجاح.'};
+ }
+ const req=await createSelfServiceRequest(env,{account,employee,type:'account_binding',reason:'طلب ربط حساب الموظف بملف الحضور',evidence:{account_name:account.name,employee_name:employee.name,employee_code:employee.employee_code,match_score:match.score,reasons:match.reasons},mode});
+ await audit(env,me,'attendance_self_service_binding_requested','attendance_self_service_request',req.id,employee.branch_id,null,req,'تشابه الاسم غير كافٍ للربط التلقائي').catch(()=>{});
+ return {ok:true,bound:false,pending:true,request_id:req.id,message:'الكود صحيح، لكن الاسم يحتاج مراجعة بشرية قبل ربط الحساب. تم إرسال الطلب للموارد البشرية.'};
+}
+async function autoCorrectEmployeeBiometric(env,me,body){
+ const status=await employeeSelfServiceStatus(env,me);if(status.binding_required||!status.employee)throw Object.assign(new Error('اربط حسابك بملف الحضور أولًا.'),{status:409});
+ const account=await selfServiceAccount(env,me),mode=account.account_mode==='production'?'production':accountMode(me),deviceId=txt(body.device_id),pin=txt(body.device_pin);
+ const candidate=(status.safe_candidates||[]).find(x=>txt(x.device_id)===deviceId&&txt(x.device_pin)===pin);
+ if(!candidate){
+  const req=await createSelfServiceRequest(env,{account,employee:status.employee,deviceId:deviceId||null,pin:pin||null,type:'claim_unlinked_pin',reason:txt(body.reason)||'طلب تصحيح ربط البصمة',evidence:{requested_device_id:deviceId||null,requested_pin:pin||null,auto_safe:false},mode});
+  return {ok:true,auto_corrected:false,pending:true,request_id:req.id,message:'الحالة غير آمنة للتصحيح التلقائي. تم إرسال طلب للموارد البشرية بدل تغيير البيانات.'};
+ }
+ const rpc=await rest(env,'rpc/attendance_self_service_claim_pin',{method:'POST',body:{p_staff_user_id:account.id,p_employee_id:status.employee.id,p_device_id:candidate.device_id,p_device_pin:candidate.device_pin,p_actor:'self:'+account.id,p_environment:mode}}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر تنفيذ التصحيح التلقائي.'),{status:409})});
+ await audit(env,me,'attendance_self_service_auto_corrected','attendance_employee_link',candidate.device_id+':'+candidate.device_pin,status.employee.branch_id,null,{employee_id:status.employee.id,device_id:candidate.device_id,device_pin:candidate.device_pin,match_score:candidate.match_score,inventory_count:rpc?.inventory_count||0},'تصحيح تلقائي آمن لربط بصمة الموظف').catch(()=>{});
+ return {ok:true,auto_corrected:true,device_id:candidate.device_id,device_pin:candidate.device_pin,inventory_count:Number(rpc?.inventory_count||0),message:'تم تصحيح ربط البصمة تلقائيًا بأمان.'};
+}
+async function confirmEmployeeCurrentLink(env,me,body){
+ const status=await employeeSelfServiceStatus(env,me);if(status.binding_required||!status.employee)throw Object.assign(new Error('اربط حسابك بملف الحضور أولًا.'),{status:409});
+ const account=await selfServiceAccount(env,me),mode=account.account_mode==='production'?'production':accountMode(me),deviceId=txt(body.device_id),pin=txt(body.device_pin),link=(status.links||[]).find(x=>txt(x.device_id)===deviceId&&txt(x.device_pin)===pin);
+ if(!link)throw Object.assign(new Error('هذا الـPIN غير مربوط بملف حضورك.'),{status:403});
+ const device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=id,name,branch_id,data_environment&limit=1').catch(()=>[]))?.[0]||null;
+ const deviceUser=(await rest(env,'attendance_device_users?device_id=eq.'+enc(deviceId)+'&device_pin=eq.'+enc(pin)+'&select=name&limit=1').catch(()=>[]))?.[0]||null;
+ const reason=txt(body.reason)||'أكد الموظف من الخدمة الذاتية أن الربط يخصه';
+ await rest(env,'rpc/attendance_resolve_link_identity_review',{method:'POST',body:{p_device_id:deviceId,p_device_pin:pin,p_resolution:'confirm_current',p_reason:reason,p_device_name_snapshot:device?.name||null,p_device_user_name_snapshot:deviceUser?.name||null,p_current_employee_id:status.employee.id,p_current_employee_name_snapshot:status.employee.name,p_new_employee_id:null,p_new_employee_name_snapshot:null,p_new_staff_user_id:null,p_new_branch_id:status.employee.branch_id,p_actor:'self:'+account.id,p_environment:mode,p_review_until:null}}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر تأكيد الربط الحالي.'),{status:409})});
+ const now=new Date().toISOString();
+ await rest(env,'attendance_self_service_biometric_requests',{method:'POST',body:{staff_user_id:account.id,attendance_employee_id:status.employee.id,branch_id:status.employee.branch_id,device_id:deviceId,device_pin:pin,request_type:'other',status:'auto_resolved',requested_reason:reason,evidence:{action:'confirm_current',device_user_name:deviceUser?.name||null},data_environment:mode,requested_at:now,resolved_at:now,resolved_by:'self:'+account.id,resolution_note:'أكد الموظف أن الربط الحالي يخصه'},prefer:'return=minimal'}).catch(()=>{});
+ await audit(env,me,'attendance_self_service_link_confirmed','attendance_employee_link',link.id,status.employee.branch_id,null,{device_id:deviceId,device_pin:pin,employee_id:status.employee.id},reason).catch(()=>{});
+ return {ok:true,message:'تم تأكيد أن هذا الربط يخصك. لو تغير الاسم أو البيانات لاحقًا سيظهر التنبيه من جديد.'};
+}
+async function requestEmployeeBiometricCorrection(env,me,body){
+ const status=await employeeSelfServiceStatus(env,me);if(status.binding_required||!status.employee)throw Object.assign(new Error('اربط حسابك بملف الحضور أولًا.'),{status:409});
+ const account=await selfServiceAccount(env,me),mode=account.account_mode==='production'?'production':accountMode(me),deviceId=txt(body.device_id),pin=txt(body.device_pin),type=body.request_type==='not_mine'?'not_mine':'wrong_link',reason=txt(body.reason);
+ if(!reason)throw Object.assign(new Error('اكتب ملاحظة قصيرة توضح المشكلة.'),{status:400});
+ const own=(status.links||[]).find(x=>txt(x.device_id)===deviceId&&txt(x.device_pin)===pin),conflict=(status.conflicts||[]).find(x=>txt(x.device_id)===deviceId&&txt(x.device_pin)===pin);
+ if(type==='not_mine'&&!own)throw Object.assign(new Error('لا يمكن إرسال «ليست بصمتي» لرقم غير مربوط بك.'),{status:403});
+ if(type==='wrong_link'&&!conflict&&!own)throw Object.assign(new Error('هذه الحالة غير ظاهرة ضمن مشاكل ملفك.'),{status:403});
+ const req=await createSelfServiceRequest(env,{account,employee:status.employee,deviceId,pin,type,reason,evidence:{employee_name:status.employee.name,device_user_name:own?.device_user_name||conflict?.device_user_name||null,match_score:own?.match_score??conflict?.match_score??null,biometric_count:own?.biometric_count??conflict?.biometric_count??0,current_link_is_self:!!own},mode});
+ await audit(env,me,'attendance_self_service_correction_requested','attendance_self_service_request',req.id,status.employee.branch_id,null,req,reason).catch(()=>{});
+ return {ok:true,pending:true,request_id:req.id,message:'تم إرسال طلب التصحيح للموارد البشرية مع بيانات الجهاز والـPIN تلقائيًا.'};
+}
+async function attendanceSelfServiceApi(request,env,ctx){
+ const me=await actor(request,env,ctx);if(!me)return json({error:'غير مصرح'},401);
+ try{
+  if(request.method==='GET')return json(await employeeSelfServiceStatus(env,me));
+  if(request.method!=='POST')return json({error:'Method not allowed'},405);
+  const body=await request.json().catch(()=>({})),action=txt(body.action);
+  if(action==='bind_account')return json(await bindEmployeeSelfService(env,me,body));
+  if(action==='auto_correct')return json(await autoCorrectEmployeeBiometric(env,me,body));
+  if(action==='confirm_current_link')return json(await confirmEmployeeCurrentLink(env,me,body));
+  if(action==='request_correction')return json(await requestEmployeeBiometricCorrection(env,me,body));
+  return json({error:'إجراء خدمة ذاتية غير مدعوم.'},400);
+ }catch(e){return json({error:e.message||'تعذر تنفيذ الخدمة الذاتية للحضور'},e.status||500)}
+}
+async function reviewSelfServiceBiometricRequest(env,me,body){
+ const id=txt(body.id),decision=txt(body.decision),reason=txt(body.reason);if(!id)throw Object.assign(new Error('طلب الموظف غير محدد.'),{status:400});
+ const req=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;if(!req)throw Object.assign(new Error('طلب الموظف غير موجود.'),{status:404});
+ if(!elevated(me)&&txt(req.branch_id)!==actorBranch(me))throw Object.assign(new Error('الطلب خارج نطاق فرعك.'),{status:403});
+ if(req.status!=='pending')return {ok:true,request:req,message:'هذا الطلب تمت معالجته بالفعل.'};
+ const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;
+ if(decision==='reject'){
+  if(!canManageLinks(me)&&!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لرفض طلب التصحيح.'),{status:403});
+  const after=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id),{method:'PATCH',body:{status:'rejected',resolved_at:now,resolved_by:who,resolution_note:reason||'تم رفض الطلب بعد المراجعة'},prefer:'return=representation'}))?.[0]||req;
+  await audit(env,me,'attendance_self_service_request_rejected','attendance_self_service_request',id,req.branch_id,req,after,reason||'رفض طلب خدمة ذاتية').catch(()=>{});
+  return {ok:true,request:after,message:'تم رفض الطلب وتسجيل السبب.'};
+ }
+ if(decision==='approve_binding'&&req.request_type==='account_binding'){
+  if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لاعتماد ربط حساب الموظف.'),{status:403});
+  const employee=await scopedEmployee(env,me,req.attendance_employee_id);if(!employee)throw Object.assign(new Error('ملف الحضور المطلوب غير موجود.'),{status:404});
+  const staff=(await rest(env,'staff_users?id=eq.'+enc(req.staff_user_id)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!staff)throw Object.assign(new Error('حساب الموظف غير موجود.'),{status:404});
+  if(employee.branch_id&&staff.branch_id&&txt(employee.branch_id)!==txt(staff.branch_id))throw Object.assign(new Error('الحساب وملف الحضور في فرعين مختلفين.'),{status:409});
+  if(employee.staff_user_id&&txt(employee.staff_user_id)!==txt(staff.id))throw Object.assign(new Error('ملف الحضور مربوط بحساب آخر.'),{status:409});
+  const other=await rest(env,'attendance_employees?staff_user_id=eq.'+enc(staff.id)+'&id=neq.'+enc(employee.id)+'&status=eq.active&select=id&limit=1').catch(()=>[]);if(other?.length)throw Object.assign(new Error('حساب الموظف مربوط بملف حضور آخر.'),{status:409});
+  await rest(env,'attendance_employees?id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:staff.id,updated_by:who,updated_at:now},prefer:'return=minimal'});
+  await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:staff.id,updated_by:who,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  await rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:staff.id},prefer:'return=minimal'}).catch(()=>{});
+  const after=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id),{method:'PATCH',body:{status:'approved',resolved_at:now,resolved_by:who,resolution_note:reason||'تم اعتماد ربط الحساب بملف الحضور'},prefer:'return=representation'}))?.[0]||req;
+  await audit(env,me,'attendance_self_service_binding_approved','attendance_employee',employee.id,employee.branch_id,{staff_user_id:employee.staff_user_id},{staff_user_id:staff.id,request_id:id},reason||'اعتماد ربط حساب الموظف').catch(()=>{});
+  return {ok:true,request:after,message:'تم اعتماد ربط حساب الموظف بملف الحضور.'};
+ }
+ throw Object.assign(new Error('هذا القرار غير متاح لهذا النوع من الطلبات.'),{status:400});
+}
 
 async function attendanceApi(request,env,ctx){
  const me=await actor(request,env,ctx);if(!me)return json({error:'غير مصرح'},401);if(!canView(me))return json({error:'لا توجد صلاحية للوصول إلى الحضور والبصمة.'},403);const url=new URL(request.url);
@@ -2394,6 +2557,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='resolve_link_identity_review')return json(await resolveLinkIdentityReview(env,me,body));
+  if(action==='review_self_service_request')return json(await reviewSelfServiceBiometricRequest(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
   if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
@@ -2417,7 +2581,7 @@ async function attendanceApi(request,env,ctx){
 }
 
 export default {
- async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname.startsWith('/iclock/'))return admsRequest(request,env);if(url.pathname==='/api/attendance')return attendanceApi(request,env,ctx);return appWorker.fetch(request,env,ctx)},
+ async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname.startsWith('/iclock/'))return admsRequest(request,env);if(url.pathname==='/api/attendance/self-service')return attendanceSelfServiceApi(request,env,ctx);if(url.pathname==='/api/attendance')return attendanceApi(request,env,ctx);return appWorker.fetch(request,env,ctx)},
  async scheduled(controller,env,ctx){
   await runDeviceClockSyncWatchdog(env).catch(()=>({ok:false}));
   const inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
