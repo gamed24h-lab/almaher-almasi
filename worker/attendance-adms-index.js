@@ -749,6 +749,19 @@ async function hasAttendanceHistoryTransfer(env,device){
  const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&command_type=in.(sync_attlog,history_attlog,history_attlog_replay)&select=id&limit=1').catch(()=>[]);
  return !!rows?.length;
 }
+async function normalizeClockDriftedLogs(env,device,driftSeconds,lookbackDays=2){
+ const drift=Math.round(Number(driftSeconds));if(!device?.id||!Number.isFinite(drift)||Math.abs(drift)<=120)return {ok:true,corrected_count:0};
+ if(await hasAttendanceHistoryTransfer(env,device))return {ok:true,corrected_count:0,skipped:'history_transfer'};
+ const since=new Date(Date.now()-Math.max(1,Math.min(365,Number(lookbackDays)||2))*86400000).toISOString();
+ const out=await rest(env,'rpc/attendance_correct_device_clock_logs',{method:'POST',body:{p_device_id:device.id,p_drift_seconds:drift,p_tolerance_seconds:180,p_since:since}}).catch(()=>null),result=Array.isArray(out)?out[0]:out;
+ const count=Math.max(0,Number(result?.corrected_count)||0);
+ if(count>0){
+  const now=new Date().toISOString(),rows=await rest(env,'attendance_devices?id=eq.'+enc(device.id)+'&select=metadata&limit=1').catch(()=>[]),current=rows?.[0]?.metadata||device.metadata||{},meta={...current,last_clock_log_correction:{corrected_at:now,corrected_count:count,drift_seconds:drift,lookback_days:lookbackDays,method:'confirmed_clock_drift_rpc'}};
+  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+  device.metadata=meta;
+ }
+ return result||{ok:true,corrected_count:count};
+}
 async function recordDeviceClockSample(env,device,serial,body,source='attlog_live'){
  if(!device?.id||await hasAttendanceHistoryTransfer(env,device))return null;
  const serverMs=Date.now(),samples=[];
@@ -775,7 +788,7 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
   rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{})
  ]);
  const wasBad=prev.confirmed===true&&Math.abs(Number(prev.drift_seconds)||0)>120;
- if(confirmed&&abs>120&&(!wasBad||Math.abs((Number(prev.drift_seconds)||0)-sample.drift)>90))await recordDeviceHealthEvent(env,{event_key:'clock_drift:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_drift',severity:abs>15*60?'critical':'warning',status:'open',started_at:now,summary:'ساعة الجهاز '+clockDriftText(sample.drift)+'.',metadata:clock});
+ if(confirmed&&abs>120&&(!wasBad||Math.abs((Number(prev.drift_seconds)||0)-sample.drift)>90)){await normalizeClockDriftedLogs(env,device,sample.drift,180).catch(()=>null);await recordDeviceHealthEvent(env,{event_key:'clock_drift:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_drift',severity:abs>15*60?'critical':'warning',status:'open',started_at:now,summary:'ساعة الجهاز '+clockDriftText(sample.drift)+'.',metadata:clock})}
  if(confirmed&&abs<=120&&wasBad)await recordDeviceHealthEvent(env,{event_key:'clock_recovered:'+device.id+':'+now.slice(0,13),device_id:device.id,branch_id:device.branch_id,event_type:'clock_recovered',severity:'info',status:'closed',started_at:now,ended_at:now,summary:'عادت ساعة الجهاز إلى فرق مقبول عن وقت السيرفر.',metadata:{previous_drift_seconds:prev.drift_seconds,current_drift_seconds:sample.drift}});
  if(meta.last_clock_sync?.status==='verified'&&lastSync?.status!=='verified')await recordDeviceHealthEvent(env,{event_key:'clock_sync_verified:'+String(meta.last_clock_sync.command_id||now),device_id:device.id,branch_id:device.branch_id,event_type:'clock_sync_verified',severity:'info',status:'closed',started_at:now,ended_at:now,command_id:meta.last_clock_sync.command_id||null,result_code:0,summary:'تم التحقق من مزامنة ساعة الجهاز فعليًا من حركة Live جديدة.',metadata:{drift_seconds:sample.drift,device_time_raw:sample.rawTime}});
  device.metadata=meta;
@@ -1021,6 +1034,8 @@ async function admsRequest(request,env){
    if(table==='ATTLOG'){
     await recordDeviceClockSample(env,device,serial,body,'attlog_live').catch(()=>null);
     const n=await storeAttendanceLogs(env,device,serial,request,body);
+    const liveClock=device?.metadata?.clock_drift||{},liveDrift=Number(liveClock.drift_seconds);
+    if(n&&liveClock.confirmed===true&&Number.isFinite(liveDrift)&&Math.abs(liveDrift)>120)await normalizeClockDriftedLogs(env,device,liveDrift,2).catch(()=>null);
     if(n){
      await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');
      await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch');
