@@ -1712,7 +1712,8 @@ async function attendanceState(env,me,url){
  const biometricDeviceStates=await rest(env,'attendance_biometric_device_states?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricInventory=await rest(env,'attendance_biometric_inventory?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=updated_at.desc&limit=5000').catch(()=>[]);
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ const linkIdentityReviews=await rest(env,'attendance_link_identity_reviews?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=reviewed_at.desc&limit=2000').catch(()=>[]);
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,linkIdentityReviews,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -2232,6 +2233,51 @@ async function saveLink(env,me,body){
  return {ok:true,link:after,biometrics_attached:inventoryPromotion.attached};
 }
 
+async function resolveLinkIdentityReview(env,me,body){
+ if(!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لمراجعة روابط أجهزة البصمة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const pin=txt(body.device_pin),resolution=txt(body.resolution),reason=txt(body.reason);
+ if(!pin)throw Object.assign(new Error('PIN الجهاز مطلوب.'),{status:400});
+ if(!['confirm_current','relink','snooze'].includes(resolution))throw Object.assign(new Error('قرار المراجعة غير صحيح.'),{status:400});
+ if(!reason)throw Object.assign(new Error('سبب القرار مطلوب لحفظ سجل المراجعة.'),{status:400});
+ const link=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&active=eq.true&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!link?.attendance_employee_id)throw Object.assign(new Error('لا يوجد موظف حضور مربوط بهذا الـPIN حاليًا.'),{status:404});
+ const currentEmployee=await scopedEmployee(env,me,link.attendance_employee_id);
+ if(!currentEmployee)throw Object.assign(new Error('الموظف الحالي غير موجود أو خارج نطاق الفرع.'),{status:404});
+ const deviceUser=(await rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=device_pin,name&limit=1').catch(()=>[]))?.[0]||null;
+ let newEmployee=null,reviewUntil=null;
+ if(resolution==='relink'){
+  newEmployee=await scopedEmployee(env,me,txt(body.new_employee_id));
+  if(!newEmployee)throw Object.assign(new Error('اختر موظفًا جديدًا صالحًا من نفس الفرع.'),{status:400});
+  if(txt(newEmployee.id)===txt(currentEmployee.id))throw Object.assign(new Error('الموظف الجديد هو نفس الموظف الحالي.'),{status:400});
+  if(device.branch_id&&newEmployee.branch_id&&txt(device.branch_id)!==txt(newEmployee.branch_id))throw Object.assign(new Error('الموظف الجديد يجب أن يكون في نفس فرع الجهاز.'),{status:400});
+ }
+ if(resolution==='snooze'){
+  const days=Math.max(1,Math.min(90,Number(body.snooze_days||7)));
+  reviewUntil=new Date(Date.now()+days*86400000).toISOString();
+ }
+ const actorValue=actorId(me)||actorName(me)||null;
+ const rpc=await rest(env,'rpc/attendance_resolve_link_identity_review',{method:'POST',body:{
+  p_device_id:device.id,p_device_pin:pin,p_resolution:resolution,p_reason:reason,
+  p_device_name_snapshot:device.name||null,p_device_user_name_snapshot:deviceUser?.name||null,
+  p_current_employee_id:currentEmployee.id,p_current_employee_name_snapshot:currentEmployee.name||link.display_name||null,
+  p_new_employee_id:newEmployee?.id||null,p_new_employee_name_snapshot:newEmployee?.name||null,
+  p_new_staff_user_id:newEmployee?.staff_user_id||null,p_new_branch_id:newEmployee?.branch_id||device.branch_id||null,
+  p_actor:actorValue,p_environment:device.data_environment||'training',p_review_until:reviewUntil
+ }}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر حفظ قرار المراجعة.'),{status:409})});
+ const after=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=*&limit=1').catch(()=>[]))?.[0]||link;
+ await audit(env,me,'attendance_link_identity_review','attendance_employee_link',link.id,device.branch_id,link,{...after,identity_review:{resolution,reason,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,device_user_name:deviceUser?.name||null}},reason).catch(()=>{});
+ return {
+  ok:true,resolution,review_until:reviewUntil,new_employee_id:newEmployee?.id||null,
+  inventory_count:Number(rpc?.inventory_count||0),device_state_rows_written:Number(rpc?.device_state_rows_written||0),
+  message:resolution==='confirm_current'
+   ?'تم تأكيد أن الربط الحالي صحيح. لن يظهر نفس التحذير طالما الاسم على الجهاز والموظف لم يتغيرا.'
+   :resolution==='snooze'
+    ?'تم تأجيل التنبيه مؤقتًا حتى '+new Date(reviewUntil).toLocaleDateString('ar-SA')+'.'
+    :'تم إعادة ربط الـPIN بالموظف الجديد مع نقل ملكية بصمات هذا الجهاز والحركات القديمة داخل النظام بأمان.'
+ };
+}
+
 async function deleteLink(env,me,body){if(!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة روابط موظفي البصمة.'),{status:403});const id=txt(body.id),rows=await rest(env,'attendance_employee_links?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الرابط غير موجود.'),{status:404});const device=await scopedDevice(env,me,before.device_id);if(!device)throw Object.assign(new Error('الرابط خارج نطاق الفرع.'),{status:403});await rest(env,'attendance_employee_links?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});await audit(env,me,'attendance_link_delete','attendance_employee_link',id,before.branch_id,before,null,'حذف ربط البصمة');return {ok:true}}
 
 async function attendanceApi(request,env,ctx){
@@ -2270,6 +2316,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='delete_calendar_rule')return json(await deleteEmployeeCalendarRule(env,me,body));
   if(action==='delete_employee')return json(await deleteAttendanceEmployee(env,me,body));
   if(action==='save_link')return json(await saveLink(env,me,body));
+  if(action==='resolve_link_identity_review')return json(await resolveLinkIdentityReview(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
   if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
