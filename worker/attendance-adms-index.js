@@ -1187,8 +1187,13 @@ async function importDeviceUsers(env,me,body){
  const linkRows=valid.map(({user,employee})=>{const old=linkMap.get(txt(user.device_pin));return {device_id:device.id,device_pin:txt(user.device_pin),attendance_employee_id:employee.id,staff_user_id:old?.staff_user_id||null,branch_id:device.branch_id,display_name:employee.name,active:true,created_by:old?.created_by||actorValue,updated_by:actorValue,created_at:old?.created_at||now,updated_at:now}});
  if(linkRows.length)await rest(env,'attendance_employee_links?on_conflict=device_id%2Cdevice_pin',{method:'POST',body:linkRows,prefer:'resolution=merge-duplicates,return=minimal'});
  await Promise.all(valid.map(({user,employee})=>rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(user.device_pin),{method:'PATCH',body:{attendance_employee_id:employee.id,employee_name:employee.name,branch_id:device.branch_id},prefer:'return=minimal'}).catch(()=>{})));
- await audit(env,me,'attendance_device_users_import','attendance_device',device.id,device.branch_id,null,{imported:valid.length,total_device_users:deviceUsers.length},'استيراد موظفي جهاز البصمة إلى موظفي الحضور');
- return {ok:true,imported:valid.length,skipped:deviceUsers.length-valid.length};
+ let biometricsAttached=0,biometricConflicts=0;
+ for(const {user,employee} of valid){
+  const promoted=await promoteInventoryToEmployee(env,device,user.device_pin,employee,actorValue).catch(()=>({attached:0,conflicts:0}));
+  biometricsAttached+=Number(promoted?.attached||0);biometricConflicts+=Number(promoted?.conflicts||0);
+ }
+ await audit(env,me,'attendance_device_users_import','attendance_device',device.id,device.branch_id,null,{imported:valid.length,total_device_users:deviceUsers.length,biometrics_attached:biometricsAttached,biometric_conflicts:biometricConflicts},'استيراد موظفي جهاز البصمة إلى موظفي الحضور');
+ return {ok:true,imported:valid.length,skipped:deviceUsers.length-valid.length,biometrics_attached:biometricsAttached,biometric_conflicts:biometricConflicts};
 }
 
 
@@ -2008,6 +2013,39 @@ async function saveEmployee(env,me,body){
  return {ok:true,employee:after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued};
 }
 
+async function promoteInventoryToEmployee(env,device,pin,employee,actorValue){
+ const p=txt(pin),eid=txt(employee?.id);if(!p||!eid)return {attached:0,conflicts:0};
+ const inventory=await rest(env,'attendance_biometric_inventory?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(p)+'&data_environment=eq.'+enc(device.data_environment||'training')+'&status=eq.active&select=*').catch(()=>[]);
+ if(!inventory?.length)return {attached:0,conflicts:0};
+ const conflicts=inventory.filter(x=>x.attendance_employee_id&&txt(x.attendance_employee_id)!==eid);
+ if(conflicts.length)return {attached:0,conflicts:conflicts.length,conflict_rows:conflicts.map(x=>({id:x.id,biometric_key:x.biometric_key,attendance_employee_id:x.attendance_employee_id}))};
+ const now=new Date().toISOString(),branchId=employee.branch_id||device.branch_id||null;
+ const existing=await rest(env,'attendance_biometric_profiles?attendance_employee_id=eq.'+enc(eid)+'&data_environment=eq.'+enc(device.data_environment||'training')+'&select=*').catch(()=>[]);
+ const existingMap=new Map((existing||[]).map(x=>[txt(x.biometric_key),x]));
+ const profiles=[],deviceStates=[];
+ for(const inv of inventory){
+  const old=existingMap.get(txt(inv.biometric_key))||null;
+  const meta={...(old?.metadata||{}),source:'inventory_link_promotion',inventory_id:inv.id,linked_from_pin:p,linked_at:now,raw_template_stored:false};
+  profiles.push({
+   attendance_employee_id:eid,branch_id:branchId,source_device_id:device.id,device_pin:p,
+   biometric_type:inv.biometric_type,biometric_key:inv.biometric_key,finger_code:inv.finger_code||null,slot_no:inv.slot_no??null,status:'active',
+   version:Math.max(1,Number(old?.version||1)),last_enrolled_at:old?.last_enrolled_at||null,last_sync_at:inv.last_seen_at||now,last_result_code:inv.last_result_code??0,
+   data_environment:device.data_environment||'training',metadata:meta,
+   created_by:old?.created_by||actorValue||'inventory_link',updated_by:actorValue||'inventory_link',created_at:old?.created_at||now,updated_at:now
+  });
+  deviceStates.push({
+   device_id:device.id,attendance_employee_id:eid,branch_id:branchId,device_pin:p,
+   biometric_type:inv.biometric_type,biometric_key:inv.biometric_key,finger_code:inv.finger_code||null,slot_no:inv.slot_no??null,status:'active',
+   last_seen_at:inv.last_seen_at||now,last_result_code:inv.last_result_code??0,data_environment:device.data_environment||'training',
+   metadata:{source:'inventory_link_promotion',inventory_id:inv.id,raw_template_stored:false},created_at:now,updated_at:now
+  });
+ }
+ if(profiles.length)await rest(env,'attendance_biometric_profiles?on_conflict=attendance_employee_id%2Cbiometric_key%2Cdata_environment',{method:'POST',body:profiles,prefer:'resolution=merge-duplicates,return=minimal'});
+ if(deviceStates.length)await rest(env,'attendance_biometric_device_states?on_conflict=device_id%2Cattendance_employee_id%2Cbiometric_key%2Cdata_environment',{method:'POST',body:deviceStates,prefer:'resolution=merge-duplicates,return=minimal'});
+ await rest(env,'attendance_biometric_inventory?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(p)+'&data_environment=eq.'+enc(device.data_environment||'training')+'&status=eq.active',{method:'PATCH',body:{attendance_employee_id:eid,branch_id:branchId,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ return {attached:profiles.length,conflicts:0};
+}
+
 async function saveLink(env,me,body){
  if(!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لربط موظفي أجهزة البصمة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
@@ -2018,9 +2056,15 @@ async function saveLink(env,me,body){
  const resolvedStaff=attendanceEmployee?.staff_user_id||staff?.id||null,branchId=txt(device.branch_id||attendanceEmployee?.branch_id||staff?.branch_id)||null,displayName=txt(attendanceEmployee?.name||staff?.name||body.display_name)||null;
  const payload={device_id:device.id,device_pin:pin,attendance_employee_id:attendanceEmployee?.id||null,staff_user_id:resolvedStaff,branch_id:branchId,display_name:displayName,active:true,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
  const before=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=*&limit=1'))?.[0]||null;
+ let inventoryPromotion={attached:0,conflicts:0};
+ if(attendanceEmployee){
+  inventoryPromotion=await promoteInventoryToEmployee(env,device,pin,attendanceEmployee,actorId(me)||actorName(me)||null);
+  if(inventoryPromotion.conflicts)throw Object.assign(new Error('هذا الـPIN لديه بصمة مكتشفة مرتبطة بموظف مختلف. افتح مركز مطابقة البصمات وراجع التعارض قبل تغيير الربط.'),{status:409});
+ }
  const rows=await rest(env,'attendance_employee_links?on_conflict=device_id%2Cdevice_pin',{method:'POST',body:{...payload,created_by:before?.created_by||actorId(me)||actorName(me)||null},prefer:'resolution=merge-duplicates,return=representation'}),after=rows?.[0]||null;
  if(attendanceEmployee||staff||displayName){const patch={attendance_employee_id:attendanceEmployee?.id||null,staff_user_id:resolvedStaff,employee_name:displayName,branch_id:branchId};await rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin),{method:'PATCH',body:patch,prefer:'return=minimal'}).catch(()=>{})}
- await audit(env,me,before?'attendance_link_update':'attendance_link_create','attendance_employee_link',after?.id||'',branchId,before,after,'ربط رقم جهاز البصمة بموظف');return {ok:true,link:after};
+ await audit(env,me,before?'attendance_link_update':'attendance_link_create','attendance_employee_link',after?.id||'',branchId,before,{...after,biometric_inventory_attached:inventoryPromotion.attached},'ربط رقم جهاز البصمة بموظف');
+ return {ok:true,link:after,biometrics_attached:inventoryPromotion.attached};
 }
 
 async function deleteLink(env,me,body){if(!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة روابط موظفي البصمة.'),{status:403});const id=txt(body.id),rows=await rest(env,'attendance_employee_links?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الرابط غير موجود.'),{status:404});const device=await scopedDevice(env,me,before.device_id);if(!device)throw Object.assign(new Error('الرابط خارج نطاق الفرع.'),{status:403});await rest(env,'attendance_employee_links?id=eq.'+enc(id),{method:'DELETE',prefer:'return=minimal'});await audit(env,me,'attendance_link_delete','attendance_employee_link',id,before.branch_id,before,null,'حذف ربط البصمة');return {ok:true}}
