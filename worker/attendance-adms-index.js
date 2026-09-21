@@ -773,12 +773,13 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
  const serverMs=Date.now(),samples=[];
  for(const raw of String(body||'').split(/\r?\n/)){const f=raw.trim().split('\t'),rawTime=txt(f[1]),iso=parseSaudiDeviceTime(rawTime);if(!iso)continue;const ms=new Date(iso).getTime();if(!Number.isFinite(ms))continue;const measuredDrift=Math.round((ms-serverMs)/1000);samples.push({rawTime,ms,measuredDrift,drift:canonicalClockDrift(measuredDrift)})}
  if(!samples.length)return null;
- samples.sort((a,b)=>b.ms-a.ms);const sample=samples[0],abs=Math.abs(sample.drift);
- if(abs>48*3600)return null;
+ samples.sort((a,b)=>b.ms-a.ms);const spanMs=samples[0].ms-samples[samples.length-1].ms;if(samples.length>1&&spanMs>10*60*1000)return null;
+ const sample=samples[0],abs=Math.abs(sample.drift);
+ if(abs>12*3600)return null;
  const now=new Date(serverMs).toISOString(),prev=device?.metadata?.clock_drift&&typeof device.metadata.clock_drift==='object'?device.metadata.clock_drift:{},prevAge=prev.checked_at?serverMs-new Date(prev.checked_at).getTime():Infinity,consistent=Number.isFinite(Number(prev.drift_seconds))&&prevAge<=24*3600*1000&&Math.abs(Number(prev.drift_seconds)-sample.drift)<=90,count=consistent?Math.max(1,Number(prev.consecutive_consistent)||1)+1:1,confirmed=abs<=120||count>=2,status=abs<=120?'ok':abs<=15*60?'warning':'critical';
  const clock={drift_seconds:sample.drift,measured_drift_seconds:sample.measuredDrift,drift_minutes:Math.round(sample.drift/60*10)/10,status,confirmed,consecutive_consistent:count,checked_at:now,source,device_time_raw:sample.rawTime,server_time:now,timezone:device.timezone||'Asia/Riyadh'};
- const meta={...(device.metadata||{}),clock_drift:clock},lastSync=meta.last_clock_sync&&typeof meta.last_clock_sync==='object'?meta.last_clock_sync:null;
- if(lastSync?.awaiting_verification){
+ const effectiveClock=!confirmed&&prev.confirmed===true?prev:clock,meta={...(device.metadata||{}),clock_drift:effectiveClock},lastSync=meta.last_clock_sync&&typeof meta.last_clock_sync==='object'?meta.last_clock_sync:null;
+ if(lastSync?.awaiting_verification&&confirmed){
   const acceptedMs=new Date(lastSync.accepted_at||lastSync.requested_at||0).getTime();
   if(Number.isFinite(acceptedMs)&&serverMs>=acceptedMs-5000){
    const verificationSamples=Math.max(0,Number(lastSync.verification_samples)||0)+1;
@@ -1038,10 +1039,10 @@ async function admsRequest(request,env){
    const body=await request.text(),table=txt(url.searchParams.get('table')).toUpperCase(),info=parseDeviceInfo(body);
    await touchDevice(env,device,request,url,info).catch(()=>{});
    if(table==='ATTLOG'){
-    await recordDeviceClockSample(env,device,serial,body,'attlog_live').catch(()=>null);
+    const clockSample=await recordDeviceClockSample(env,device,serial,body,'attlog_live').catch(()=>null);
     const n=await storeAttendanceLogs(env,device,serial,request,body);
-    const liveClock=device?.metadata?.clock_drift||{},liveDrift=Number(liveClock.drift_seconds);
-    if(n&&liveClock.confirmed===true&&Number.isFinite(liveDrift)&&Math.abs(liveDrift)>120)await normalizeClockDriftedLogs(env,device,liveDrift,2).catch(()=>null);
+    const liveDrift=Number(clockSample?.drift_seconds);
+    if(n&&clockSample?.confirmed===true&&Number.isFinite(liveDrift)&&Math.abs(liveDrift)>120)await normalizeClockDriftedLogs(env,device,liveDrift,2).catch(()=>null);
     if(n){
      await markSyncComplete(env,device,'sync_attlog','ATTLOG received: '+n+' records in this batch');
      await markSyncComplete(env,device,'history_attlog','Historical ATTLOG received: '+n+' records in this batch');
