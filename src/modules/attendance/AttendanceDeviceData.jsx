@@ -40,6 +40,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const [shiftOpen,setShiftOpen]=useState(false),[shiftDevice,setShiftDevice]=useState(null),[shiftForm,setShiftForm]=useState(blankShift),[shiftBusy,setShiftBusy]=useState(false);
  const [syncReportOpen,setSyncReportOpen]=useState(false),[syncReportDeviceId,setSyncReportDeviceId]=useState(''),[syncReportBatch,setSyncReportBatch]=useState('');
  const [actionsOpen,setActionsOpen]=useState(false),[actionsDeviceId,setActionsDeviceId]=useState('');
+ const [matchOpen,setMatchOpen]=useState(false),[matchDeviceId,setMatchDeviceId]=useState(''),[matchRows,setMatchRows]=useState([]),[matchEmployees,setMatchEmployees]=useState([]),[matchDecisions,setMatchDecisions]=useState({}),[matchBusy,setMatchBusy]=useState(false),[matchApplyBusy,setMatchApplyBusy]=useState(false),[matchSummary,setMatchSummary]=useState(null);
  const timerRef=useRef(null),attemptRef=useRef(0),watchBatchRef=useRef('');
  const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[],biometricDeviceStates=state.biometricDeviceStates||[],biometricInventory=state.biometricInventory||[],unlinkedGroups=state.unlinkedGroups||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
@@ -53,7 +54,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const biometricByDevice=useMemo(()=>{const m=new Map();const source=biometricInventory.length?biometricInventory:(biometricDeviceStates.length?biometricDeviceStates:biometricProfiles);for(const x of source){if(x.status!=='active')continue;const deviceId=x.device_id||x.source_device_id;if(!deviceId)continue;const k=String(deviceId),a=m.get(k)||[];a.push(x);m.set(k,a)}return m},[biometricInventory,biometricDeviceStates,biometricProfiles]);
  const diagDevice=devices.find(x=>String(x.id)===String(diagDeviceId))||null,diagHealth=healthByDevice.get(String(diagDeviceId))||null,diagCommand=(commandsByDevice.get(String(diagDeviceId))||[]).find(x=>x.command_type==='diagnostic_info')||null;
  const historyDevice=devices.find(x=>String(x.id)===String(historyDeviceId))||null,historySummary=historyByDevice.get(String(historyDeviceId))||null,historyRows=eventsByDevice.get(String(historyDeviceId))||[];
- const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null,actionsDevice=devices.find(x=>String(x.id)===String(actionsDeviceId))||null;
+ const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null,actionsDevice=devices.find(x=>String(x.id)===String(actionsDeviceId))||null,matchDevice=devices.find(x=>String(x.id)===String(matchDeviceId))||null;
  function smartSyncReport(device,batch=syncReportBatch){
   if(!device)return {users:0,linked:0,unlinkedUsers:0,employeesWithBiometric:0,withoutBiometric:0,fingerprints:0,faces:0,unlinkedMovements:0,success:0,failed:0,pending:0,totalCommands:0};
   const us=usersByDevice.get(String(device.id))||[],deviceLinks=links.filter(x=>x.active&&String(x.device_id)===String(device.id)&&x.attendance_employee_id),linkedPins=new Set(deviceLinks.map(x=>String(x.device_pin))),linkedEmployees=[...new Set(deviceLinks.map(x=>String(x.attendance_employee_id)))];
@@ -90,13 +91,46 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
    watchBatchRef.current=out?.batch||'';setWatching(d.id);onNotice?.(out?.message||'بدأ Smart Sync. ستتحدث الحالة تلقائيًا.');await onChanged?.();
   }catch(e){watchBatchRef.current='';onError?.(e.message)}finally{setBusy('')}
  }
- async function importAll(d){
-  if(!confirm('استيراد كل الموظفين المسحوبين من هذا الجهاز كموظفي حضور وربط الـ PIN تلقائيًا؟'))return;
-  setImportBusy(d.id);onError?.('');
+ async function loadMatchPreview(d,openModal=true){
+  const device=typeof d==='string'?devices.find(x=>String(x.id)===String(d)):d;if(!device)return null;
+  setMatchBusy(true);onError?.('');
   try{
-   const out=await api.attendanceWrite({action:'import_device_users',device_id:d.id});
-   onNotice?.(out?.message||('تم استيراد '+String(out?.imported||0)+' موظف وربطهم بالجهاز. المتخطى: '+String(out?.skipped||0)+'.'));await onChanged?.();
-  }catch(e){onError?.(e.message)}finally{setImportBusy('')}
+   const out=await api.attendanceWrite({action:'preview_device_user_matches',device_id:device.id});
+   const rows=(out?.rows||[]).map(x=>({...x,id:'pin-'+String(x.device_pin)}));
+   const initial={};
+   for(const row of rows){
+    if(row.recommended_action==='link_existing'&&row.recommended_employee_id)initial[row.device_pin]={action:'link_existing',attendance_employee_id:row.recommended_employee_id};
+    else if(row.recommended_action==='create_new')initial[row.device_pin]={action:'create_new',attendance_employee_id:''};
+    else initial[row.device_pin]={action:'skip',attendance_employee_id:''};
+   }
+   setMatchDeviceId(device.id);setMatchRows(rows);setMatchEmployees(out?.employees||[]);setMatchDecisions(initial);setMatchSummary({pending:out?.pending||0,already_linked:out?.already_linked||0,total_device_users:out?.total_device_users||0});
+   if(openModal)setMatchOpen(true);
+   if(!rows.length)onNotice?.('كل موظفي هذا الجهاز مربوطون بالفعل.');
+   return out;
+  }catch(e){onError?.(e.message);return null}finally{setMatchBusy(false)}
+ }
+ async function importAll(d){
+  setImportBusy(d.id);onError?.('');
+  try{await loadMatchPreview(d,true)}finally{setImportBusy('')}
+ }
+ function setMatchDecision(pin,patch){setMatchDecisions(x=>({...x,[pin]:{...(x[pin]||{action:'skip',attendance_employee_id:''}),...patch}}))}
+ async function applyMatches(){
+  if(!matchDevice||!matchRows.length)return;
+  const risky=matchRows.filter(r=>r.strong_match&&matchDecisions[r.device_pin]?.action==='create_new');
+  if(risky.length&&!confirm('يوجد '+risky.length+' سجل/سجلات بها تطابق قوي مع موظف موجود، ومع ذلك اخترت إنشاء موظف جديد. هذا قد يصنع تكرارًا. هل راجعت الأسماء وتريد المتابعة؟'))return;
+  const selected=matchRows.map(r=>({device_pin:r.device_pin,action:matchDecisions[r.device_pin]?.action||'skip',attendance_employee_id:matchDecisions[r.device_pin]?.attendance_employee_id||null,confirm_duplicate:risky.some(x=>x.device_pin===r.device_pin)}));
+  const actionable=selected.filter(x=>x.action!=='skip');
+  if(!actionable.length){onError?.('اختر ربط موظف موجود أو إنشاء موظف جديد لسجل واحد على الأقل.');return}
+  if(!confirm('تنفيذ '+actionable.length+' قرار مطابقة على جهاز '+matchDevice.name+'؟ لن يتم تغيير أي PIN تم ربطه بالفعل.'))return;
+  setMatchApplyBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'apply_device_user_matches',device_id:matchDevice.id,decisions:selected});
+   setMatchSummary(out);
+   onNotice?.(out?.message||'تم تنفيذ قرارات Smart Employee Matching.');
+   await onChanged?.();
+   const refreshed=await loadMatchPreview(matchDevice.id,false);
+   if(!refreshed?.pending)setMatchOpen(false);
+  }catch(e){onError?.(e.message)}finally{setMatchApplyBusy(false)}
  }
  async function importBiometrics(d){
   if(!confirm('سيتم قراءة جرد البصمات الموجودة فعليًا على هذا الجهاز حسب PIN، حتى لو لم يكن الـPIN مربوطًا بموظف بعد. لن يتم حفظ قالب البصمة الخام. هل تريد المتابعة؟'))return;
@@ -231,6 +265,35 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
 
  {deviceUsers.length>0&&<Card><div className="card-title"><div><h3><Users size={19}/> الموظفون المسحوبون من الأجهزة</h3><small>يمكن تعديل الاسم والصلاحية والكارت والبيانات التي يدعمها جهاز ZKTeco، ثم رفعها للجهاز.</small></div><Badge>{deviceUsers.length}</Badge></div><Table preferenceKey="attendance-device-users" defaultPageSize={25} rows={deviceUsers} columns={userCols}/><div className="success-note"><Fingerprint size={16}/> قالب البصمة نفسه يظل داخل جهاز ZKTeco ولا يتم نسخه إلى قاعدة البيانات.</div></Card>}
 
+ <Modal open={matchOpen} onClose={()=>!matchApplyBusy&&setMatchOpen(false)} title={'Smart Employee Matching'+(matchDevice?' — '+matchDevice.name:'')} wide>
+  <div style={{display:'grid',gap:14}}>
+   <div className="success-note"><ShieldCheck size={16}/> النظام يقترح فقط. لا يتم ربط موظف أو إنشاء سجل جديد إلا بعد مراجعتك والضغط على «تنفيذ القرارات».</div>
+   {matchSummary&&<div className="stats-grid">
+    <Card><div className="stat-card"><div><span>موظفو الجهاز</span><strong>{matchSummary.total_device_users??matchRows.length}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>مربوطون بالفعل</span><strong>{matchSummary.already_linked??0}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>تحتاج قرار</span><strong>{matchRows.length}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>بصمات مرتبطة بعد التنفيذ</span><strong>{matchSummary.biometrics_attached??0}</strong></div></div></Card>
+   </div>}
+   {matchBusy?<div className="success-note"><RefreshCw size={16}/> جاري تحليل موظفي الجهاز ومقارنتهم بموظفي الفرع…</div>:matchRows.length?<div style={{display:'grid',gap:10}}>
+    {matchRows.map(row=>{
+     const decision=matchDecisions[row.device_pin]||{action:'skip',attendance_employee_id:''},top=row.suggestions?.[0]||null;
+     return <Card key={row.device_pin}>
+      <div className="card-title"><div><h3>{row.name}</h3><small dir="ltr">PIN {row.device_pin}{row.biometric_count?' · '+row.biometric_count+' biometric':''}</small></div><Badge tone={row.strong_match?'green':top?'orange':'gray'}>{row.strong_match?'اقتراح قوي':top?'يحتاج مراجعة':'لا يوجد تطابق واضح'}</Badge></div>
+      {top&&<div className="success-note" style={{marginBottom:10}}><Users size={16}/><div><strong>الاقتراح: {top.name}</strong><div className="muted-small">الثقة: {top.score}% · {(top.reasons||[]).join(' + ')}</div>{top.employee_code&&<div className="muted-small" dir="ltr">Employee Code: {top.employee_code}</div>}</div></div>}
+      <div className="form-grid">
+       <Field label="القرار"><Select value={decision.action} onChange={e=>setMatchDecision(row.device_pin,{action:e.target.value,attendance_employee_id:e.target.value==='link_existing'?(decision.attendance_employee_id||row.recommended_employee_id||top?.id||''):''})}><option value="skip">تجاهل الآن</option><option value="link_existing">ربط بموظف موجود</option><option value="create_new">إنشاء موظف جديد</option></Select></Field>
+       {decision.action==='link_existing'&&<Field label="الموظف الموجود"><Select value={decision.attendance_employee_id||''} onChange={e=>setMatchDecision(row.device_pin,{attendance_employee_id:e.target.value})} required><option value="">اختر الموظف</option>{matchEmployees.map(emp=><option key={emp.id} value={emp.id}>{emp.name}{emp.employee_code?' · '+emp.employee_code:''}</option>)}</Select></Field>}
+       {decision.action==='create_new'&&<Field label="الاسم الجديد"><Input readOnly value={row.name}/></Field>}
+      </div>
+      {decision.action==='create_new'&&row.strong_match&&<div className="training-banner">تنبيه: يوجد تطابق قوي مع موظف موجود. إنشاء سجل جديد يحتاج تأكيد إضافي عند التنفيذ لتجنب التكرار.</div>}
+      {row.suggestions?.length>1&&<div className="muted-small" style={{marginTop:8}}>اقتراحات أخرى: {row.suggestions.slice(1,4).map(x=>x.name+' ('+x.score+'%)').join('، ')}</div>}
+     </Card>
+    })}
+   </div>:<div className="success-note"><ShieldCheck size={16}/> لا توجد سجلات غير مربوطة على هذا الجهاز.</div>}
+   <div className="modal-actions"><Button type="button" onClick={()=>setMatchOpen(false)} disabled={matchApplyBusy}>إغلاق</Button><Button variant="primary" type="button" onClick={applyMatches} disabled={matchApplyBusy||matchBusy||!matchRows.length}>{matchApplyBusy?' جاري تنفيذ القرارات...':' تنفيذ القرارات'}</Button></div>
+  </div>
+ </Modal>
+
  <Modal open={actionsOpen} onClose={closeDeviceActions} title={'إجراءات الجهاز'+(actionsDevice?' — '+actionsDevice.name:'')}>
   {actionsDevice&&<div style={{display:'grid',gap:10}}>
    <div className="success-note"><Database size={16}/> الإجراءات الثانوية مجمعة هنا لتقليل طول بطاقة الجهاز على الجوال. Smart Sync يظل ظاهرًا مباشرة في الجدول.</div>
@@ -240,7 +303,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
     {actionsDevice?.metadata?.last_smart_sync?.batch&&<Button onClick={()=>{closeDeviceActions();openSmartSyncReport(actionsDevice)}}><Database size={15}/> تقرير المزامنة</Button>}
     {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();diagnose(actionsDevice)}} disabled={diagBusy===actionsDevice.id}><Activity size={15}/>{diagBusy===actionsDevice.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}
     {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();openShifts(actionsDevice)}}><Clock3 size={15}/> فترات الدوام</Button>}
-    {(usersByDevice.get(String(actionsDevice.id))||[]).length>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importAll(actionsDevice)}} disabled={importBusy===actionsDevice.id}><UserPlus size={15}/>{importBusy===actionsDevice.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}
+    {(usersByDevice.get(String(actionsDevice.id))||[]).length>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importAll(actionsDevice)}} disabled={importBusy===actionsDevice.id}><UserPlus size={15}/>{importBusy===actionsDevice.id?' جاري المطابقة...':' مطابقة واستيراد الموظفين'}</Button>}
     {state.permissions?.manage_biometrics&&<Button onClick={()=>{closeDeviceActions();importBiometrics(actionsDevice)}} disabled={biometricImportBusy===actionsDevice.id||busy===actionsDevice.id||watching===actionsDevice.id}><Fingerprint size={15}/>{biometricImportBusy===actionsDevice.id?' جاري استيراد البصمات...':' استيراد البصمات فقط'}</Button>}
     {state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importHistory(actionsDevice)}} disabled={historyBusy===actionsDevice.id||busy===actionsDevice.id||watching===actionsDevice.id}><History size={15}/>{historyBusy===actionsDevice.id?' جاري الاستيراد...':historyProfile(actionsDevice).label==='Push Replay'?' إعادة إرسال الحركات القديمة':' استيراد الحركات القديمة'}</Button>}
    </div>
