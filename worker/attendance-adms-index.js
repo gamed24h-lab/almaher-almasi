@@ -70,7 +70,7 @@ async function touchDevice(env,device,request,url,extra={}){
 }
 function handshake(serial,device){
  const replay=!!device?.metadata?.force_attlog_replay,attStamp=replay?'0':'9999';
- return ['GET OPTION FROM: '+serial,'Stamp='+attStamp,'OpStamp=9999','ATTLOGStamp='+attStamp,'OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','Realtime=1','Encrypt=0',''].join('\r\n');
+ return ['GET OPTION FROM: '+serial,'Stamp='+attStamp,'OpStamp=9999','ATTLOGStamp='+attStamp,'OPERLOGStamp=9999','PhotoStamp=9999','ATTPHOTOStamp=9999','ErrorDelay=30','Delay=10','TransTimes=00:00;23:59','TransInterval=1','TransFlag=1111000000','TimeZone=3','Realtime=1','Encrypt=0',''].join('\r\n');
 }
 async function saveHistoryProfile(env,device,patch){
  if(!device?.id)return null;
