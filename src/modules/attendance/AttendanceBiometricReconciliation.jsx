@@ -23,11 +23,12 @@ const typeLabel=t=>({
 
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
  const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState(''),[autoBusy,setAutoBusy]=useState(false),[lastAuto,setLastAuto]=useState(null);
- const [reviewOpen,setReviewOpen]=useState(false),[reviewIssue,setReviewIssue]=useState(null),[reviewBusy,setReviewBusy]=useState(false),[reviewForm,setReviewForm]=useState({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''});
- const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[];
+ const [reviewOpen,setReviewOpen]=useState(false),[reviewIssue,setReviewIssue]=useState(null),[reviewBusy,setReviewBusy]=useState(false),[reviewForm,setReviewForm]=useState({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''}),[requestBusy,setRequestBusy]=useState('');
+ const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[],selfRequests=(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending'),users=state.users||[];
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
+ const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const reviewsByDevicePin=useMemo(()=>{const m=new Map();for(const r of reviews){const k=String(r.device_id)+'|'+String(r.device_pin),a=m.get(k)||[];a.push(r);m.set(k,a)}return m},[reviews]);
  const reviewCandidates=useMemo(()=>{
   if(!reviewIssue)return [];
@@ -141,6 +142,30 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    await onChanged?.();
   }catch(e){onError?.(e.message)}finally{setBusy('')}
  }
+ async function reviewSelfRequest(req,decision){
+  const label=decision==='approve_binding'?'اعتماد ربط حساب الموظف بملف الحضور':'رفض طلب الموظف';
+  const reason=window.prompt(label+' — اكتب سبب القرار:','')?.trim();if(!reason)return;
+  if(!window.confirm(label+'؟'))return;
+  setRequestBusy(req.id);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'review_self_service_request',id:req.id,decision,reason});
+   onNotice?.(out?.message||'تمت معالجة طلب الموظف.');await onChanged?.();
+  }catch(e){onError?.(e.message)}finally{setRequestBusy('')}
+ }
+ function reviewSelfRequestLink(req){
+  const link=links.find(x=>String(x.device_id)===String(req.device_id)&&String(x.device_pin)===String(req.device_pin)&&x.attendance_employee_id);
+  if(!link){onOpenLinks?.();return}
+  const du=deviceUsers.find(x=>String(x.device_id)===String(req.device_id)&&String(x.device_pin)===String(req.device_pin)),emp=employeeMap.get(String(link.attendance_employee_id)),sim=nameSimilarity(du?.name,emp?.name||link.display_name);
+  openLinkReview({id:'self-request:'+req.id,type:'employee_self_service_request',severity:'warning',device_id:req.device_id,branch_id:req.branch_id,attendance_employee_id:link.attendance_employee_id,device_pin:req.device_pin,title:'طلب تصحيح من الموظف',detail:req.requested_reason||'طلب مراجعة من الموظف',action:'review_link',device_user_name:du?.name||req.evidence?.device_user_name||null,linked_employee_name:emp?.name||link.display_name||null,name_similarity:sim==null?0:Number(sim.toFixed(2))});
+ }
+ const selfRequestCols=[
+  {key:'request',label:'طلب الموظف',render:r=><div><strong>{r.request_type==='account_binding'?'ربط الحساب بملف الحضور':r.request_type==='not_mine'?'الموظف يقول: هذه ليست بصمتي':r.request_type==='wrong_link'?'تصحيح ربط خاطئ':'طلب تصحيح بصمة'}</strong><div className="muted-small">{r.requested_reason||'—'}</div></div>},
+  {key:'employee',label:'الموظف / الحساب',render:r=><div><strong>{employeeMap.get(String(r.attendance_employee_id))?.name||userMap.get(String(r.staff_user_id))?.name||'—'}</strong><div className="muted-small">{r.attendance_employee_id?employeeMap.get(String(r.attendance_employee_id))?.employee_code:'حساب '+String(r.staff_user_id||'')}</div></div>},
+  {key:'device',label:'الجهاز / PIN',render:r=>r.device_id?<div><strong>{deviceMap.get(String(r.device_id))?.name||'—'}</strong><div className="muted-small">PIN <span dir="ltr">{r.device_pin||'—'}</span></div></div>:'—'},
+  {key:'date',label:'تاريخ الطلب',render:r=>fmt(r.requested_at)},
+  {key:'action',label:'الإجراء',render:r=><div className="finance-actions">{r.request_type==='account_binding'&&state.permissions?.manage_employees&&<Button variant="primary" onClick={()=>reviewSelfRequest(r,'approve_binding')} disabled={requestBusy===r.id}><ShieldCheck size={14}/> اعتماد الربط</Button>}{r.request_type!=='account_binding'&&state.permissions?.manage_links&&<Button variant="primary" onClick={()=>reviewSelfRequestLink(r)}><Link2 size={14}/> مراجعة الربط</Button>}{(state.permissions?.manage_links||state.permissions?.manage_employees)&&<Button onClick={()=>reviewSelfRequest(r,'reject')} disabled={requestBusy===r.id}>رفض</Button>}</div>}
+ ];
+
  function openLinkReview(row){
   setReviewIssue(row);setReviewForm({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''});setReviewOpen(true);
  }
@@ -198,6 +223,11 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    <Card><div className="stat-card"><div><span>موظفون بدون بصمة مكتشفة</span><strong>{missing}</strong></div></div></Card>
    <Card><div className="stat-card"><div><span>مشاكل ربط / PIN</span><strong>{unlinked}</strong></div></div></Card>
   </div>
+
+  {!!selfRequests.length&&<Card>
+   <div className="card-title"><div><h3><Users size={19}/> طلبات الموظفين من صفحة «بصمتي»</h3><small>الطلبات التي لم تستطع الخدمة الذاتية حلها بأمان وتحتاج قرار الموارد البشرية.</small></div><Badge tone="orange">{selfRequests.length}</Badge></div>
+   <Table preferenceKey="attendance-self-service-hr-requests" defaultPageSize={20} rows={selfRequests} columns={selfRequestCols}/>
+  </Card>}
 
   <Card>
    <div className="card-title"><div><h3><ShieldCheck size={19}/> Safe Auto-Reconcile</h3><small>يعيد قراءة الحالات الآمنة فقط. لا يربط PIN، لا ينقل بصمة بين موظفين، ولا يحذف أو يستبدل أي قالب تلقائيًا.</small></div><div className="finance-actions"><Badge tone={safeIssues?'blue':'green'}>{safeIssues} قابلة للفحص الآمن</Badge>{manualIssues>0&&<Badge tone="orange">{manualIssues} تحتاج مراجعة بشرية</Badge>}</div></div>
