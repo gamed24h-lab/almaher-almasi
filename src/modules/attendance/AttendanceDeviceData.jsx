@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {Activity,Clock3,Database,DownloadCloud,Fingerprint,History,Plus,RefreshCw,ShieldCheck,Trash2,UploadCloud,UserPlus,Users} from 'lucide-react';
+import {Activity,Clock3,Database,DownloadCloud,Fingerprint,History,MoreHorizontal,Plus,RefreshCw,ShieldCheck,Trash2,UploadCloud,UserPlus,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
@@ -39,6 +39,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const [busy,setBusy]=useState(''),[watching,setWatching]=useState(''),[importBusy,setImportBusy]=useState(''),[biometricImportBusy,setBiometricImportBusy]=useState(''),[historyBusy,setHistoryBusy]=useState(''),[diagBusy,setDiagBusy]=useState(''),[diagAllBusy,setDiagAllBusy]=useState(false),[diagOpen,setDiagOpen]=useState(false),[diagDeviceId,setDiagDeviceId]=useState(''),[historyOpen,setHistoryOpen]=useState(false),[historyDeviceId,setHistoryDeviceId]=useState(''),[userOpen,setUserOpen]=useState(false),[userForm,setUserForm]=useState(blankUser),[userBusy,setUserBusy]=useState(false);
  const [shiftOpen,setShiftOpen]=useState(false),[shiftDevice,setShiftDevice]=useState(null),[shiftForm,setShiftForm]=useState(blankShift),[shiftBusy,setShiftBusy]=useState(false);
  const [syncReportOpen,setSyncReportOpen]=useState(false),[syncReportDeviceId,setSyncReportDeviceId]=useState(''),[syncReportBatch,setSyncReportBatch]=useState('');
+ const [actionsOpen,setActionsOpen]=useState(false),[actionsDeviceId,setActionsDeviceId]=useState('');
  const timerRef=useRef(null),attemptRef=useRef(0),watchBatchRef=useRef('');
  const devices=state.devices||[],deviceHealth=state.deviceHealth||[],deviceHealthHistory=state.deviceHealthHistory||[],devicePredictiveAlerts=state.devicePredictiveAlerts||[],healthEvents=state.healthEvents||[],deviceUsers=state.deviceUsers||[],commands=state.commands||[],links=state.links||[],deviceShiftTemplates=state.deviceShiftTemplates||[],biometricProfiles=state.biometricProfiles||[],biometricDeviceStates=state.biometricDeviceStates||[],biometricInventory=state.biometricInventory||[],unlinkedGroups=state.unlinkedGroups||[];
  const usersByDevice=useMemo(()=>{const m=new Map();for(const u of deviceUsers){const k=String(u.device_id),a=m.get(k)||[];a.push(u);m.set(k,a)}return m},[deviceUsers]);
@@ -52,7 +53,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  const biometricByDevice=useMemo(()=>{const m=new Map();const source=biometricInventory.length?biometricInventory:(biometricDeviceStates.length?biometricDeviceStates:biometricProfiles);for(const x of source){if(x.status!=='active')continue;const deviceId=x.device_id||x.source_device_id;if(!deviceId)continue;const k=String(deviceId),a=m.get(k)||[];a.push(x);m.set(k,a)}return m},[biometricInventory,biometricDeviceStates,biometricProfiles]);
  const diagDevice=devices.find(x=>String(x.id)===String(diagDeviceId))||null,diagHealth=healthByDevice.get(String(diagDeviceId))||null,diagCommand=(commandsByDevice.get(String(diagDeviceId))||[]).find(x=>x.command_type==='diagnostic_info')||null;
  const historyDevice=devices.find(x=>String(x.id)===String(historyDeviceId))||null,historySummary=historyByDevice.get(String(historyDeviceId))||null,historyRows=eventsByDevice.get(String(historyDeviceId))||[];
- const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null;
+ const syncReportDevice=devices.find(x=>String(x.id)===String(syncReportDeviceId))||null,actionsDevice=devices.find(x=>String(x.id)===String(actionsDeviceId))||null;
  function smartSyncReport(device,batch=syncReportBatch){
   if(!device)return {users:0,linked:0,unlinkedUsers:0,employeesWithBiometric:0,withoutBiometric:0,fingerprints:0,faces:0,unlinkedMovements:0,success:0,failed:0,pending:0,totalCommands:0};
   const us=usersByDevice.get(String(device.id))||[],deviceLinks=links.filter(x=>x.active&&String(x.device_id)===String(device.id)&&x.attendance_employee_id),linkedPins=new Set(deviceLinks.map(x=>String(x.device_pin))),linkedEmployees=[...new Set(deviceLinks.map(x=>String(x.attendance_employee_id)))];
@@ -135,6 +136,8 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  }
  function openHealthHistory(device){setHistoryDeviceId(device.id);setHistoryOpen(true)}
  function openSmartSyncReport(device,batch=device?.metadata?.last_smart_sync?.batch||''){setSyncReportDeviceId(device.id);setSyncReportBatch(batch);setSyncReportOpen(true)}
+ function openDeviceActions(device){setActionsDeviceId(device.id);setActionsOpen(true)}
+ function closeDeviceActions(){setActionsOpen(false)}
  function runPredictiveAction(alert){
   const device=devices.find(x=>String(x.id)===String(alert?.device_id));if(!device)return;
   if(alert.recommended_action==='health_log'){openHealthHistory(device);return}
@@ -177,7 +180,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   {key:'compat',label:'توافق سجل الحضور',render:d=>{const p=historyProfile(d);return <div><Badge tone={p.tone}>{p.label}</Badge><div className="muted-small" style={{marginTop:3}}>{p.detail}</div>{p.last&&<div className="muted-small">آخر نجاح: {fmt(p.last)}</div>}</div>}},
   {key:'reliability',label:'اعتمادية 30 يوم',render:d=>{const h=historyByDevice.get(String(d.id));return h?<div><strong>{h.availability_pct}%</strong><div className="muted-small">{h.outage_count} انقطاع · {durationText(h.downtime_seconds)}</div><div className="muted-small">{h.command_failures} فشل أوامر</div></div>:'—'}},
   {key:'command',label:'حالة آخر أوامر',render:d=>{const rows=(commandsByDevice.get(String(d.id))||[]).slice(0,4);return rows.length?<div style={{display:'grid',gap:6}}>{rows.map(c=><div key={c.id} style={{display:'flex',gap:8,alignItems:'flex-start',justifyContent:'space-between'}}><div><span className="muted-small">{cmdName(c.command_type,c.metadata)}</span>{c.status==='failed'&&<div className="muted-small" style={{marginTop:2,maxWidth:260}}>{cmdReason(c)}</div>}</div><Badge tone={c.status==='success'?'green':c.status==='failed'?'red':'orange'}>{cmdLabel(c.status)}</Badge></div>)}</div>:'—'}},
-  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id,count=(usersByDevice.get(String(d.id))||[]).length;return <div className="finance-actions"><RecordTimeline entityId={d.id} title={'تاريخ جهاز البصمة — '+d.name} subtitle="تعديلات الجهاز وإجراءاته الإدارية المسجلة في Audit Center." label="سجل التغييرات"/><Button onClick={()=>openHealthHistory(d)}><History size={15}/> سجل الصحة</Button>{d?.metadata?.last_smart_sync?.batch&&<Button onClick={()=>openSmartSyncReport(d)}><Database size={15}/> تقرير المزامنة</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>diagnose(d)} disabled={diagBusy===d.id}><Activity size={15}/>{diagBusy===d.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>openShifts(d)}><Clock3 size={15}/> فترات الدوام</Button>}{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><RefreshCw size={15}/>{active?' Smart Sync يعمل...':' Smart Sync شامل'}</Button>}{count>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>importAll(d)} disabled={importBusy===d.id}><UserPlus size={15}/>{importBusy===d.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}{state.permissions?.manage_biometrics&&<Button onClick={()=>importBiometrics(d)} disabled={biometricImportBusy===d.id||active}><Fingerprint size={15}/>{biometricImportBusy===d.id?' جاري استيراد البصمات...':' استيراد البصمات فقط'}</Button>}{state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>importHistory(d)} disabled={historyBusy===d.id||active}><History size={15}/>{historyBusy===d.id?' جاري الاستيراد...':historyProfile(d).label==='Push Replay'?' إعادة إرسال الحركات القديمة':' استيراد الحركات القديمة'}</Button>}</div>}}
+  {key:'action',label:'',render:d=>{const active=busy===d.id||watching===d.id;return <div className="finance-actions">{state.permissions?.manage_devices&&<Button variant="primary" onClick={()=>sync(d)} disabled={active}><RefreshCw size={15}/>{active?' Smart Sync يعمل...':' Smart Sync شامل'}</Button>}<Button onClick={()=>openDeviceActions(d)}><MoreHorizontal size={16}/> إجراءات أخرى</Button></div>}}
  ];
  const predictiveCols=[
   {key:'device',label:'الجهاز',render:r=>{const x=devices.find(d=>String(d.id)===String(r.device_id));return <div><strong>{x?.name||r.device_id}</strong><div className="muted-small">{x?.model||'—'} · {x?.serial_number||'—'}</div></div>}},
@@ -227,6 +230,22 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
  <Table preferenceKey="attendance-device-data" defaultPageSize={25} rows={devices} columns={cols}/></Card>
 
  {deviceUsers.length>0&&<Card><div className="card-title"><div><h3><Users size={19}/> الموظفون المسحوبون من الأجهزة</h3><small>يمكن تعديل الاسم والصلاحية والكارت والبيانات التي يدعمها جهاز ZKTeco، ثم رفعها للجهاز.</small></div><Badge>{deviceUsers.length}</Badge></div><Table preferenceKey="attendance-device-users" defaultPageSize={25} rows={deviceUsers} columns={userCols}/><div className="success-note"><Fingerprint size={16}/> قالب البصمة نفسه يظل داخل جهاز ZKTeco ولا يتم نسخه إلى قاعدة البيانات.</div></Card>}
+
+ <Modal open={actionsOpen} onClose={closeDeviceActions} title={'إجراءات الجهاز'+(actionsDevice?' — '+actionsDevice.name:'')}>
+  {actionsDevice&&<div style={{display:'grid',gap:10}}>
+   <div className="success-note"><Database size={16}/> الإجراءات الثانوية مجمعة هنا لتقليل طول بطاقة الجهاز على الجوال. Smart Sync يظل ظاهرًا مباشرة في الجدول.</div>
+   <div style={{display:'grid',gap:8}}>
+    <RecordTimeline entityId={actionsDevice.id} title={'تاريخ جهاز البصمة — '+actionsDevice.name} subtitle="تعديلات الجهاز وإجراءاته الإدارية المسجلة في Audit Center." label="سجل التغييرات"/>
+    <Button onClick={()=>{closeDeviceActions();openHealthHistory(actionsDevice)}}><History size={15}/> سجل الصحة</Button>
+    {actionsDevice?.metadata?.last_smart_sync?.batch&&<Button onClick={()=>{closeDeviceActions();openSmartSyncReport(actionsDevice)}}><Database size={15}/> تقرير المزامنة</Button>}
+    {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();diagnose(actionsDevice)}} disabled={diagBusy===actionsDevice.id}><Activity size={15}/>{diagBusy===actionsDevice.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}
+    {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();openShifts(actionsDevice)}}><Clock3 size={15}/> فترات الدوام</Button>}
+    {(usersByDevice.get(String(actionsDevice.id))||[]).length>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importAll(actionsDevice)}} disabled={importBusy===actionsDevice.id}><UserPlus size={15}/>{importBusy===actionsDevice.id?' جاري الاستيراد...':' استيراد الموظفين'}</Button>}
+    {state.permissions?.manage_biometrics&&<Button onClick={()=>{closeDeviceActions();importBiometrics(actionsDevice)}} disabled={biometricImportBusy===actionsDevice.id||busy===actionsDevice.id||watching===actionsDevice.id}><Fingerprint size={15}/>{biometricImportBusy===actionsDevice.id?' جاري استيراد البصمات...':' استيراد البصمات فقط'}</Button>}
+    {state.permissions?.manage_devices&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importHistory(actionsDevice)}} disabled={historyBusy===actionsDevice.id||busy===actionsDevice.id||watching===actionsDevice.id}><History size={15}/>{historyBusy===actionsDevice.id?' جاري الاستيراد...':historyProfile(actionsDevice).label==='Push Replay'?' إعادة إرسال الحركات القديمة':' استيراد الحركات القديمة'}</Button>}
+   </div>
+  </div>}
+ </Modal>
 
  <Modal open={syncReportOpen} onClose={()=>setSyncReportOpen(false)} title={'تقرير Smart Sync'+(syncReportDevice?' — '+syncReportDevice.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
