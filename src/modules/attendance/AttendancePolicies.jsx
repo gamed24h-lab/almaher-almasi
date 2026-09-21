@@ -27,10 +27,11 @@ const defaults={
 };
 
 export default function AttendancePolicies({state,onChanged,onError,onNotice}){
- const branches=state.branches||[],policies=state.policies||[];
+ const branches=state.branches||[],policies=state.policies||[],policyVersions=state.policyVersions||[];
  const initialBranch=state.scope?.branch_id||branches[0]?.id||'';
  const [branchId,setBranchId]=useState(initialBranch),[form,setForm]=useState({...defaults}),[busy,setBusy]=useState(false);
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
+ const branchVersions=useMemo(()=>policyVersions.filter(v=>String(v.branch_id)===String(branchId)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,6),[policyVersions,branchId]);
 
  useEffect(()=>{
   if(!branchId&&branches[0]?.id){setBranchId(branches[0].id);return}
@@ -80,6 +81,7 @@ export default function AttendancePolicies({state,onChanged,onError,onNotice}){
   <Field label="ملاحظات السياسة"><Textarea value={form.notes||''} onChange={e=>setForm(x=>({...x,notes:e.target.value}))} placeholder="مثال: الجزاءات هنا للمراجعة الإدارية فقط قبل اعتمادها"/></Field>
   <Field label="سبب التعديل"><Input value={form.reason||''} onChange={e=>setForm(x=>({...x,reason:e.target.value}))} placeholder="اختياري"/></Field>
   <div className="success-note" style={{gridColumn:'1/-1'}}><ShieldAlert size={16}/> ترتيب التصنيف: إجازة/راحة ← غياب كامل ← حضور جزئي ← حضور. الاستئذان المعتمد يقلل النقص والانصراف المبكر، ولا يتم خصم مالي تلقائيًا من أي موظف.</div>
+  {!!branchVersions.length&&<div className="field" style={{gridColumn:'1/-1'}}><span>سجل سريان السياسة</span><div style={{display:'grid',gap:6}}>{branchVersions.map(v=>{const s=v.policy_snapshot||{},mode=s.attendance_mode==='mobile'?'جوال':s.attendance_mode==='hybrid'?'مختلط':'بصمة';return <div key={v.id} className="success-note"><strong>{v.effective_from}{v.effective_to?' → '+v.effective_to:' → مستمر'}</strong> · {mode}{v.reason?' · '+v.reason:''}</div>})}</div></div>}
   <div className="modal-actions" style={{gridColumn:'1/-1'}}><Button variant="primary" type="submit" disabled={busy||!branchId}>{busy?'جاري الحفظ...':'حفظ السياسة'}</Button></div>
  </form></Card>;
 }
