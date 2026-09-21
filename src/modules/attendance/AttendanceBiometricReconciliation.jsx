@@ -6,6 +6,8 @@ import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
 
 function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
+function nameKey(v){return String(v||'').toLowerCase().normalize('NFKC').replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,'').replace(/ـ/g,'').replace(/[أإآٱ]/g,'ا').replace(/ى/g,'ي').replace(/ؤ/g,'و').replace(/ئ/g,'ي').replace(/ة/g,'ه').replace(/[^\p{L}\p{N}]+/gu,' ').trim().replace(/\s+/g,' ')}
+function nameSimilarity(a,b){const x=nameKey(a),y=nameKey(b);if(!x||!y)return null;if(x===y)return 1;const ax=[...new Set(x.split(' ').filter(t=>t.length>1))],by=[...new Set(y.split(' ').filter(t=>t.length>1))],sb=new Set(by),common=ax.filter(t=>sb.has(t)).length,union=new Set([...ax,...by]).size;return union?common/union:0}
 const severityTone=s=>s==='critical'?'red':s==='warning'?'orange':s==='info'?'blue':'green';
 const severityLabel=s=>s==='critical'?'حرج':s==='warning'?'يحتاج مراجعة':s==='info'?'معلومة':'سليم';
 const typeLabel=t=>({
@@ -15,7 +17,8 @@ const typeLabel=t=>({
  link_mismatch:'تعارض ربط البصمة',
  duplicate_pin:'PIN مرتبط بأكثر من موظف',
  baseline_missing:'لم يتم أخذ خط أساس',
- unlinked_biometric:'بصمة غير مرتبطة بموظف'
+ unlinked_biometric:'بصمة غير مرتبطة بموظف',
+ linked_name_mismatch:'اسم الجهاز لا يطابق الموظف المرتبط'
 }[t]||t);
 
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
@@ -58,10 +61,15 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    }
    const reportedUnlinkedPins=new Set();
    for(const u of deviceUsersByDevice.get(did)||[]){
-    const matches=linkByDevicePin.get(did+'|'+String(u.device_pin))||[],bios=inventoryByDevicePin.get(did+'|'+String(u.device_pin))||[];
-    if(!matches.some(x=>x.attendance_employee_id)){
+    const matches=linkByDevicePin.get(did+'|'+String(u.device_pin))||[],bios=inventoryByDevicePin.get(did+'|'+String(u.device_pin))||[],linkedMatch=matches.find(x=>x.attendance_employee_id)||null;
+    if(!linkedMatch){
      reportedUnlinkedPins.add(String(u.device_pin));
      out.push({id:'unlinked:'+did+':'+u.device_pin,type:'unlinked_device_user',severity:'warning',device_id:d.id,branch_id:d.branch_id,device_pin:u.device_pin,title:bios.length?'بصمة موجودة لـ PIN غير مربوط':'PIN موجود على الجهاز وغير مربوط بموظف حضور',detail:(u.name||('PIN '+u.device_pin))+' موجود على الجهاز'+(bios.length?' ومعه '+bios.length+' قالب بصمة مكتشف':'')+' ويحتاج ربطه بموظف.',action:'links'});
+    }else{
+     const emp=employeeMap.get(String(linkedMatch.attendance_employee_id)),sim=nameSimilarity(u.name,emp?.name||linkedMatch.display_name);
+     if(sim!=null&&sim<0.45){
+      out.push({id:'name-link:'+did+':'+u.device_pin,type:'linked_name_mismatch',severity:'warning',device_id:d.id,branch_id:linkedMatch.branch_id||d.branch_id,attendance_employee_id:linkedMatch.attendance_employee_id,device_pin:u.device_pin,title:'اسم الجهاز مختلف عن الموظف المرتبط',detail:'PIN '+u.device_pin+' اسمه على الجهاز «'+String(u.name||'بدون اسم')+'» بينما مرتبط في النظام بـ «'+String(emp?.name||linkedMatch.display_name||'موظف')+'». التشابه ضعيف، لذلك يحتاج مراجعة بشرية قبل أي تعديل.',action:'links',device_user_name:u.name||null,linked_employee_name:emp?.name||linkedMatch.display_name||null,name_similarity:Number(sim.toFixed(2))});
+     }
     }
    }
    for(const inv of deviceInventory){
@@ -149,7 +157,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
   {key:'action',label:'',render:r=><div className="finance-actions">{state.permissions?.manage_biometrics&&<Button onClick={()=>scan({id:'device:'+r.id,device_id:r.id,action:'device_scan'})} disabled={busy==='device:'+r.id}><Fingerprint size={14}/> فحص البصمات</Button>}{state.permissions?.manage_devices&&<Button onClick={()=>onOpenDevices?.()}><Users size={14}/> الأجهزة</Button>}</div>}
  ];
 
- const critical=issues.filter(x=>x.severity==='critical').length,warnings=issues.filter(x=>x.severity==='warning').length,missing=issues.filter(x=>x.type==='missing_employee_biometric').length,unlinked=issues.filter(x=>x.type==='unlinked_device_user'||x.type==='unlinked_biometric'||x.type==='duplicate_pin'||x.type==='link_mismatch').length;
+ const critical=issues.filter(x=>x.severity==='critical').length,warnings=issues.filter(x=>x.severity==='warning').length,missing=issues.filter(x=>x.type==='missing_employee_biometric').length,unlinked=issues.filter(x=>x.type==='unlinked_device_user'||x.type==='unlinked_biometric'||x.type==='duplicate_pin'||x.type==='link_mismatch'||x.type==='linked_name_mismatch').length;
  const safeIssues=issues.filter(x=>x.action==='device_scan'||x.action==='employee_scan').length,manualIssues=issues.filter(x=>x.action==='links').length;
  return <div style={{display:'grid',gap:14}}>
   <div className="stats-grid">
@@ -165,7 +173,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
     <Button variant="primary" onClick={autoReconcile} disabled={autoBusy||!safeIssues}><ShieldCheck size={15}/>{autoBusy?' جاري تشغيل المطابقة الآمنة...':' إصلاح آمن تلقائي'}</Button>
     {manualIssues>0&&<Button onClick={()=>onOpenLinks?.()}><Link2 size={14}/> مراجعة تعارضات الربط</Button>}
    </div>
-   <div className="success-note"><ShieldCheck size={16}/> مسموح تلقائيًا: إعادة فحص جهاز به فرق عددي، أو إعادة فحص موظف مربوط لم تظهر بصمته. ممنوع تلقائيًا: PIN غير مربوط، PIN مكرر، أو اختلاف صاحب البصمة.</div>
+   <div className="success-note"><ShieldCheck size={16}/> مسموح تلقائيًا: إعادة فحص جهاز به فرق عددي، أو إعادة فحص موظف مربوط لم تظهر بصمته. ممنوع تلقائيًا: PIN غير مربوط، PIN مكرر، اختلاف صاحب البصمة، أو اختلاف واضح بين اسم الجهاز والموظف المرتبط.</div>
    {lastAuto&&<div className="stats-grid" style={{marginTop:10}}>
     <Card><div className="stat-card"><div><span>أجهزة تمت مراجعتها</span><strong>{lastAuto.devices_reviewed??0}</strong></div></div></Card>
     <Card><div className="stat-card"><div><span>فحوص جهاز بدأت</span><strong>{lastAuto.device_scans??0}</strong><small>{lastAuto.employee_scans??0} فحص موظف</small></div></div></Card>
