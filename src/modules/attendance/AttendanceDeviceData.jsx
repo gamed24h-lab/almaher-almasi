@@ -14,7 +14,7 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
-function clockSyncLabel(v){return v==='queued'?'بانتظار الجهاز':v==='accepted'?'استلم الجهاز التحديث':v==='accepted_unverified'?'استلم التحديث — لم يُتحقق بعد':v==='verified'?'تمت المزامنة والتحقق':v==='failed'?'فشلت المزامنة':v||'لم تُنفذ بعد'}
+function clockSyncLabel(v){return v==='queued'?'بانتظار الجهاز':v==='accepted'?'استلم الجهاز التحديث':v==='accepted_unverified'?'استلم التحديث — جارٍ التحقق':v==='verified'?'تمت المزامنة والتحقق':v==='verification_failed'?'فشل التحقق — الساعة ما زالت غير مضبوطة':v==='failed'?'فشل إرسال المزامنة':v||'لم تُنفذ بعد'}
 function cmdName(v,meta){const s=meta?.history_strategy;return v==='clock_probe'?'فحص ساعة الجهاز':v==='clock_sync'?'مزامنة ساعة الجهاز':v==='sync_info'?'معلومات الجهاز':v==='diagnostic_info'?'تشخيص الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='history_attlog_replay'?'الحركات القديمة — إعادة إرسال':v==='biometric_import_fingerprint'?'استيراد بصمات الأصابع':v==='biometric_import_face'?'استيراد بصمة الوجه':v==='biometric_enroll'?'تسجيل بصمة':v==='biometric_delete'?'حذف بصمة محددة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
 function cmdReason(c){
  if(c?.status!=='failed')return '';
@@ -239,7 +239,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   {key:'action',label:'الإجراء',render:r=><Button onClick={()=>runPredictiveAction(r)}>{r.recommended_label||'تشخيص الآن'}</Button>}
  ];
  const healthEventCols=[
-  {key:'type',label:'الحدث',render:x=>x.event_type==='disconnect_gap'?<Badge tone="red">انقطاع اتصال</Badge>:x.event_type==='command_failed'?<Badge tone="orange">فشل أمر</Badge>:x.event_type==='clock_drift'?<Badge tone="red">خلل ساعة</Badge>:x.event_type==='clock_recovered'?<Badge tone="green">ضبط الساعة</Badge>:<Badge>{x.event_type}</Badge>},
+  {key:'type',label:'الحدث',render:x=>x.event_type==='disconnect_gap'?<Badge tone="red">انقطاع اتصال</Badge>:x.event_type==='command_failed'?<Badge tone="orange">فشل أمر</Badge>:x.event_type==='clock_drift'?<Badge tone="red">خلل ساعة</Badge>:x.event_type==='clock_recovered'?<Badge tone="green">ضبط الساعة</Badge>:x.event_type==='clock_sync_verified'?<Badge tone="green">تم التحقق من الساعة</Badge>:x.event_type==='clock_sync_verification_failed'?<Badge tone="red">فشل تحقق الساعة</Badge>:<Badge>{x.event_type}</Badge>},
   {key:'time',label:'الوقت',render:x=><div><strong>{fmt(x.started_at)}</strong>{x.ended_at&&x.ended_at!==x.started_at&&<div className="muted-small">حتى {fmt(x.ended_at)}</div>}</div>},
   {key:'duration',label:'المدة',render:x=>x.event_type==='disconnect_gap'?durationText(x.duration_seconds):'—'},
   {key:'summary',label:'التفاصيل',render:x=><div>{x.summary||'—'}{x.result_code!=null&&<div className="muted-small">Code: {x.result_code}</div>}</div>}
