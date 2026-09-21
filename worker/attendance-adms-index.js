@@ -1740,8 +1740,8 @@ async function resetAttendanceViolationDecision(env,me,body){
 }
 
 async function attendanceState(env,me,url){
- const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyVersionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
- const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,scheduleVersions,deleteRequests,calendarRules,policies,policyVersions]=await Promise.all([
+ const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyVersionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',mobileDeviceFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
+ const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,scheduleVersions,deleteRequests,calendarRules,policies,policyVersions,mobileDevices]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
   rest(env,'attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at&data_environment=eq.'+enc(mode)+logFilter+'&order=occurred_at.desc&limit=500'),
@@ -1754,7 +1754,8 @@ async function attendanceState(env,me,url){
   rest(env,'attendance_employee_delete_requests?select=*&order=created_at.desc&limit=100'+deleteFilter),
   rest(env,'attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+calendarFilter+'&order=start_date.desc,created_at.desc&limit=2000'),
   rest(env,'attendance_branch_policies?select=*&data_environment=eq.'+enc(mode)+policyFilter+'&order=branch_id.asc'),
-  rest(env,'attendance_branch_policy_versions?select=*&data_environment=eq.'+enc(mode)+policyVersionFilter+'&order=branch_id.asc,effective_from.asc&limit=5000').catch(()=>[])
+  rest(env,'attendance_branch_policy_versions?select=*&data_environment=eq.'+enc(mode)+policyVersionFilter+'&order=branch_id.asc,effective_from.asc&limit=5000').catch(()=>[]),
+  rest(env,'attendance_mobile_devices?select=id,attendance_employee_id,staff_user_id,branch_id,device_label,status,data_environment,first_seen_at,last_seen_at,approved_at,approved_by,revoked_at,revoked_by,review_note,created_at,updated_at&data_environment=eq.'+enc(mode)+mobileDeviceFilter+'&order=updated_at.desc&limit=5000').catch(()=>[])
  ]);
  const deviceIds=(devices||[]).map(d=>d.id).filter(Boolean),inFilter=deviceIds.length?'&device_id=in.('+deviceIds.map(enc).join(',')+')':'';
  const historySince=new Date(Date.now()-90*86400000).toISOString();
@@ -1915,7 +1916,7 @@ async function attendanceState(env,me,url){
   const snap=active?.policy_snapshot&&typeof active.policy_snapshot==='object'&&!Array.isArray(active.policy_snapshot)?active.policy_snapshot:null;
   return snap?{...basePolicy,...snap,id:basePolicy.id,branch_id:basePolicy.branch_id,data_environment:basePolicy.data_environment,policy_version_id:active.id,policy_effective_from:active.effective_from,policy_effective_to:active.effective_to||null}:basePolicy;
  });
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies:effectivePolicies,policyVersions,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies:effectivePolicies,policyVersions,mobileDevices,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1932,14 +1933,22 @@ async function attendanceReport(env,me,body){
  path+='&order=occurred_at.asc&limit=10000';
  const rawLogs=await rest(env,path),reportDeviceIds=[...new Set((rawLogs||[]).map(x=>x.device_id).filter(Boolean))],reportDevices=reportDeviceIds.length?await rest(env,'attendance_devices?id=in.('+reportDeviceIds.map(enc).join(',')+')&select=id,metadata,timezone').catch(()=>[]):[],reportDeviceMap=new Map((reportDevices||[]).map(x=>[String(x.id),x])),clockCheckFrom=new Date(queryFrom.getTime()-86400000).toISOString(),clockCheckTo=new Date(queryTo.getTime()+86400000).toISOString(),reportClockChecks=reportDeviceIds.length?await rest(env,'attendance_device_clock_checks?device_id=in.('+reportDeviceIds.map(enc).join(',')+')&confirmed=eq.true&server_time=gte.'+enc(clockCheckFrom)+'&server_time=lte.'+enc(clockCheckTo)+'&select=device_id,server_time,drift_seconds,status,confirmed,source&order=server_time.asc&limit=5000').catch(()=>[]):[],clockCheckMap=new Map(),correctedDeviceIds=new Set();let clockCorrectedCount=0;
  for(const check of reportClockChecks||[]){const k=String(check.device_id),arr=clockCheckMap.get(k)||[];arr.push(check);clockCheckMap.set(k,arr)}
- const logs=(rawLogs||[]).map(row=>{
+ const biometricLogs=(rawLogs||[]).map(row=>{
   const d=reportDeviceMap.get(String(row.device_id)),occurredMs=new Date(row.occurred_at).getTime(),receivedMs=new Date(row.received_at).getTime();if(!Number.isFinite(occurredMs)||!Number.isFinite(receivedMs))return row;
   const observed=Math.round((occurredMs-receivedMs)/1000),checks=clockCheckMap.get(String(row.device_id))||[],matched=checks.map(x=>({x,t:new Date(x.server_time).getTime(),drift:Number(x.drift_seconds)})).filter(y=>Number.isFinite(y.t)&&Number.isFinite(y.drift)&&Math.abs(receivedMs-y.t)<=86400000&&Math.abs(observed-y.drift)<=180).sort((a,b)=>Math.abs(receivedMs-a.t)-Math.abs(receivedMs-b.t))[0];
   let drift=matched?.drift;
   if(!Number.isFinite(drift)){const clock=d?.metadata?.clock_drift||{},current=Number(clock.drift_seconds),checkedMs=new Date(clock.checked_at||0).getTime();if(clock.confirmed===true&&Number.isFinite(current)&&Number.isFinite(checkedMs)&&Math.abs(receivedMs-checkedMs)<=86400000&&Math.abs(observed-current)<=180)drift=current}
   if(!Number.isFinite(drift)||Math.abs(drift)<=120)return row;
   const corrected=new Date(occurredMs-drift*1000).toISOString();clockCorrectedCount+=1;correctedDeviceIds.add(String(row.device_id));return {...row,original_occurred_at:row.occurred_at,occurred_at:corrected,clock_corrected:true,clock_drift_seconds_applied:drift,clock_correction_source:matched?'clock_check_history':'current_confirmed_drift'};
- }).filter(row=>{const t=new Date(row.occurred_at).getTime();return Number.isFinite(t)&&t>=from.getTime()&&t<to.getTime()}).sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
+ }).filter(row=>{const t=new Date(row.occurred_at).getTime();return Number.isFinite(t)&&t>=from.getTime()&&t<to.getTime()});
+ let mobilePath='attendance_mobile_events?select=id,attendance_employee_id,staff_user_id,branch_id,event_type,occurred_at,accuracy_m,distance_from_site_m,inside_geofence,source,metadata,data_environment&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(from.toISOString())+'&occurred_at=lt.'+enc(to.toISOString());
+ if(branchId)mobilePath+='&branch_id=eq.'+enc(branchId);
+ if(txt(body.attendance_employee_id))mobilePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
+ mobilePath+='&order=occurred_at.asc&limit=10000';
+ const mobileRows=txt(body.device_id)?[]:await rest(env,mobilePath).catch(()=>[]);
+ const employeeIds=[...new Set((mobileRows||[]).map(x=>x.attendance_employee_id).filter(Boolean))],mobileEmployees=employeeIds.length?await rest(env,'attendance_employees?id=in.('+employeeIds.map(enc).join(',')+')&select=id,name,employee_code').catch(()=>[]):[],mobileEmployeeMap=new Map((mobileEmployees||[]).map(x=>[String(x.id),x]));
+ const mobileLogs=(mobileRows||[]).map(row=>({id:'mobile:'+row.id,device_id:null,serial_number:'MOBILE',branch_id:row.branch_id,device_pin:'MOBILE',attendance_employee_id:row.attendance_employee_id,staff_user_id:row.staff_user_id,employee_name:mobileEmployeeMap.get(String(row.attendance_employee_id))?.name||null,occurred_at:row.occurred_at,device_time_raw:row.occurred_at,status_code:row.event_type==='check_in'?0:1,verify_code:null,work_code:'mobile:'+row.event_type,data_environment:row.data_environment,received_at:row.occurred_at,attendance_source:'mobile',mobile_event_type:row.event_type,metadata:{...(row.metadata||{}),accuracy_m:row.accuracy_m,distance_from_site_m:row.distance_from_site_m,inside_geofence:row.inside_geofence}}));
+ const logs=[...biometricLogs,...mobileLogs].sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
  let rulePath='attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(txt(body.to_date||body.from_date))+'&end_date=gte.'+enc(txt(body.from_date));
  if(branchId)rulePath+='&branch_id=eq.'+enc(branchId);
  if(txt(body.attendance_employee_id))rulePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
@@ -1960,7 +1969,7 @@ async function attendanceReport(env,me,body){
  if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
   monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  }
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,schedule_versions:scheduleVersions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_clock_history_matching_observed_drift'}};
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,schedule_versions:scheduleVersions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:(Array.isArray(rawLogs)&&rawLogs.length>=10000)||(Array.isArray(mobileRows)&&mobileRows.length>=10000),clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_clock_history_matching_observed_drift'}};
 }
 
 async function saveDevice(env,me,body){
@@ -2526,6 +2535,123 @@ async function createSelfServiceRequest(env,{account,employee=null,deviceId=null
  const body={staff_user_id:account.id,attendance_employee_id:employee?.id||null,branch_id:employee?.branch_id||account.branch_id||null,device_id:deviceId||null,device_pin:pin||null,request_type:type,status:'pending',requested_reason:txt(reason)||null,evidence:evidence&&typeof evidence==='object'?evidence:{},data_environment:mode,requested_at:new Date().toISOString()};
  return (await rest(env,'attendance_self_service_biometric_requests',{method:'POST',body,prefer:'return=representation'}))?.[0]||body;
 }
+function saudiDayUtcRange(day){
+ const key=/^\d{4}-\d{2}-\d{2}$/.test(txt(day))?txt(day):saudiTodayKey();
+ const start=new Date(key+'T00:00:00+03:00'),end=new Date(start.getTime()+86400000);
+ return {key,start:start.toISOString(),end:end.toISOString()};
+}
+function haversineMeters(lat1,lng1,lat2,lng2){
+ const r=6371000,toRad=v=>Number(v)*Math.PI/180,a1=toRad(lat1),a2=toRad(lat2),dLat=toRad(Number(lat2)-Number(lat1)),dLng=toRad(Number(lng2)-Number(lng1));
+ const a=Math.sin(dLat/2)**2+Math.cos(a1)*Math.cos(a2)*Math.sin(dLng/2)**2;
+ return 2*r*Math.asin(Math.min(1,Math.sqrt(a)));
+}
+async function sha256Hex(value){
+ const data=new TextEncoder().encode(String(value||'')),digest=await crypto.subtle.digest('SHA-256',data);
+ return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function effectiveEmployeeAttendancePolicy(env,employee,mode,day=saudiTodayKey()){
+ const branchId=txt(employee?.branch_id);if(!branchId)return {attendance_mode:'biometric',mobile_enabled:false,rules:[],exceptions:{}};
+ const [baseRows,versions,rules]=await Promise.all([
+  rest(env,'attendance_branch_policies?branch_id=eq.'+enc(branchId)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]),
+  rest(env,'attendance_branch_policy_versions?branch_id=eq.'+enc(branchId)+'&data_environment=eq.'+enc(mode)+'&effective_from=lte.'+enc(day)+'&select=*&order=effective_from.desc&limit=50').catch(()=>[]),
+  rest(env,'attendance_employee_calendar_rules?attendance_employee_id=eq.'+enc(employee.id)+'&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(day)+'&end_date=gte.'+enc(day)+'&select=*&order=start_date.desc,created_at.desc&limit=100').catch(()=>[])
+ ]);
+ const basePolicy=baseRows?.[0]||{},version=(versions||[]).find(v=>!v.effective_to||String(v.effective_to)>=day)||null,snapshot=version?.policy_snapshot&&typeof version.policy_snapshot==='object'&&!Array.isArray(version.policy_snapshot)?version.policy_snapshot:{};
+ const policy={...basePolicy,...snapshot,branch_id:branchId,data_environment:mode,policy_version_id:version?.id||null,policy_effective_from:version?.effective_from||basePolicy.policy_effective_from||null,policy_effective_to:version?.effective_to||null};
+ const modeRule=(rules||[]).find(r=>r.rule_type==='attendance_mode_override'),override=modeRule?.policy_payload?.attendance_mode;
+ const attendanceMode=['biometric','mobile','hybrid'].includes(txt(override))?txt(override):(['biometric','mobile','hybrid'].includes(txt(policy.attendance_mode))?txt(policy.attendance_mode):'biometric');
+ const exceptions={
+  attendance_exempt:!!(rules||[]).find(r=>r.rule_type==='attendance_exempt'),
+  location_exempt:!!(rules||[]).find(r=>r.rule_type==='location_exempt'),
+  late_exempt:!!(rules||[]).find(r=>r.rule_type==='late_exempt'),
+  checkout_exempt:!!(rules||[]).find(r=>r.rule_type==='checkout_exempt'),
+  attendance_mode_override:modeRule||null
+ };
+ return {...policy,attendance_mode:attendanceMode,mobile_enabled:attendanceMode==='mobile'||attendanceMode==='hybrid',rules,exceptions};
+}
+async function mobileSelfServiceStatus(env,account,employee,mode){
+ const day=saudiTodayKey(),range=saudiDayUtcRange(day),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day);
+ const events=await rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,event_type,occurred_at,accuracy_m,distance_from_site_m,inside_geofence,mobile_device_id,source&order=occurred_at.asc&limit=50').catch(()=>[]);
+ const last=events?.[events.length-1]||null,nextEvent=!events?.length||last?.event_type==='check_out'?'check_in':'check_out';
+ return {
+  enabled:policy.mobile_enabled,
+  exempt:policy.exceptions?.attendance_exempt===true,
+  attendance_mode:policy.attendance_mode,
+  next_event_type:nextEvent,
+  today_events:events||[],
+  policy:{
+   geofence_enabled:policy.mobile_geofence_enabled!==false,
+   geofence_radius_m:Number(policy.mobile_geofence_radius_m||100),
+   max_accuracy_m:Number(policy.mobile_max_accuracy_m||120),
+   require_trusted_device:policy.mobile_require_trusted_device!==false,
+   require_selfie:policy.mobile_require_selfie===true,
+   require_dynamic_qr:policy.mobile_require_dynamic_qr===true,
+   location_exempt:policy.exceptions?.location_exempt===true,
+   policy_effective_from:policy.policy_effective_from||null,
+   policy_effective_to:policy.policy_effective_to||null
+  }
+ };
+}
+async function captureMobileAttendance(env,me,body,request){
+ const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
+ const mode=account.account_mode==='production'?'production':accountMode(me),employee=await selfServiceEmployee(env,account,mode);
+ if(!employee)throw Object.assign(new Error('اربط حسابك بملف الحضور أولًا.'),{status:409});
+ const day=saudiTodayKey(),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day);
+ if(policy.exceptions?.attendance_exempt)return {ok:true,exempt:true,message:'أنت معفى من تسجيل الحضور والانصراف خلال الفترة الحالية.'};
+ if(!policy.mobile_enabled)throw Object.assign(new Error('سياسة فرعك الحالية لا تسمح بتسجيل الحضور من الجوال.'),{status:403});
+ if(policy.mobile_require_selfie===true)throw Object.assign(new Error('سياسة الفرع تشترط صورة لحظية، وهذه الخطوة لم تُفعّل في نسخة الويب الحالية بعد.'),{status:409});
+ if(policy.mobile_require_dynamic_qr===true)throw Object.assign(new Error('سياسة الفرع تشترط QR ديناميكي، وهذه الخطوة لم تُفعّل في نسخة الويب الحالية بعد.'),{status:409});
+ const eventType=txt(body.event_type);
+ if(!['check_in','check_out'].includes(eventType))throw Object.assign(new Error('نوع حركة الحضور غير صحيح.'),{status:400});
+ const deviceKey=txt(body.device_key);if(!deviceKey||deviceKey.length<16||deviceKey.length>256)throw Object.assign(new Error('تعذر التحقق من هوية هذا الجوال. أعد فتح الصفحة وحاول مرة أخرى.'),{status:400});
+ const deviceHash=await sha256Hex(deviceKey),now=new Date().toISOString(),deviceLabel=txt(body.device_label||request?.headers?.get('User-Agent')).slice(0,180)||'جوال الموظف';
+ let mobileDevice=(await rest(env,'attendance_mobile_devices?attendance_employee_id=eq.'+enc(employee.id)+'&device_key_hash=eq.'+enc(deviceHash)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!mobileDevice){
+  const initialStatus=policy.mobile_require_trusted_device!==false?'pending':'approved';
+  mobileDevice=(await rest(env,'attendance_mobile_devices',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,device_key_hash:deviceHash,device_label:deviceLabel,status:initialStatus,data_environment:mode,first_seen_at:now,last_seen_at:now,approved_at:initialStatus==='approved'?now:null,approved_by:initialStatus==='approved'?'system:auto':null,updated_at:now},prefer:'return=representation'}))?.[0]||null;
+  await audit(env,me,'attendance_mobile_device_registered','attendance_mobile_device',mobileDevice?.id||deviceHash,employee.branch_id,null,{employee_id:employee.id,status:initialStatus,device_label:deviceLabel},'تسجيل جهاز جوال جديد للحضور').catch(()=>{});
+ }else{
+  await rest(env,'attendance_mobile_devices?id=eq.'+enc(mobileDevice.id),{method:'PATCH',body:{last_seen_at:now,device_label:deviceLabel,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ }
+ if(mobileDevice?.status==='revoked')throw Object.assign(new Error('هذا الجوال موقوف من تسجيل الحضور. راجع الموارد البشرية.'),{status:403});
+ if(policy.mobile_require_trusted_device!==false&&mobileDevice?.status!=='approved')return {ok:true,pending_device:true,mobile_device_id:mobileDevice?.id||null,message:'تم التعرف على هذا الجوال، لكنه يحتاج اعتماد الإدارة قبل تسجيل الحضور.'};
+
+ let lat=null,lng=null,accuracy=null,distance=null,inside=null;
+ if(policy.mobile_geofence_enabled!==false&&!policy.exceptions?.location_exempt){
+  lat=Number(body.latitude);lng=Number(body.longitude);accuracy=Number(body.accuracy_m);
+  if(!Number.isFinite(lat)||lat<-90||lat>90||!Number.isFinite(lng)||lng<-180||lng>180)throw Object.assign(new Error('تعذر قراءة موقعك الحالي بشكل صحيح.'),{status:400});
+  if(!Number.isFinite(accuracy)||accuracy<0)throw Object.assign(new Error('دقة الموقع غير متاحة. فعّل الموقع الدقيق وحاول مرة أخرى.'),{status:400});
+  const maxAccuracy=Math.max(10,Number(policy.mobile_max_accuracy_m||120));
+  if(accuracy>maxAccuracy)throw Object.assign(new Error('دقة الموقع ضعيفة ('+Math.round(accuracy)+'م). انتظر تحسن GPS وحاول مرة أخرى.'),{status:409});
+  const siteLat=Number(policy.mobile_location_lat),siteLng=Number(policy.mobile_location_lng);
+  if(!Number.isFinite(siteLat)||!Number.isFinite(siteLng))throw Object.assign(new Error('موقع الفرع غير مضبوط في سياسة الحضور. راجع الإدارة.'),{status:409});
+  distance=Math.round(haversineMeters(lat,lng,siteLat,siteLng)*10)/10;inside=distance<=Number(policy.mobile_geofence_radius_m||100);
+  if(!inside)throw Object.assign(new Error('أنت خارج نطاق مقر العمل بحوالي '+Math.round(distance)+' متر.'),{status:403});
+ }else if(Number.isFinite(Number(body.latitude))&&Number.isFinite(Number(body.longitude))){
+  lat=Number(body.latitude);lng=Number(body.longitude);accuracy=Number.isFinite(Number(body.accuracy_m))?Number(body.accuracy_m):null;
+ }
+
+ const range=saudiDayUtcRange(day),todayEvents=await rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=*&order=occurred_at.asc&limit=50').catch(()=>[]),last=todayEvents?.[todayEvents.length-1]||null;
+ if(eventType==='check_out'&&!last)throw Object.assign(new Error('لا يوجد حضور مسجل اليوم حتى يتم تسجيل الانصراف.'),{status:409});
+ if(last?.event_type===eventType)return {ok:true,duplicate:true,event:last,message:eventType==='check_in'?'حضورك مسجل بالفعل.':'انصرافك مسجل بالفعل.'};
+ const requestId=txt(body.request_id)||crypto.randomUUID(),dedupeKey='mobile|'+employee.id+'|'+requestId;
+ const policySnapshot={attendance_mode:policy.attendance_mode,mobile_geofence_enabled:policy.mobile_geofence_enabled!==false,mobile_geofence_radius_m:Number(policy.mobile_geofence_radius_m||100),mobile_max_accuracy_m:Number(policy.mobile_max_accuracy_m||120),mobile_require_trusted_device:policy.mobile_require_trusted_device!==false,location_exempt:policy.exceptions?.location_exempt===true,policy_version_id:policy.policy_version_id||null,policy_effective_from:policy.policy_effective_from||null};
+ const event=(await rest(env,'attendance_mobile_events',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,mobile_device_id:mobileDevice?.id||null,event_type:eventType,occurred_at:now,latitude:lat,longitude:lng,accuracy_m:accuracy,distance_from_site_m:distance,inside_geofence:inside,source:'mobile_web',policy_snapshot:policySnapshot,metadata:{source_ip:clientIp(request),device_label:deviceLabel},data_environment:mode,dedupe_key:dedupeKey},prefer:'return=representation'}))?.[0]||null;
+ if(!event)throw Object.assign(new Error('تعذر حفظ حركة الحضور بالجوال.'),{status:500});
+ await audit(env,me,eventType==='check_in'?'attendance_mobile_check_in':'attendance_mobile_check_out','attendance_mobile_event',event.id,employee.branch_id,null,{employee_id:employee.id,event_type:eventType,occurred_at:event.occurred_at,distance_from_site_m:distance,inside_geofence:inside,mobile_device_id:mobileDevice?.id||null},eventType==='check_in'?'تسجيل حضور بالجوال':'تسجيل انصراف بالجوال').catch(()=>{});
+ return {ok:true,event,message:eventType==='check_in'?'تم تسجيل حضورك بنجاح.':'تم تسجيل انصرافك بنجاح.'};
+}
+async function reviewMobileAttendanceDevice(env,me,body){
+ if(!canManageEmployees(me)&&!canManagePolicies(me))throw Object.assign(new Error('لا توجد صلاحية لاعتماد أجهزة حضور الجوال.'),{status:403});
+ const id=txt(body.id),decision=txt(body.decision);if(!id||!['approve','revoke'].includes(decision))throw Object.assign(new Error('حدد الجهاز والقرار المطلوب.'),{status:400});
+ const before=(await rest(env,'attendance_mobile_devices?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;if(!before)throw Object.assign(new Error('جهاز الجوال غير موجود.'),{status:404});
+ if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق فرعك.'),{status:403});
+ const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null,payload=decision==='approve'?{status:'approved',approved_at:now,approved_by:who,revoked_at:null,revoked_by:null,review_note:txt(body.reason)||'اعتماد جهاز حضور الجوال',updated_at:now}:{status:'revoked',revoked_at:now,revoked_by:who,review_note:txt(body.reason)||'إلغاء اعتماد جهاز حضور الجوال',updated_at:now};
+ const after=(await rest(env,'attendance_mobile_devices?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ await audit(env,me,decision==='approve'?'attendance_mobile_device_approved':'attendance_mobile_device_revoked','attendance_mobile_device',id,before.branch_id,before,after,txt(body.reason)||payload.review_note).catch(()=>{});
+ return {ok:true,device:after,message:decision==='approve'?'تم اعتماد جهاز الجوال.':'تم إلغاء اعتماد جهاز الجوال.'};
+}
+
 async function employeeSelfServiceStatus(env,me){
  const account=await selfServiceAccount(env,me);if(!account)return {ok:true,available:false,message:'هذا الحساب ليس حساب موظف عادي قابل للربط بملف حضور.'};
  const mode=account.account_mode==='production'?'production':accountMode(me),requests=await rest(env,'attendance_self_service_biometric_requests?staff_user_id=eq.'+enc(account.id)+'&data_environment=eq.'+enc(mode)+'&select=*&order=requested_at.desc&limit=50').catch(()=>[]);
@@ -2559,7 +2685,8 @@ async function employeeSelfServiceStatus(env,me){
   if(bios.some(x=>x.attendance_employee_id&&txt(x.attendance_employee_id)!==txt(employee.id)))continue;
   safeCandidates.push({device_id:u.device_id,device_name:deviceMap.get(txt(u.device_id))?.name||'جهاز بصمة',device_pin:u.device_pin,device_user_name:u.name||null,match_score:match.score,match_reasons:match.reasons,biometric_count:bios.length});
  }
- return {ok:true,available:true,binding_required:false,account:{id:account.id,name:account.name,branch_id:account.branch_id},employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code,branch_id:employee.branch_id,department:employee.department,job_title:employee.job_title},links:ownLinks,safe_candidates:safeCandidates,conflicts,biometric_profiles:(profiles||[]).filter(x=>x.status==='active'),requests,auto_correct_available:safeCandidates.length>0};
+ const mobileAttendance=await mobileSelfServiceStatus(env,account,employee,mode).catch(e=>({enabled:false,error:e.message||'تعذر تحميل حالة الحضور بالجوال'}));
+ return {ok:true,available:true,binding_required:false,account:{id:account.id,name:account.name,branch_id:account.branch_id},employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code,branch_id:employee.branch_id,department:employee.department,job_title:employee.job_title},links:ownLinks,safe_candidates:safeCandidates,conflicts,biometric_profiles:(profiles||[]).filter(x=>x.status==='active'),requests,auto_correct_available:safeCandidates.length>0,mobile_attendance:mobileAttendance};
 }
 async function bindEmployeeSelfService(env,me,body){
  const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
@@ -2634,6 +2761,7 @@ async function attendanceSelfServiceApi(request,env,ctx){
   if(action==='auto_correct')return json(await autoCorrectEmployeeBiometric(env,me,body));
   if(action==='confirm_current_link')return json(await confirmEmployeeCurrentLink(env,me,body));
   if(action==='request_correction')return json(await requestEmployeeBiometricCorrection(env,me,body));
+  if(action==='mobile_attendance')return json(await captureMobileAttendance(env,me,body,request));
   return json({error:'إجراء خدمة ذاتية غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ الخدمة الذاتية للحضور'},e.status||500)}
 }
@@ -2704,6 +2832,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='save_link')return json(await saveLink(env,me,body));
   if(action==='resolve_link_identity_review')return json(await resolveLinkIdentityReview(env,me,body));
   if(action==='review_self_service_request')return json(await reviewSelfServiceBiometricRequest(env,me,body));
+  if(action==='review_mobile_device')return json(await reviewMobileAttendanceDevice(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
   if(action==='mark_notifications_seen')return json(await markAttendanceNotificationsSeen(env,me,body));
