@@ -7,6 +7,7 @@ const defaults={
  attendance_mode:'biometric',
  mobile_geofence_enabled:true,
  mobile_geofence_radius_m:100,
+ mobile_max_accuracy_m:120,
  mobile_location_lat:'',
  mobile_location_lng:'',
  mobile_require_trusted_device:true,
@@ -55,13 +56,14 @@ export default function AttendancePolicies({state,onChanged,onError,onNotice}){
    <div className="field" style={{gridColumn:'1/-1'}}><span>تحقق الحضور بالجوال</span><div className="finance-actions">
     <label style={{display:'inline-flex',alignItems:'center',gap:6}}><input type="checkbox" checked={form.mobile_geofence_enabled!==false} onChange={e=>setForm(x=>({...x,mobile_geofence_enabled:e.target.checked}))}/> اشتراط نطاق الموقع</label>
     <label style={{display:'inline-flex',alignItems:'center',gap:6}}><input type="checkbox" checked={form.mobile_require_trusted_device!==false} onChange={e=>setForm(x=>({...x,mobile_require_trusted_device:e.target.checked}))}/> جهاز جوال موثوق</label>
-    <label style={{display:'inline-flex',alignItems:'center',gap:6}}><input type="checkbox" checked={form.mobile_require_selfie===true} onChange={e=>setForm(x=>({...x,mobile_require_selfie:e.target.checked}))}/> صورة لحظية</label>
-    <label style={{display:'inline-flex',alignItems:'center',gap:6}}><input type="checkbox" checked={form.mobile_require_dynamic_qr===true} onChange={e=>setForm(x=>({...x,mobile_require_dynamic_qr:e.target.checked}))}/> QR ديناميكي</label>
+    <label style={{display:'inline-flex',alignItems:'center',gap:6,opacity:.6}}><input type="checkbox" checked={false} disabled/> صورة لحظية — المرحلة التالية</label>
+    <label style={{display:'inline-flex',alignItems:'center',gap:6,opacity:.6}}><input type="checkbox" checked={false} disabled/> QR ديناميكي — المرحلة التالية</label>
    </div></div>
    {form.mobile_geofence_enabled!==false&&<>
     <Field label="خط العرض لموقع الفرع"><Input type="number" step="0.000001" min="-90" max="90" dir="ltr" value={form.mobile_location_lat??''} onChange={e=>setForm(x=>({...x,mobile_location_lat:e.target.value}))} placeholder="21.422510"/></Field>
     <Field label="خط الطول لموقع الفرع"><Input type="number" step="0.000001" min="-180" max="180" dir="ltr" value={form.mobile_location_lng??''} onChange={e=>setForm(x=>({...x,mobile_location_lng:e.target.value}))} placeholder="39.826168"/></Field>
     <Field label="نصف قطر الحضور بالمتر"><Input type="number" min="20" max="5000" value={form.mobile_geofence_radius_m??100} onChange={e=>setForm(x=>({...x,mobile_geofence_radius_m:Number(e.target.value||100)}))}/></Field>
+    <Field label="أقصى دقة GPS مقبولة بالمتر"><Input type="number" min="10" max="1000" value={form.mobile_max_accuracy_m??120} onChange={e=>setForm(x=>({...x,mobile_max_accuracy_m:Number(e.target.value||120)}))}/></Field>
    </>}
    <div className="success-note" style={{gridColumn:'1/-1'}}><ShieldAlert size={16}/> تفعيل الجوال لا يلغي قواعد الدوام أو الاستئذان. مصدر الحركة يتغير فقط، بينما وقت السيرفر وجدول الموظف يظلان المرجع للحساب.</div>
   </>}
