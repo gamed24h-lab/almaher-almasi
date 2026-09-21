@@ -14,6 +14,7 @@ function ageState(d){
  return {tone:'red',label:'غير متصل'};
 }
 function cmdLabel(v){return v==='success'?'تم':v==='failed'?'فشل':v==='sent'?'أرسل للجهاز':v==='queued'?'بانتظار الجهاز':v||'—'}
+function clockSyncLabel(v){return v==='queued'?'بانتظار الجهاز':v==='accepted'?'استلم الجهاز التحديث':v==='accepted_unverified'?'استلم التحديث — لم يُتحقق بعد':v==='verified'?'تمت المزامنة والتحقق':v==='failed'?'فشلت المزامنة':v||'لم تُنفذ بعد'}
 function cmdName(v,meta){const s=meta?.history_strategy;return v==='clock_probe'?'فحص ساعة الجهاز':v==='clock_sync'?'مزامنة ساعة الجهاز':v==='sync_info'?'معلومات الجهاز':v==='diagnostic_info'?'تشخيص الجهاز':v==='sync_users'?'الموظفون':v==='sync_attlog'?'سجل الحضور':v==='history_attlog'?(s==='range_iso'?'الحركات القديمة — توافق 1':s==='plain'?'الحركات القديمة — توافق 2':'الحركات القديمة'):v==='history_attlog_replay'?'الحركات القديمة — إعادة إرسال':v==='biometric_import_fingerprint'?'استيراد بصمات الأصابع':v==='biometric_import_face'?'استيراد بصمة الوجه':v==='biometric_enroll'?'تسجيل بصمة':v==='biometric_delete'?'حذف بصمة محددة':v==='push_user'?'رفع موظف':v==='verify_user'?'تأكيد الموظف':v||'مزامنة'}
 function cmdReason(c){
  if(c?.status!=='failed')return '';
@@ -169,14 +170,14 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   catch(e){onError?.(e.message)}finally{setClockBusy('')}
  }
  async function syncClock(d){
-  if(!confirm('مزامنة ساعة هذا الجهاز مع وقت السيرفر والمنطقة الزمنية؟ لن يتم التنفيذ إذا لم يؤكد فحص الساعة صيغة الوقت المدعومة.'))return;
+  if(!confirm('تحديث ساعة الجهاز فعليًا من وقت السيرفر السعودي الآن؟ سيُرسل النظام أمر مزامنة مباشر للجهاز ثم يتحقق من أول حركة Live جديدة.'))return;
   setClockBusy(d.id);onError?.('');attemptRef.current=0;watchBatchRef.current='';
-  try{const out=await api.attendanceWrite({action:'sync_device_clock',device_id:d.id});setWatching(d.id);onNotice?.(out?.message||'تم تجهيز مزامنة الساعة.');await onChanged?.()}
+  try{const out=await api.attendanceWrite({action:'sync_device_clock',device_id:d.id});setWatching(d.id);onNotice?.(out?.message||'تم إرسال تحديث الساعة الفعلية للجهاز من السيرفر.');await onChanged?.()}
   catch(e){onError?.(e.message)}finally{setClockBusy('')}
  }
  function runHealthAction(h){
   const device=devices.find(x=>String(x.id)===String(h?.device_id));if(!device)return;
-  if(h.recommended_action==='clock'){probeClock(device);return}
+  if(h.recommended_action==='clock'){syncClock(device);return}
   if(h.recommended_action==='links'){onOpenLinks?.();return}
   if(h.recommended_action==='history'){importHistory(device);return}
   if(h.recommended_action==='diagnose')diagnose(device);
@@ -219,7 +220,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
   {key:'device',label:'الجهاز',render:d=><div><strong>{d.name}</strong><div className="muted-small">{d.model||'—'} · {d.serial_number}</div></div>},
   {key:'status',label:'الاتصال',render:d=>{const x=ageState(d);return <div><Badge tone={x.tone}>{x.label}</Badge><div className="muted-small">{fmt(d.last_command_poll_at||d.last_seen_at)}</div></div>}},
   {key:'health',label:'صحة الجهاز',render:d=>{const h=healthByDevice.get(String(d.id));return h?<div><Badge tone={h.tone||'orange'}>{h.label||'غير معروف'} · {h.score}/100</Badge><div className="muted-small" style={{marginTop:3}}>آخر حركة: {fmt(h.last_log_at)}</div>{h.issues?.[0]&&<div className="muted-small">{h.issues[0]}</div>}</div>:<Badge tone="orange">جارٍ التقييم</Badge>}},
-  {key:'clock',label:'ساعة الجهاز',render:d=>{const h=healthByDevice.get(String(d.id)),sec=Number(h?.clock_drift_seconds),known=h?.clock_confirmed===true&&Number.isFinite(sec),abs=Math.abs(sec||0),label=!known?'غير مؤكدة':abs<=120?'مضبوطة':sec>0?'متقدمة '+(abs>=3600?(abs/3600).toFixed(abs%3600<120?0:1)+' س':Math.round(abs/60)+' د'):'متأخرة '+(abs>=3600?(abs/3600).toFixed(abs%3600<120?0:1)+' س':Math.round(abs/60)+' د'),tone=!known?'gray':abs<=120?'green':abs>900?'red':'orange';return <div><Badge tone={tone}>{label}</Badge><div className="muted-small" style={{marginTop:3}}>آخر فحص: {fmt(h?.clock_checked_at)}</div>{d?.metadata?.clock_probe?.server_tz&&<div className="muted-small" dir="ltr">TZ {d.metadata.clock_probe.server_tz}</div>}</div>}},
+  {key:'clock',label:'ساعة الجهاز',render:d=>{const h=healthByDevice.get(String(d.id)),sec=Number(h?.clock_drift_seconds),known=h?.clock_confirmed===true&&Number.isFinite(sec),abs=Math.abs(sec||0),label=!known?'غير مؤكدة':abs<=120?'مضبوطة':sec>0?'متقدمة '+(abs>=3600?(abs/3600).toFixed(abs%3600<120?0:1)+' س':Math.round(abs/60)+' د'):'متأخرة '+(abs>=3600?(abs/3600).toFixed(abs%3600<120?0:1)+' س':Math.round(abs/60)+' د'),tone=!known?'gray':abs<=120?'green':abs>900?'red':'orange',sync=d?.metadata?.last_clock_sync;return <div><Badge tone={tone}>{label}</Badge><div className="muted-small" style={{marginTop:3}}>آخر فحص: {fmt(h?.clock_checked_at)}</div>{sync?.status&&<div className="muted-small">المزامنة: {clockSyncLabel(sync.status)}</div>}{sync?.verified_at&&<div className="muted-small">تحقق: {fmt(sync.verified_at)}</div>}</div>}},
   {key:'risk',label:'المراقبة الاستباقية',render:d=>{const r=predictiveByDevice.get(String(d.id));return r?<div><Badge tone={r.tone||'orange'}>{r.label} · {r.risk_score}/100</Badge><div className="muted-small" style={{marginTop:3}}>{r.signals?.[0]||'يوجد مؤشر يحتاج متابعة'}</div></div>:<Badge tone="green">مستقر</Badge>}},
   {key:'shifts',label:'فترات الدوام',render:d=>{const rows=shiftsByDevice.get(String(d.id))||[];return rows.length?<div style={{display:'grid',gap:2}}>{rows.slice(0,3).map(x=><span key={x.id} className="muted-small"><Clock3 size={12}/> {x.name}: {String(x.start_time).slice(0,5)} — {String(x.end_time).slice(0,5)}</span>)}{rows.length>3&&<span className="muted-small">+ {rows.length-3} فترات أخرى</span>}</div>:<Badge tone="orange">غير محددة</Badge>}},
   {key:'reported',label:'الموجود بالجهاز',render:d=><div><strong>{d.reported_user_count??'—'} موظف</strong><div className="muted-small">{d.reported_fp_count??'—'} قالب بصمة · {d.reported_face_count??'—'} وجه</div><div className="muted-small">{d.reported_transaction_count??'—'} حركة معلنة</div></div>},
@@ -317,6 +318,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
     {actionsDevice?.metadata?.last_smart_sync?.batch&&<Button onClick={()=>{closeDeviceActions();openSmartSyncReport(actionsDevice)}}><Database size={15}/> تقرير المزامنة</Button>}
     {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();diagnose(actionsDevice)}} disabled={diagBusy===actionsDevice.id}><Activity size={15}/>{diagBusy===actionsDevice.id?' جاري التشخيص...':' تشخيص الجهاز'}</Button>}
     {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();probeClock(actionsDevice)}} disabled={clockBusy===actionsDevice.id}><Clock3 size={15}/>{clockBusy===actionsDevice.id?' جاري فحص الساعة...':' فحص ساعة الجهاز'}</Button>}
+    {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();syncClock(actionsDevice)}} disabled={clockBusy===actionsDevice.id}><RefreshCw size={15}/>{clockBusy===actionsDevice.id?' جاري تحديث الساعة...':' تحديث الساعة من السيرفر'}</Button>}
     {state.permissions?.manage_devices&&<Button onClick={()=>{closeDeviceActions();openShifts(actionsDevice)}}><Clock3 size={15}/> فترات الدوام</Button>}
     {(usersByDevice.get(String(actionsDevice.id))||[]).length>0&&state.permissions?.manage_employees&&state.permissions?.manage_links&&<Button onClick={()=>{closeDeviceActions();importAll(actionsDevice)}} disabled={importBusy===actionsDevice.id}><UserPlus size={15}/>{importBusy===actionsDevice.id?' جاري المطابقة...':' مطابقة واستيراد الموظفين'}</Button>}
     {state.permissions?.manage_biometrics&&<Button onClick={()=>{closeDeviceActions();importBiometrics(actionsDevice)}} disabled={biometricImportBusy===actionsDevice.id||busy===actionsDevice.id||watching===actionsDevice.id}><Fingerprint size={15}/>{biometricImportBusy===actionsDevice.id?' جاري استيراد البصمات...':' استيراد البصمات فقط'}</Button>}
@@ -389,9 +391,14 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
      <Field label="آخر فحص للساعة"><Input readOnly value={fmt(diagHealth?.clock_checked_at)}/></Field>
      <Field label="DateTime من الجهاز"><Input dir="ltr" readOnly value={diagDevice?.metadata?.clock_probe?.datetime||'—'}/></Field>
      <Field label="ServerTZ من الجهاز"><Input dir="ltr" readOnly value={diagDevice?.metadata?.clock_probe?.server_tz||'—'}/></Field>
+     <Field label="حالة آخر مزامنة"><Input readOnly value={clockSyncLabel(diagDevice?.metadata?.last_clock_sync?.status)}/></Field>
+     <Field label="طلب المزامنة"><Input readOnly value={fmt(diagDevice?.metadata?.last_clock_sync?.requested_at)}/></Field>
+     <Field label="استلام الجهاز"><Input readOnly value={fmt(diagDevice?.metadata?.last_clock_sync?.accepted_at)}/></Field>
+     <Field label="التحقق الفعلي"><Input readOnly value={fmt(diagDevice?.metadata?.last_clock_sync?.verified_at)}/></Field>
+     <Field label="آخر فرق بعد التحديث"><Input dir="ltr" readOnly value={diagDevice?.metadata?.last_clock_sync?.verified_drift_seconds!=null?String(Math.round(Number(diagDevice.metadata.last_clock_sync.verified_drift_seconds)/60*10)/10)+' دقيقة':'—'}/></Field>
     </div>
     <div style={{display:'grid',gap:6,marginTop:12}}>{(diagHealth?.issues||[]).length?(diagHealth.issues||[]).map((x,i)=><div key={i} className="training-banner">{x}</div>):<div className="success-note"><ShieldCheck size={16}/> لا توجد مشاكل ظاهرة في بيانات الجهاز الحالية.</div>}</div>
-    {diagDevice&&state.permissions?.manage_devices&&<div className="modal-actions"><Button onClick={()=>probeClock(diagDevice)} disabled={clockBusy===diagDevice.id}><Clock3 size={14}/>{clockBusy===diagDevice.id?' جاري الفحص...':' فحص الساعة'}</Button><Button variant="primary" onClick={()=>syncClock(diagDevice)} disabled={clockBusy===diagDevice.id||diagDevice?.metadata?.clock_probe?.datetime_mode!=='unix'}><RefreshCw size={14}/> مزامنة الساعة</Button></div>}
+    {diagDevice&&state.permissions?.manage_devices&&<div className="modal-actions"><Button onClick={()=>probeClock(diagDevice)} disabled={clockBusy===diagDevice.id}><Clock3 size={14}/>{clockBusy===diagDevice.id?' جاري الفحص...':' فحص الساعة'}</Button><Button variant="primary" onClick={()=>syncClock(diagDevice)} disabled={clockBusy===diagDevice.id}><RefreshCw size={14}/> تحديث الساعة من السيرفر</Button></div>}
    </Card>
   </div>
  </Modal>
