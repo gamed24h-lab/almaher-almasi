@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {ArrowRight,CheckCircle2,Fingerprint,Link2,RefreshCw,ShieldCheck,ShieldAlert,UserRoundCheck} from 'lucide-react';
+import {ArrowRight,CheckCircle2,Clock3,Fingerprint,Link2,LogIn,LogOut,MapPin,RefreshCw,ShieldCheck,ShieldAlert,Smartphone,UserRoundCheck} from 'lucide-react';
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import ModuleShell from '../../components/ModuleShell.jsx';
@@ -9,10 +9,23 @@ function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA'
 const statusTone=s=>s==='approved'||s==='auto_resolved'?'green':s==='rejected'?'red':s==='pending'?'orange':'gray';
 const statusLabel=s=>({pending:'قيد المراجعة',auto_resolved:'تم تلقائيًا',approved:'معتمد',rejected:'مرفوض',cancelled:'ملغي'}[s]||s||'—');
 const reqType=t=>({account_binding:'ربط الحساب بملف الحضور',claim_unlinked_pin:'تصحيح ربط PIN',wrong_link:'تصحيح ربط خاطئ',not_mine:'هذه البصمة ليست لي',other:'تأكيد الربط'}[t]||t||'—');
+function mobileDeviceKey(){
+ try{
+  const k='almaher-attendance-mobile-device-key';let v=localStorage.getItem(k);
+  if(!v){v=(globalThis.crypto?.randomUUID?.()||('mob-'+Date.now()+'-'+Math.random().toString(36).slice(2)));localStorage.setItem(k,v)}
+  return v;
+ }catch{return 'mob-'+Date.now()+'-'+Math.random().toString(36).slice(2)}
+}
+function currentPosition(){
+ return new Promise((resolve,reject)=>{
+  if(!navigator.geolocation){reject(new Error('خدمة الموقع غير متاحة على هذا الجهاز.'));return}
+  navigator.geolocation.getCurrentPosition(p=>resolve(p.coords),e=>reject(new Error(e.code===1?'اسمح للموقع بالوصول إلى موقعك لتسجيل الحضور.':'تعذر تحديد موقعك الحالي. حاول مرة أخرى في مكان مفتوح.')),{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+ });
+}
 
 export default function AttendanceSelfService({go}){
  const {user}=useAuth();
- const [data,setData]=useState(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [data,setData]=useState(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[mobileBusy,setMobileBusy]=useState(false);
  const [employeeCode,setEmployeeCode]=useState('');
  const [requestOpen,setRequestOpen]=useState(false),[requestTarget,setRequestTarget]=useState(null),[requestReason,setRequestReason]=useState('');
 
@@ -25,6 +38,15 @@ export default function AttendanceSelfService({go}){
  const pendingRequests=useMemo(()=>((data?.requests||[]).filter(x=>x.status==='pending')),[data]);
  const requestRows=useMemo(()=>(data?.requests||[]).map(x=>({...x,id:x.id||x.requested_at})),[data]);
 
+ async function captureMobile(eventType){
+  setMobileBusy(true);setError('');setNotice('');
+  try{
+   const mobile=data?.mobile_attendance||{},needsLocation=mobile?.policy?.geofence_enabled!==false&&mobile?.policy?.location_exempt!==true;
+   let coords=null;if(needsLocation)coords=await currentPosition();
+   const out=await api.attendanceSelfServiceWrite({action:'mobile_attendance',event_type:eventType,device_key:mobileDeviceKey(),device_label:navigator.userAgent||'جوال الموظف',request_id:globalThis.crypto?.randomUUID?.()||String(Date.now()),latitude:coords?.latitude??null,longitude:coords?.longitude??null,accuracy_m:coords?.accuracy??null});
+   setNotice(out?.message||'تم تحديث حركة الحضور.');await load();
+  }catch(err){setError(err.message)}finally{setMobileBusy(false)}
+ }
  async function bind(e){
   e.preventDefault();if(!employeeCode.trim())return;
   setBusy('bind');setError('');setNotice('');
@@ -72,7 +94,7 @@ export default function AttendanceSelfService({go}){
  if(loading&&!data)return <Loading text="جاري تحميل حالة البصمة..."/>;
 
  return <>
-  <ModuleShell title="بصمتي" subtitle="خدمة ذاتية لمراجعة ربط جهاز البصمة وتصحيح الحالات الآمنة دون الوصول لبيانات أي موظف آخر" icon={Fingerprint}
+  <ModuleShell title="حضوري وبصمتي" subtitle="تسجيل الحضور بالجوال عند سماح سياسة الفرع، ومراجعة ربط جهاز البصمة من نفس الصفحة" icon={Fingerprint}
    actions={<><Button onClick={load} disabled={loading}><RefreshCw size={16}/> تحديث</Button>{go&&<Button onClick={()=>go('/')}><ArrowRight size={16}/> الرئيسية</Button>}</>}
    breadcrumbs={[{label:'الرئيسية'},{label:'بصمتي'}]}/>
   <ErrorBox error={error}/>{notice&&<div className="success-note"><CheckCircle2 size={16}/>{notice}</div>}
@@ -98,6 +120,25 @@ export default function AttendanceSelfService({go}){
     <Card><div className="stat-card"><div><span>بصمات مكتشفة</span><strong>{(data.biometric_profiles||[]).length}</strong></div></div></Card>
     <Card><div className="stat-card"><div><span>تصحيح تلقائي متاح</span><strong>{(data.safe_candidates||[]).length}</strong><small>{(data.conflicts||[]).length} تحتاج مراجعة</small></div></div></Card>
    </div>
+
+   {data.mobile_attendance&&<Card>
+    <div className="card-title"><div><h3><Smartphone size={19}/> الحضور والانصراف بالجوال</h3><small>وقت الحركة يؤخذ من السيرفر. الموقع يُطلب فقط وقت التسجيل عندما تشترطه سياسة الفرع.</small></div><Badge tone={data.mobile_attendance.exempt?'blue':data.mobile_attendance.enabled?'green':'gray'}>{data.mobile_attendance.exempt?'معفى':data.mobile_attendance.enabled?(data.mobile_attendance.attendance_mode==='hybrid'?'مختلط':'جوال'):'غير مفعّل'}</Badge></div>
+    {data.mobile_attendance.error?<div className="error-box">{data.mobile_attendance.error}</div>:data.mobile_attendance.exempt?<div className="success-note"><ShieldCheck size={16}/> أنت معفى من تسجيل الحضور والانصراف خلال الفترة الحالية، ولن تُحسب غائبًا بسبب عدم وجود حركة.</div>:data.mobile_attendance.enabled?<div style={{display:'grid',gap:12}}>
+     <div className="finance-actions">
+      {data.mobile_attendance.policy?.geofence_enabled!==false&&!data.mobile_attendance.policy?.location_exempt&&<Badge><MapPin size={14}/> نطاق {data.mobile_attendance.policy?.geofence_radius_m||100}م · دقة GPS ≤ {data.mobile_attendance.policy?.max_accuracy_m||120}م</Badge>}
+      {data.mobile_attendance.policy?.location_exempt&&<Badge tone="blue"><MapPin size={14}/> معفى من شرط الموقع</Badge>}
+      {data.mobile_attendance.policy?.require_trusted_device&&<Badge><ShieldCheck size={14}/> جهاز موثوق مطلوب</Badge>}
+     </div>
+     <div className="success-note"><Clock3 size={16}/> آخر حالة اليوم: {(data.mobile_attendance.today_events||[]).length?((data.mobile_attendance.today_events.at(-1)?.event_type==='check_in'?'حضور':'انصراف')+' — '+fmt(data.mobile_attendance.today_events.at(-1)?.occurred_at)):'لا توجد حركة مسجلة اليوم'}</div>
+     <div>
+      <Button variant="primary" onClick={()=>captureMobile(data.mobile_attendance.next_event_type||'check_in')} disabled={mobileBusy}>
+       {(data.mobile_attendance.next_event_type||'check_in')==='check_in'?<LogIn size={16}/>:<LogOut size={16}/>}
+       {mobileBusy?' جاري التحقق والتسجيل...':(data.mobile_attendance.next_event_type||'check_in')==='check_in'?' تسجيل حضور الآن':' تسجيل انصراف الآن'}
+      </Button>
+     </div>
+     {!!(data.mobile_attendance.today_events||[]).length&&<div style={{display:'grid',gap:6}}>{data.mobile_attendance.today_events.map(ev=><div key={ev.id} className="muted-small"><strong>{ev.event_type==='check_in'?'حضور':'انصراف'}</strong> · {fmt(ev.occurred_at)}{ev.distance_from_site_m!=null?' · '+Math.round(ev.distance_from_site_m)+'م من الموقع':''}</div>)}</div>}
+    </div>:<div className="training-banner">سياسة هذا الموظف حاليًا لا تسمح بالحضور من الجوال. استخدم جهاز البصمة أو راجع سياسة الفرع.</div>}
+   </Card>}
 
    {!!(data.safe_candidates||[]).length&&<Card>
     <div className="card-title"><div><h3><ShieldCheck size={19}/> تصحيح تلقائي آمن متاح</h3><small>هذه الحالات PIN غير مملوك لموظف آخر، في نفس فرعك، ومطابقة الاسم واضحة على السيرفر.</small></div><Badge tone="green">{data.safe_candidates.length}</Badge></div>
