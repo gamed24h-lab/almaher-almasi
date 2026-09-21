@@ -115,6 +115,8 @@ export const api={
   destinations:()=>request('/api/destinations'),
   attendance:()=>request('/api/attendance'),
   attendanceWrite:(body)=>request('/api/attendance',{method:'POST',body}),
+  attendanceSelfService:()=>request('/api/attendance/self-service'),
+  attendanceSelfServiceWrite:(body)=>request('/api/attendance/self-service',{method:'POST',body}),
   returnTripOptions:()=>request('/api/return-trip-options'),
   returnTripInfo:(bookingNo)=>request(`/api/return-trip-info?booking_number=${encodeURIComponent(bookingNo)}`),
   returnSeatContext:(tripId)=>request(`/api/return-seat-context?trip_id=${encodeURIComponent(tripId)}`),
