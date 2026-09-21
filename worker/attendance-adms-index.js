@@ -395,6 +395,44 @@ async function reconcilePendingClockSyncArtifacts(env){
  const recent=await rest(env,'attendance_watchdog_runs?source=eq.scheduled&status=eq.running&started_at=gte.'+enc(recentCutoff)+'&select=id,started_at&order=started_at.desc&limit=1').catch(()=>[]);
  return {pending_devices:pendingDevices,resolved_notifications:resolvedNotifications,resolved_incidents:resolvedIncidents,recent_running:recent?.[0]||null,stale_runs_closed:(staleRuns||[]).length};
 }
+async function runAttendanceQuickWatchdog(env){
+ const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env),preflight=await reconcilePendingClockSyncArtifacts(env);
+ const devices=await rest(env,'attendance_devices?select=*&order=created_at.asc').catch(()=>[]),ids=(devices||[]).map(x=>x.id).filter(Boolean),idFilter=ids.length?'&device_id=in.('+ids.map(enc).join(',')+')':'';
+ if(!ids.length){
+  const completedAt=new Date(),summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:0,active_notifications:0,critical_notifications:0,completed_at:completedAt.toISOString(),duration_ms:completedAt.getTime()-startedAt.getTime(),preflight};
+  await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:summary.duration_ms,devices_count:0,active_notifications:0,critical_notifications:0,escalations_count:0,metadata:{quick:true,preflight},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
+  return summary;
+ }
+ const [commands,recentLogs,unlinkedRows,existingActive]=await Promise.all([
+  rest(env,'attendance_device_commands?select=id,device_id,command_type,status,result_code,result_body,command_text,metadata,created_at,sent_at,completed_at,updated_at'+idFilter+'&order=id.desc&limit=200').catch(()=>[]),
+  rest(env,'attendance_raw_logs?select=device_id,occurred_at,received_at&data_environment=eq.'+enc(mode)+idFilter+'&order=occurred_at.desc&limit=2000').catch(()=>[]),
+  rest(env,'attendance_raw_logs?select=device_id,device_pin&data_environment=eq.'+enc(mode)+idFilter+'&attendance_employee_id=is.null&staff_user_id=is.null&employee_name=is.null&order=occurred_at.desc&limit=5000').catch(()=>[]),
+  rest(env,'attendance_notifications?active=eq.true&select=*'+idFilter+'&order=last_seen_at.desc&limit=1000').catch(()=>[])
+ ]);
+ const commandMap=new Map(),latestLogMap=new Map(),unlinkedByDevice=new Map();
+ for(const row of commands||[]){const k=String(row.device_id),arr=commandMap.get(k)||[];arr.push(row);commandMap.set(k,arr)}
+ for(const row of recentLogs||[]){const k=String(row.device_id);if(!latestLogMap.has(k))latestLogMap.set(k,row)}
+ for(const row of unlinkedRows||[]){const k=String(row.device_id);unlinkedByDevice.set(k,(unlinkedByDevice.get(k)||0)+1)}
+ const deviceHealth=(devices||[]).map(d=>deviceHealthSnapshot(d,latestLogMap.get(String(d.id))||null,commandMap.get(String(d.id))||[],unlinkedByDevice.get(String(d.id))||0,(unlinkedRows||[]).length>=5000)),healthMap=new Map(deviceHealth.map(x=>[String(x.device_id),x]));
+ const preserved=(existingActive||[]).filter(n=>{
+  if(n.category==='maintenance')return true;
+  if(n.category!=='predictive')return false;
+  if(txt(n?.metadata?.type)!=='watch')return true;
+  return Number(healthMap.get(String(n.device_id))?.score||100)<70;
+ }).map(n=>({notification_key:n.notification_key,device_id:n.device_id,branch_id:n.branch_id||null,category:n.category,severity:n.severity,title:n.title,message:n.message||null,metadata:n.metadata||{}}));
+ const reconciled=await reconcileAttendanceNotifications(env,devices,deviceHealth,[],preserved);
+ const [rules,policies]=await Promise.all([
+  rest(env,'attendance_notification_escalation_rules?select=*&order=created_at.asc').catch(()=>[]),
+  rest(env,'attendance_incident_sla_policies?select=*&order=created_at.asc').catch(()=>[])
+ ]);
+ const notifications=await applyAttendanceEscalation(env,reconciled,rules||[]);
+ await reconcileAttendanceIncidents(env,notifications,policies||[]);
+ const clockSync=await autoSyncDriftedDeviceClocks(env,{devices,deviceHealth},{id:'system:attendance-watchdog',name:'Attendance Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}});
+ const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),active=(notifications||[]).filter(x=>x.active&&x.status!=='resolved'),critical=active.filter(x=>x.severity==='critical'),escalated=active.filter(x=>Number(x.escalation_level)>0);
+ const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
+ await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
+ return summary;
+}
 async function runAttendanceWatchdog(env,source='scheduled'){
  const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env),preflight=await reconcilePendingClockSyncArtifacts(env);
  if(source==='scheduled'&&preflight.recent_running)return {ok:true,skipped:true,reason:'previous_watchdog_still_running',previous_run_id:preflight.recent_running.id,preflight};
@@ -2728,6 +2766,6 @@ export default {
  async scheduled(controller,env,ctx){
   await runDeviceClockSyncWatchdog(env).catch(()=>({ok:false}));
   const inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
-  await Promise.all([inherited,runAttendanceWatchdog(env,'scheduled')]);
+  await Promise.all([inherited,runAttendanceQuickWatchdog(env)]);
  }
 };
