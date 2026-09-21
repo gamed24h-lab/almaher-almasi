@@ -1791,12 +1791,15 @@ async function attendanceReport(env,me,body){
  if(txt(body.attendance_employee_id))path+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
  if(txt(body.device_id))path+='&device_id=eq.'+enc(body.device_id);
  path+='&order=occurred_at.asc&limit=10000';
- const rawLogs=await rest(env,path),reportDeviceIds=[...new Set((rawLogs||[]).map(x=>x.device_id).filter(Boolean))],reportDevices=reportDeviceIds.length?await rest(env,'attendance_devices?id=in.('+reportDeviceIds.map(enc).join(',')+')&select=id,metadata,timezone').catch(()=>[]):[],reportDeviceMap=new Map((reportDevices||[]).map(x=>[String(x.id),x])),correctedDeviceIds=new Set();let clockCorrectedCount=0;
+ const rawLogs=await rest(env,path),reportDeviceIds=[...new Set((rawLogs||[]).map(x=>x.device_id).filter(Boolean))],reportDevices=reportDeviceIds.length?await rest(env,'attendance_devices?id=in.('+reportDeviceIds.map(enc).join(',')+')&select=id,metadata,timezone').catch(()=>[]):[],reportDeviceMap=new Map((reportDevices||[]).map(x=>[String(x.id),x])),clockCheckFrom=new Date(queryFrom.getTime()-86400000).toISOString(),clockCheckTo=new Date(queryTo.getTime()+86400000).toISOString(),reportClockChecks=reportDeviceIds.length?await rest(env,'attendance_device_clock_checks?device_id=in.('+reportDeviceIds.map(enc).join(',')+')&confirmed=eq.true&server_time=gte.'+enc(clockCheckFrom)+'&server_time=lte.'+enc(clockCheckTo)+'&select=device_id,server_time,drift_seconds,status,confirmed,source&order=server_time.asc&limit=5000').catch(()=>[]):[],clockCheckMap=new Map(),correctedDeviceIds=new Set();let clockCorrectedCount=0;
+ for(const check of reportClockChecks||[]){const k=String(check.device_id),arr=clockCheckMap.get(k)||[];arr.push(check);clockCheckMap.set(k,arr)}
  const logs=(rawLogs||[]).map(row=>{
-  const d=reportDeviceMap.get(String(row.device_id)),clock=d?.metadata?.clock_drift||{},drift=Number(clock.drift_seconds),confirmed=clock.confirmed===true&&Number.isFinite(drift)&&Math.abs(drift)>120,occurredMs=new Date(row.occurred_at).getTime(),receivedMs=new Date(row.received_at).getTime();
-  if(!confirmed||!Number.isFinite(occurredMs)||!Number.isFinite(receivedMs))return row;
-  const observed=Math.round((occurredMs-receivedMs)/1000);if(Math.abs(observed-drift)>180)return row;
-  const corrected=new Date(occurredMs-drift*1000).toISOString();clockCorrectedCount+=1;correctedDeviceIds.add(String(row.device_id));return {...row,original_occurred_at:row.occurred_at,occurred_at:corrected,clock_corrected:true,clock_drift_seconds_applied:drift};
+  const d=reportDeviceMap.get(String(row.device_id)),occurredMs=new Date(row.occurred_at).getTime(),receivedMs=new Date(row.received_at).getTime();if(!Number.isFinite(occurredMs)||!Number.isFinite(receivedMs))return row;
+  const observed=Math.round((occurredMs-receivedMs)/1000),checks=clockCheckMap.get(String(row.device_id))||[],matched=checks.map(x=>({x,t:new Date(x.server_time).getTime(),drift:Number(x.drift_seconds)})).filter(y=>Number.isFinite(y.t)&&Number.isFinite(y.drift)&&Math.abs(receivedMs-y.t)<=86400000&&Math.abs(observed-y.drift)<=180).sort((a,b)=>Math.abs(receivedMs-a.t)-Math.abs(receivedMs-b.t))[0];
+  let drift=matched?.drift;
+  if(!Number.isFinite(drift)){const clock=d?.metadata?.clock_drift||{},current=Number(clock.drift_seconds),checkedMs=new Date(clock.checked_at||0).getTime();if(clock.confirmed===true&&Number.isFinite(current)&&Number.isFinite(checkedMs)&&Math.abs(receivedMs-checkedMs)<=86400000&&Math.abs(observed-current)<=180)drift=current}
+  if(!Number.isFinite(drift)||Math.abs(drift)<=120)return row;
+  const corrected=new Date(occurredMs-drift*1000).toISOString();clockCorrectedCount+=1;correctedDeviceIds.add(String(row.device_id));return {...row,original_occurred_at:row.occurred_at,occurred_at:corrected,clock_corrected:true,clock_drift_seconds_applied:drift,clock_correction_source:matched?'clock_check_history':'current_confirmed_drift'};
  }).filter(row=>{const t=new Date(row.occurred_at).getTime();return Number.isFinite(t)&&t>=from.getTime()&&t<to.getTime()}).sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
  let rulePath='attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(txt(body.to_date||body.from_date))+'&end_date=gte.'+enc(txt(body.from_date));
  if(branchId)rulePath+='&branch_id=eq.'+enc(branchId);
@@ -1813,7 +1816,7 @@ async function attendanceReport(env,me,body){
  if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
   monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  }
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_live_drift_only'}};
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_clock_history_matching_observed_drift'}};
 }
 
 async function saveDevice(env,me,body){
