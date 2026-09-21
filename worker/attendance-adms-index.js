@@ -1720,13 +1720,20 @@ async function attendanceReport(env,me,body){
  const branchId=requestedBranch(me,body),mode=accountMode(me),from=dateStart(body.from_date),to=dateEndExclusive(body.to_date||body.from_date);
  if(!from||!to)throw Object.assign(new Error('حدد تاريخ بداية ونهاية صحيحين.'),{status:400});
  const maxDays=93;if((to-from)/86400000>maxDays)throw Object.assign(new Error('الفترة القصوى للكشف الواحد 93 يومًا.'),{status:400});
+ const queryFrom=new Date(from.getTime()-12*3600000),queryTo=new Date(to.getTime()+12*3600000);
  let path='attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at';
- path+='&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(from.toISOString())+'&occurred_at=lt.'+enc(to.toISOString());
+ path+='&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(queryFrom.toISOString())+'&occurred_at=lt.'+enc(queryTo.toISOString());
  if(branchId)path+='&branch_id=eq.'+enc(branchId);
  if(txt(body.attendance_employee_id))path+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
  if(txt(body.device_id))path+='&device_id=eq.'+enc(body.device_id);
  path+='&order=occurred_at.asc&limit=10000';
- const logs=await rest(env,path);
+ const rawLogs=await rest(env,path),reportDeviceIds=[...new Set((rawLogs||[]).map(x=>x.device_id).filter(Boolean))],reportDevices=reportDeviceIds.length?await rest(env,'attendance_devices?id=in.('+reportDeviceIds.map(enc).join(',')+')&select=id,metadata,timezone').catch(()=>[]):[],reportDeviceMap=new Map((reportDevices||[]).map(x=>[String(x.id),x])),correctedDeviceIds=new Set();let clockCorrectedCount=0;
+ const logs=(rawLogs||[]).map(row=>{
+  const d=reportDeviceMap.get(String(row.device_id)),clock=d?.metadata?.clock_drift||{},drift=Number(clock.drift_seconds),confirmed=clock.confirmed===true&&Number.isFinite(drift)&&Math.abs(drift)>120,occurredMs=new Date(row.occurred_at).getTime(),receivedMs=new Date(row.received_at).getTime();
+  if(!confirmed||!Number.isFinite(occurredMs)||!Number.isFinite(receivedMs))return row;
+  const observed=Math.round((occurredMs-receivedMs)/1000);if(Math.abs(observed-drift)>180)return row;
+  const corrected=new Date(occurredMs-drift*1000).toISOString();clockCorrectedCount+=1;correctedDeviceIds.add(String(row.device_id));return {...row,original_occurred_at:row.occurred_at,occurred_at:corrected,clock_corrected:true,clock_drift_seconds_applied:drift};
+ }).filter(row=>{const t=new Date(row.occurred_at).getTime();return Number.isFinite(t)&&t>=from.getTime()&&t<to.getTime()}).sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
  let rulePath='attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+'&start_date=lte.'+enc(txt(body.to_date||body.from_date))+'&end_date=gte.'+enc(txt(body.from_date));
  if(branchId)rulePath+='&branch_id=eq.'+enc(branchId);
  if(txt(body.attendance_employee_id))rulePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
@@ -1742,7 +1749,7 @@ async function attendanceReport(env,me,body){
  if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
   monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  }
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(logs)&&logs.length>=10000};
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_live_drift_only'}};
 }
 
 async function saveDevice(env,me,body){
