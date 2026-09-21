@@ -1595,15 +1595,15 @@ async function closeAttendanceMonth(env,me,body){
  const before=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  if(before?.status==='closed')return {ok:true,closure:before,already_closed:true,message:'الشهر مقفل بالفعل.'};
  const branch=(await rest(env,'branches?id=eq.'+enc(branchId)+'&select=id,name&limit=1'))?.[0]||null;if(!branch)throw Object.assign(new Error('الفرع غير موجود.'),{status:404});
- const now=new Date().toISOString(),version=Math.max(1,Number(before?.closure_version||0)+1),payload={
-  branch_id:branchId,period_month:period,data_environment:mode,status:'closed',closure_version:version,
-  snapshot:{daily,monthly,filters:snapshot.filters||{},generated_at:now},
-  totals:body.totals&&typeof body.totals==='object'&&!Array.isArray(body.totals)?body.totals:{},
-  closed_by:actorName(me)||actorId(me)||null,closed_at:now,reopened_by:null,reopened_at:null,reopen_reason:null,updated_at:now
- };
- const rows=await rest(env,'attendance_month_closures?on_conflict=branch_id%2Cperiod_month%2Cdata_environment',{method:'POST',body:{...payload,created_at:before?.created_at||now},prefer:'resolution=merge-duplicates,return=representation'}),after=rows?.[0]||null;
+ const now=new Date().toISOString(),closureSnapshot={daily,monthly,filters:snapshot.filters||{},generated_at:now},totals=body.totals&&typeof body.totals==='object'&&!Array.isArray(body.totals)?body.totals:{},reason=txt(body.reason)||'إقفال شهر الحضور';
+ const atomic=await rest(env,'rpc/attendance_set_month_closure_atomic',{method:'POST',body:{
+  p_branch_id:branchId,p_period_month:period,p_environment:mode,p_action:'close',
+  p_snapshot:closureSnapshot,p_totals:totals,p_actor:actorName(me)||actorId(me)||null,p_reason:reason
+ }}).catch(e=>{throw Object.assign(new Error(e?.message||'تعذر إقفال شهر الحضور.'),{status:409})});
+ const after=atomic?.closure||null;
+ if(atomic?.already_closed&&after)return {ok:true,closure:after,already_closed:true,message:'الشهر مقفل بالفعل.'};
  if(!after)throw Object.assign(new Error('تعذر إقفال شهر الحضور.'),{status:500});
- await audit(env,me,before?'attendance_month_reclose':'attendance_month_close','attendance_month_closure',after.id,branchId,before,after,txt(body.reason)||'إقفال شهر الحضور');
+ await audit(env,me,before?'attendance_month_reclose':'attendance_month_close','attendance_month_closure',after.id,branchId,before,after,reason);
  return {ok:true,closure:after,message:'تم إقفال شهر '+period.slice(0,7)+' للفرع '+(branch.name||'')+' وتجميد نتائجه.'};
 }
 async function reopenAttendanceMonth(env,me,body){
@@ -1614,7 +1614,15 @@ async function reopenAttendanceMonth(env,me,body){
  if(reason.length<5)throw Object.assign(new Error('سبب إعادة فتح الشهر مطلوب.'),{status:400});
  const before=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'))?.[0]||null;
  if(!before||before.status!=='closed')throw Object.assign(new Error('هذا الشهر غير مقفل حاليًا.'),{status:409});
- const now=new Date().toISOString(),rows=await rest(env,'attendance_month_closures?id=eq.'+enc(before.id),{method:'PATCH',body:{status:'open',reopened_by:actorName(me)||actorId(me)||null,reopened_at:now,reopen_reason:reason,updated_at:now},prefer:'return=representation'}),after=rows?.[0]||null;
+ const atomic=await rest(env,'rpc/attendance_set_month_closure_atomic',{method:'POST',body:{
+  p_branch_id:branchId,p_period_month:period,p_environment:mode,p_action:'reopen',
+  p_snapshot:{},p_totals:{},p_actor:actorName(me)||actorId(me)||null,p_reason:reason
+ }}).catch(e=>{
+  const msg=String(e?.message||'');
+  if(msg.includes('attendance_month_not_closed'))throw Object.assign(new Error('هذا الشهر لم يعد مقفلًا حاليًا.'),{status:409});
+  throw Object.assign(new Error(msg||'تعذر إعادة فتح شهر الحضور.'),{status:409});
+ });
+ const after=atomic?.closure||null;if(!after)throw Object.assign(new Error('تعذر إعادة فتح شهر الحضور.'),{status:500});
  await audit(env,me,'attendance_month_reopen','attendance_month_closure',before.id,branchId,before,after,reason);
  return {ok:true,closure:after,message:'تمت إعادة فتح شهر '+period.slice(0,7)+' للتعديل والمراجعة.'};
 }
@@ -2332,23 +2340,23 @@ async function saveEmployee(env,me,body){
  const scheduleEffectiveFrom=txt(body.schedule_effective_from)||saudiTodayKey();
  if(scheduleChanged&&!/^\d{4}-\d{2}-\d{2}$/.test(scheduleEffectiveFrom))throw Object.assign(new Error('حدد تاريخ سريان صحيح لجدول الدوام.'),{status:400});
  if(scheduleChanged&&id)await assertAttendanceMonthOpen(env,branchId,scheduleEffectiveFrom,scheduleEffectiveFrom,requestedEnv);
- const payload={name,branch_id:branchId,phone:txt(body.phone)||null,national_id:txt(body.national_id)||null,department:txt(body.department)||null,job_title:txt(body.job_title)||null,staff_user_id:staff?.id||null,shift_start:firstPeriod?.start_time||null,shift_end:firstPeriod?.end_time||null,grace_minutes:firstPeriod?.grace_minutes??Math.max(0,Math.min(240,Number(body.grace_minutes||0))),weekly_off_days:weeklyOffDays,status:body.status==='inactive'?'inactive':'active',data_environment:requestedEnv,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ const payload={name,branch_id:branchId,phone:txt(body.phone)||null,national_id:txt(body.national_id)||null,department:txt(body.department)||null,job_title:txt(body.job_title)||null,staff_user_id:staff?.id||null,shift_start:firstPeriod?.start_time||null,shift_end:firstPeriod?.end_time||null,grace_minutes:firstPeriod?.grace_minutes??Math.max(0,Math.min(240,Number(body.grace_minutes||0))),weekly_off_days:weeklyOffDays,status:body.status==='inactive'?'inactive':'active',data_environment:requestedEnv,notes:txt(body.notes)||null};
  const employeeCode=txt(body.employee_code);if(employeeCode)payload.employee_code=employeeCode;
- let after;if(id)after=(await rest(env,'attendance_employees?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;else after=(await rest(env,'attendance_employees',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
- if(!after)throw Object.assign(new Error('تعذر حفظ موظف الحضور.'),{status:500});
- if(suppliedPeriods)await replaceShiftPeriods(env,me,after.id,periods);
- let scheduleVersion=null;
- if(scheduleChanged){
-  scheduleVersion=await rest(env,'rpc/attendance_set_employee_schedule_version',{method:'POST',body:{
-   p_employee_id:after.id,p_branch_id:after.branch_id||null,p_effective_from:scheduleEffectiveFrom,
-   p_shift_periods:periods,p_weekly_off_days:weeklyOffDays,p_environment:requestedEnv,
-   p_reason:txt(body.reason)||('تعديل جدول الدوام ساري من '+scheduleEffectiveFrom),
-   p_actor:actorId(me)||actorName(me)||null
-  }}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر حفظ تاريخ سريان جدول الدوام.'),{status:409})});
- }
+ const actorValue=actorId(me)||actorName(me)||null,reason=txt(body.reason)||('تعديل جدول الدوام ساري من '+scheduleEffectiveFrom);
+ const atomic=await rest(env,'rpc/attendance_save_employee_atomic',{method:'POST',body:{
+  p_employee_id:id||null,p_employee:payload,p_shift_periods:periods,p_replace_shift_periods:suppliedPeriods,
+  p_schedule_changed:scheduleChanged,p_effective_from:scheduleChanged?scheduleEffectiveFrom:null,
+  p_reason:reason,p_actor:actorValue
+ }}).catch(e=>{
+  const msg=String(e?.message||'');
+  if(msg.includes('attendance_month_closed'))throw Object.assign(new Error('لا يمكن تعديل جدول الدوام داخل شهر حضور مقفل. أعد فتح الشهر أولًا ثم أعد المحاولة.'),{status:409});
+  throw Object.assign(new Error(msg||'تعذر حفظ الموظف وجدول الدوام كعملية واحدة.'),{status:409});
+ });
+ const after=atomic?.employee||null,savedPeriods=Array.isArray(atomic?.shift_periods)?atomic.shift_periods:periods,scheduleVersion=atomic?.schedule_version||null;
+ if(!after)throw Object.assign(new Error('تعذر حفظ موظف الحضور وجدول الدوام داخل Transaction واحدة.'),{status:500});
  const autoPush=body.auto_push!==false,devicesQueued=autoPush?await queueEmployeeAutoPush(env,me,after):0;
- await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
- return {ok:true,employee:after,shift_periods:periods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,auto_push:autoPush,devices_queued:devicesQueued};
+ await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:savedPeriods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,atomic_schedule_save:true,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
+ return {ok:true,employee:after,shift_periods:savedPeriods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,atomic_schedule_save:true,auto_push:autoPush,devices_queued:devicesQueued};
 }
 
 async function promoteInventoryToEmployee(env,device,pin,employee,actorValue){
