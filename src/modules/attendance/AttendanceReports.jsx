@@ -209,10 +209,10 @@ export default function AttendanceReports({state,onError,onNotice}){
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const periodsMap=useMemo(()=>{const m=new Map();for(const p of shiftPeriods){const k=String(p.attendance_employee_id),a=m.get(k)||[];a.push(p);m.set(k,a)}return m},[shiftPeriods]);
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
- const scheduleVersionsMap=useMemo(()=>{const m=new Map();for(const v of reportScheduleVersions||[]){const k=String(v.attendance_employee_id),a=m.get(k)||[];a.push(v);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.effective_from).localeCompare(String(x.effective_from)));return m},[reportScheduleVersions]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),branch_id:state.scope?.branch_id||'',attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[reportScheduleVersions,setReportScheduleVersions]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[monthClosure,setMonthClosure]=useState(null),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const scheduleVersionsMap=useMemo(()=>{const m=new Map();for(const v of reportScheduleVersions||[]){const k=String(v.attendance_employee_id),a=m.get(k)||[];a.push(v);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.effective_from).localeCompare(String(x.effective_from)));return m},[reportScheduleVersions]);
  const [reviewRow,setReviewRow]=useState(null),[reviewForm,setReviewForm]=useState({decision_status:'approved',approved_penalty_minutes:0,manager_note:'',reason:''}),[reviewBusy,setReviewBusy]=useState(false);
  const [reopenOpen,setReopenOpen]=useState(false),[reopenReason,setReopenReason]=useState(''),[closeBusy,setCloseBusy]=useState(false);
  const decisionMap=useMemo(()=>new Map((violationDecisions||[]).map(d=>[String(d.attendance_employee_id)+'|'+String(d.work_date),d])),[violationDecisions]);
