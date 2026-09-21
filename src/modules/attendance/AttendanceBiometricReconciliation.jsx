@@ -1,7 +1,7 @@
 import React,{useMemo,useState} from 'react';
 import {AlertTriangle,Fingerprint,Link2,RefreshCw,ShieldCheck,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
-import {Badge,Button,Card,Table} from '../../components/UI.jsx';
+import {Badge,Button,Card,Field,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import SmartListFilters from '../../components/SmartListFilters.jsx';
 import {matchesListQuery} from '../../lib/listFilters.js';
 
@@ -23,10 +23,18 @@ const typeLabel=t=>({
 
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
  const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState(''),[autoBusy,setAutoBusy]=useState(false),[lastAuto,setLastAuto]=useState(null);
- const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active');
+ const [reviewOpen,setReviewOpen]=useState(false),[reviewIssue,setReviewIssue]=useState(null),[reviewBusy,setReviewBusy]=useState(false),[reviewForm,setReviewForm]=useState({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''});
+ const devices=state.devices||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[];
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
+ const reviewsByDevicePin=useMemo(()=>{const m=new Map();for(const r of reviews){const k=String(r.device_id)+'|'+String(r.device_pin),a=m.get(k)||[];a.push(r);m.set(k,a)}return m},[reviews]);
+ const reviewCandidates=useMemo(()=>{
+  if(!reviewIssue)return [];
+  return employees.filter(e=>String(e.branch_id)===String(reviewIssue.branch_id)&&String(e.id)!==String(reviewIssue.attendance_employee_id)&&e.status==='active')
+   .map(e=>({...e,_sim:nameSimilarity(reviewIssue.device_user_name,e.name)}))
+   .sort((a,b)=>(Number(b._sim||0)-Number(a._sim||0))||String(a.name).localeCompare(String(b.name),'ar'));
+ },[employees,reviewIssue]);
 
  const issues=useMemo(()=>{
   const out=[],linkByDevicePin=new Map(),linksByDeviceEmployee=new Map(),statesByDeviceEmployee=new Map(),statesByDevice=new Map(),inventoryByDevice=new Map(),inventoryByDevicePin=new Map(),deviceUsersByDevice=new Map();
@@ -66,9 +74,17 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
      reportedUnlinkedPins.add(String(u.device_pin));
      out.push({id:'unlinked:'+did+':'+u.device_pin,type:'unlinked_device_user',severity:'warning',device_id:d.id,branch_id:d.branch_id,device_pin:u.device_pin,title:bios.length?'بصمة موجودة لـ PIN غير مربوط':'PIN موجود على الجهاز وغير مربوط بموظف حضور',detail:(u.name||('PIN '+u.device_pin))+' موجود على الجهاز'+(bios.length?' ومعه '+bios.length+' قالب بصمة مكتشف':'')+' ويحتاج ربطه بموظف.',action:'links'});
     }else{
-     const emp=employeeMap.get(String(linkedMatch.attendance_employee_id)),sim=nameSimilarity(u.name,emp?.name||linkedMatch.display_name);
+     const emp=employeeMap.get(String(linkedMatch.attendance_employee_id)),currentEmpName=emp?.name||linkedMatch.display_name||'موظف',sim=nameSimilarity(u.name,currentEmpName);
      if(sim!=null&&sim<0.45){
-      out.push({id:'name-link:'+did+':'+u.device_pin,type:'linked_name_mismatch',severity:'warning',device_id:d.id,branch_id:linkedMatch.branch_id||d.branch_id,attendance_employee_id:linkedMatch.attendance_employee_id,device_pin:u.device_pin,title:'اسم الجهاز مختلف عن الموظف المرتبط',detail:'PIN '+u.device_pin+' اسمه على الجهاز «'+String(u.name||'بدون اسم')+'» بينما مرتبط في النظام بـ «'+String(emp?.name||linkedMatch.display_name||'موظف')+'». التشابه ضعيف، لذلك يحتاج مراجعة بشرية قبل أي تعديل.',action:'links',device_user_name:u.name||null,linked_employee_name:emp?.name||linkedMatch.display_name||null,name_similarity:Number(sim.toFixed(2))});
+      const reviewRows=reviewsByDevicePin.get(did+'|'+String(u.device_pin))||[],nowMs=Date.now();
+      const suppressed=reviewRows.some(rv=>{
+       const snapshotsMatch=nameKey(rv.device_user_name_snapshot)===nameKey(u.name)&&nameKey(rv.current_employee_name_snapshot)===nameKey(currentEmpName);
+       if(!snapshotsMatch)return false;
+       if(rv.resolution==='confirm_current')return true;
+       if(rv.resolution==='snooze'){const until=new Date(rv.review_until||0).getTime();return Number.isFinite(until)&&until>nowMs}
+       return false;
+      });
+      if(!suppressed)out.push({id:'name-link:'+did+':'+u.device_pin,type:'linked_name_mismatch',severity:'warning',device_id:d.id,branch_id:linkedMatch.branch_id||d.branch_id,attendance_employee_id:linkedMatch.attendance_employee_id,device_pin:u.device_pin,title:'اسم الجهاز مختلف عن الموظف المرتبط',detail:'PIN '+u.device_pin+' اسمه على الجهاز «'+String(u.name||'بدون اسم')+'» بينما مرتبط في النظام بـ «'+String(currentEmpName)+'». التشابه ضعيف، لذلك يحتاج مراجعة بشرية قبل أي تعديل.',action:'review_link',device_user_name:u.name||null,linked_employee_name:currentEmpName,name_similarity:Number(sim.toFixed(2))});
      }
     }
    }
@@ -97,7 +113,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    }
   }
   return out.sort((a,b)=>({critical:0,warning:1,info:2}[a.severity]??3)-({critical:0,warning:1,info:2}[b.severity]??3)||String(a.title).localeCompare(String(b.title),'ar'));
- },[devices,deviceUsers,links,states,inventory,employeeMap,deviceMap]);
+ },[devices,deviceUsers,links,states,inventory,employeeMap,deviceMap,reviewsByDevicePin]);
 
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
  const deviceOptions=useMemo(()=>devices.map(d=>({value:String(d.id),label:d.name||d.serial_number||d.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[devices]);
@@ -125,7 +141,23 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    await onChanged?.();
   }catch(e){onError?.(e.message)}finally{setBusy('')}
  }
- async function autoReconcile(){
+ function openLinkReview(row){
+  setReviewIssue(row);setReviewForm({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''});setReviewOpen(true);
+ }
+ async function submitLinkReview(e){
+  e?.preventDefault?.();if(!reviewIssue)return;
+  const resolution=reviewForm.resolution,reason=String(reviewForm.reason||'').trim();
+  if(!reason){onError?.('اكتب سبب قرار المراجعة.');return}
+  if(resolution==='relink'&&!reviewForm.new_employee_id){onError?.('اختر الموظف الصحيح لإعادة الربط.');return}
+  if(resolution==='relink'&&!window.confirm('سيتم تغيير صاحب PIN '+reviewIssue.device_pin+' داخل النظام، ونقل ملكية بصمات هذا الـPIN على هذا الجهاز وربط حركاته القديمة بالموظف الجديد. قالب البصمة الخام سيظل على الجهاز ولن يتم نسخه. متابعة؟'))return;
+  setReviewBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'resolve_link_identity_review',device_id:reviewIssue.device_id,device_pin:reviewIssue.device_pin,resolution,reason,new_employee_id:reviewForm.new_employee_id||null,snooze_days:Number(reviewForm.snooze_days||7)});
+   onNotice?.(out?.message||'تم حفظ قرار مراجعة الربط.');setReviewOpen(false);setReviewIssue(null);await onChanged?.();
+  }catch(err){onError?.(err.message)}finally{setReviewBusy(false)}
+ }
+
+  async function autoReconcile(){
   const scope=filters.device?'الجهاز المحدد':filters.branch?'الفرع المحدد':'كل الأجهزة المتاحة لك';
   if(!window.confirm('سيتم تشغيل Safe Auto-Reconcile على '+scope+'.\n\nالعملية ستعيد قراءة البصمات فقط، ولن تربط PIN تلقائيًا، ولن تغيّر صاحب أي بصمة، ولن تحذف أي قالب. الحالات المتعارضة ستظل للمراجعة البشرية.\n\nمتابعة؟'))return;
   setAutoBusy(true);onError?.('');
@@ -146,7 +178,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
   {key:'device',label:'الجهاز / الفرع',render:r=><div><strong>{deviceMap.get(String(r.device_id))?.name||'—'}</strong><div className="muted-small">{branchMap.get(String(r.branch_id))?.name||'—'}</div></div>},
   {key:'employee',label:'الموظف / PIN',render:r=>r.attendance_employee_id?<div><strong>{employeeMap.get(String(r.attendance_employee_id))?.name||'—'}</strong><div className="muted-small" dir="ltr">PIN {r.device_pin||'—'}</div></div>:r.device_pin?<strong dir="ltr">PIN {r.device_pin}</strong>:'—'},
   {key:'type',label:'النوع',render:r=><Badge>{typeLabel(r.type)}</Badge>},
-  {key:'action',label:'الإجراء',render:r=>r.action==='links'?<Button onClick={()=>onOpenLinks?.()}><Link2 size={14}/> فتح الربط</Button>:state.permissions?.manage_biometrics?<Button onClick={()=>scan(r)} disabled={busy===r.id}><RefreshCw size={14}/>{busy===r.id?' جاري الفحص...':r.action==='employee_scan'?' فحص الموظف':' إعادة فحص الجهاز'}</Button>:'—'}
+  {key:'action',label:'الإجراء',render:r=>r.action==='review_link'?(state.permissions?.manage_links?<Button variant="primary" onClick={()=>openLinkReview(r)}><ShieldCheck size={14}/> مراجعة الربط</Button>:'—'):r.action==='links'?<Button onClick={()=>onOpenLinks?.()}><Link2 size={14}/> فتح الربط</Button>:state.permissions?.manage_biometrics?<Button onClick={()=>scan(r)} disabled={busy===r.id}><RefreshCw size={14}/>{busy===r.id?' جاري الفحص...':r.action==='employee_scan'?' فحص الموظف':' إعادة فحص الجهاز'}</Button>:'—'}
  ];
  const deviceCols=[
   {key:'device',label:'الجهاز',render:r=><div><strong>{r.name}</strong><div className="muted-small">{branchMap.get(String(r.branch_id))?.name||'—'} · {r.serial_number}</div></div>},
@@ -158,7 +190,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
  ];
 
  const critical=issues.filter(x=>x.severity==='critical').length,warnings=issues.filter(x=>x.severity==='warning').length,missing=issues.filter(x=>x.type==='missing_employee_biometric').length,unlinked=issues.filter(x=>x.type==='unlinked_device_user'||x.type==='unlinked_biometric'||x.type==='duplicate_pin'||x.type==='link_mismatch'||x.type==='linked_name_mismatch').length;
- const safeIssues=issues.filter(x=>x.action==='device_scan'||x.action==='employee_scan').length,manualIssues=issues.filter(x=>x.action==='links').length;
+ const safeIssues=issues.filter(x=>x.action==='device_scan'||x.action==='employee_scan').length,manualIssues=issues.filter(x=>x.action==='links'||x.action==='review_link').length;
  return <div style={{display:'grid',gap:14}}>
   <div className="stats-grid">
    <Card><div className="stat-card"><div><span>حالات حرجة</span><strong>{critical}</strong></div></div></Card>
@@ -199,5 +231,33 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    <div className="card-title"><div><h3><AlertTriangle size={18}/> مقارنة الأجهزة</h3><small>العدد المعلن من الجهاز مقابل الحالات المكتشفة والمربوطة داخل النظام لكل جهاز.</small></div><Badge>{deviceSummary.length}</Badge></div>
    <Table preferenceKey="attendance-biometric-reconciliation-devices" defaultPageSize={25} rows={deviceSummary} columns={deviceCols}/>
   </Card>
+ <Modal open={reviewOpen} onClose={()=>!reviewBusy&&setReviewOpen(false)} title="مراجعة تعارض ربط PIN" wide>
+  {reviewIssue&&<form onSubmit={submitLinkReview} style={{display:'grid',gap:14}}>
+   <div className="stats-grid">
+    <Card><div className="stat-card"><div><span>الجهاز</span><strong>{deviceMap.get(String(reviewIssue.device_id))?.name||'—'}</strong><small>PIN {reviewIssue.device_pin}</small></div></div></Card>
+    <Card><div className="stat-card"><div><span>الاسم على الجهاز</span><strong>{reviewIssue.device_user_name||'بدون اسم'}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>الموظف المرتبط</span><strong>{reviewIssue.linked_employee_name||'—'}</strong></div></div></Card>
+    <Card><div className="stat-card"><div><span>تشابه الاسم</span><strong>{Math.round(Number(reviewIssue.name_similarity||0)*100)}%</strong></div></div></Card>
+   </div>
+   <Field label="قرار المراجعة"><Select value={reviewForm.resolution} onChange={e=>setReviewForm(x=>({...x,resolution:e.target.value,new_employee_id:e.target.value==='relink'?x.new_employee_id:''}))}>
+    <option value="confirm_current">الربط الحالي صحيح</option>
+    <option value="relink">إعادة الربط بموظف آخر</option>
+    <option value="snooze">تجاهل مؤقت للتنبيه</option>
+   </Select></Field>
+   {reviewForm.resolution==='relink'&&<Field label="الموظف الصحيح"><Select value={reviewForm.new_employee_id} onChange={e=>setReviewForm(x=>({...x,new_employee_id:e.target.value}))} required>
+    <option value="">اختر الموظف</option>
+    {reviewCandidates.map(emp=><option key={emp.id} value={emp.id}>{emp.name}{emp.employee_code?' · '+emp.employee_code:''}{emp._sim!=null?' · تشابه '+Math.round(emp._sim*100)+'%':''}</option>)}
+   </Select></Field>}
+   {reviewForm.resolution==='snooze'&&<Field label="مدة التجاهل"><Select value={String(reviewForm.snooze_days)} onChange={e=>setReviewForm(x=>({...x,snooze_days:Number(e.target.value)}))}>
+    <option value="1">يوم واحد</option><option value="7">7 أيام</option><option value="30">30 يومًا</option><option value="90">90 يومًا</option>
+   </Select></Field>}
+   <Field label="سبب القرار"><Textarea value={reviewForm.reason} onChange={e=>setReviewForm(x=>({...x,reason:e.target.value}))} placeholder={reviewForm.resolution==='confirm_current'?'مثال: الاسم على الجهاز قديم والموظف الحالي مؤكد':reviewForm.resolution==='relink'?'اكتب سبب تصحيح الربط':'اكتب سبب تأجيل المراجعة'} required/></Field>
+   {reviewForm.resolution==='confirm_current'&&<div className="success-note"><ShieldCheck size={16}/> سيُحفظ تأكيدك مع لقطة الاسمين الحاليين. إذا تغير اسم الجهاز أو اسم الموظف لاحقًا، سيظهر التنبيه من جديد.</div>}
+   {reviewForm.resolution==='relink'&&<div className="training-banner">إعادة الربط ستغيّر ملكية PIN داخل النظام، وتنقل حالة بصماته على هذا الجهاز والحركات القديمة إلى الموظف الجديد داخل Transaction واحدة. لا يتم نسخ أو تعديل قالب البصمة الخام على الجهاز.</div>}
+   {reviewForm.resolution==='snooze'&&<div className="training-banner">التنبيه سيختفي مؤقتًا فقط، ثم يعود تلقائيًا بعد انتهاء المدة إذا ظل الاختلاف موجودًا.</div>}
+   <div className="modal-actions"><Button type="button" onClick={()=>setReviewOpen(false)} disabled={reviewBusy}>إلغاء</Button><Button variant="primary" type="submit" disabled={reviewBusy}>{reviewBusy?' جاري حفظ القرار...':' حفظ قرار المراجعة'}</Button></div>
+  </form>}
+ </Modal>
+
  </div>;
 }
