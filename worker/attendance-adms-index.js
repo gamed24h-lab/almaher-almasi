@@ -1251,8 +1251,8 @@ async function applyDeviceUserMatches(env,me,body){
   if(!user){results.push({device_pin:pin,status:'failed',message:'PIN غير موجود ضمن الموظفين المسحوبين من الجهاز.'});failed+=1;continue}
   if(linkMap.get(pin)?.attendance_employee_id){results.push({device_pin:pin,status:'skipped',message:'PIN مربوط بالفعل.'});skipped+=1;continue}
   if(action==='skip'||!action){results.push({device_pin:pin,status:'skipped',message:'تم ترك السجل بدون تغيير.'});skipped+=1;continue}
+  let employee=null,created=false;
   try{
-   let employee=null,created=false;
    if(action==='link_existing'){
     employee=employeeMap.get(txt(decision?.attendance_employee_id))||null;
     if(!employee)throw new Error('الموظف المختار غير موجود أو خارج نفس الفرع.');
@@ -1268,7 +1268,13 @@ async function applyDeviceUserMatches(env,me,body){
    biometricsAttached+=Number(linked?.biometrics_attached||0);
    if(created)createdNew+=1;else linkedExisting+=1;
    results.push({device_pin:pin,status:'success',action,attendance_employee_id:employee.id,employee_name:employee.name,created,biometrics_attached:Number(linked?.biometrics_attached||0)});
-  }catch(e){failed+=1;results.push({device_pin:pin,status:'failed',action,message:e.message||'تعذر تنفيذ المطابقة.'})}
+  }catch(e){
+   if(created&&employee?.id){
+    const linkedNow=await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id)+'&select=id&limit=1').catch(()=>[]);
+    if(!linkedNow?.length)await rest(env,'attendance_employees?id=eq.'+enc(employee.id),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{});
+   }
+   failed+=1;results.push({device_pin:pin,status:'failed',action,message:e.message||'تعذر تنفيذ المطابقة.'})
+  }
  }
  const summary={linked_existing:linkedExisting,created_new:createdNew,skipped,failed,biometrics_attached:biometricsAttached,total:results.length};
  await audit(env,me,'attendance_device_user_matching_apply','attendance_device',device.id,device.branch_id,null,{summary,results:results.map(x=>({device_pin:x.device_pin,status:x.status,action:x.action||null,attendance_employee_id:x.attendance_employee_id||null,created:!!x.created,biometrics_attached:x.biometrics_attached||0,message:x.message||null}))},'تطبيق Smart Employee Matching');
