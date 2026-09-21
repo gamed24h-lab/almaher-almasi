@@ -33,7 +33,10 @@ function printTable(title,subtitle,columns,rows){
  const html='<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}body{font-family:Arial,Tahoma,sans-serif;color:#111;margin:0}.head{text-align:center;margin-bottom:14px}.head h1{font-size:19px;margin:0 0 5px}.head p{font-size:11px;margin:0;color:#555}table{width:100%;border-collapse:collapse;font-size:8.5px}th,td{border:1px solid #bbb;padding:4px;text-align:center;vertical-align:middle}th{background:#f2f4f7}.meta{display:flex;justify-content:space-between;font-size:9px;margin:7px 0 10px}.foot{font-size:8px;color:#666;margin-top:8px;text-align:center}</style></head><body><div class="head"><h1>'+esc(title)+'</h1><p>'+esc(subtitle||'')+'</p></div><div class="meta"><span>نظام الماهر الماسي — الحضور والبصمة</span><span>'+esc(new Date().toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'}))+'</span></div><table><thead><tr>'+th+'</tr></thead><tbody>'+(body||empty)+'</tbody></table><div class="foot">الجزاءات المعروضة إدارية مقترحة بالدقائق حسب سياسة الفرع، ولا تُخصم ماليًا تلقائيًا.</div><script>window.onload=function(){window.print()}</script></body></html>';
  win.document.open();win.document.write(html);win.document.close();
 }
-function logClock(log){return timeOnly(log.occurred_at||log.device_time_raw)}
+function logClock(log){
+ if(log?.occurred_at){try{return new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(log.occurred_at))}catch{}}
+ return timeOnly(log?.device_time_raw)
+}
 function adjustedMinute(m,start,end){if(m==null)return null;if(end<start&&m<start)return m+1440;return m}
 function periodDuration(start,end){if(start==null||end==null)return 0;return end>=start?end-start:(end+1440)-start}
 function intervalOverlap(a1,a2,b1,b2){return Math.max(0,Math.min(a2,b2)-Math.max(a1,b1))}
