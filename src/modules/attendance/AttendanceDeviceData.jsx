@@ -278,7 +278,7 @@ export default function AttendanceDeviceData({state,onChanged,onError,onNotice,o
     {matchRows.map(row=>{
      const decision=matchDecisions[row.device_pin]||{action:'skip',attendance_employee_id:''},top=row.suggestions?.[0]||null;
      return <Card key={row.device_pin}>
-      <div className="card-title"><div><h3>{row.name}</h3><small dir="ltr">PIN {row.device_pin}{row.biometric_count?' · '+row.biometric_count+' biometric':''}</small></div><Badge tone={row.strong_match?'green':top?'orange':'gray'}>{row.strong_match?'اقتراح قوي':top?'يحتاج مراجعة':'لا يوجد تطابق واضح'}</Badge></div>
+      <div className="card-title"><div><h3>{row.name}</h3><small>PIN <span dir="ltr">{row.device_pin}</span>{row.biometric_count?' · '+row.biometric_count+' بصمة مكتشفة':''}</small></div><Badge tone={row.strong_match?'green':top?'orange':'gray'}>{row.strong_match?'اقتراح قوي':top?'يحتاج مراجعة':'لا يوجد تطابق واضح'}</Badge></div>
       {top&&<div className="success-note" style={{marginBottom:10}}><Users size={16}/><div><strong>الاقتراح: {top.name}</strong><div className="muted-small">الثقة: {top.score}% · {(top.reasons||[]).join(' + ')}</div>{top.employee_code&&<div className="muted-small" dir="ltr">Employee Code: {top.employee_code}</div>}</div></div>}
       <div className="form-grid">
        <Field label="القرار"><Select value={decision.action} onChange={e=>setMatchDecision(row.device_pin,{action:e.target.value,attendance_employee_id:e.target.value==='link_existing'?(decision.attendance_employee_id||row.recommended_employee_id||top?.id||''):''})}><option value="skip">تجاهل الآن</option><option value="link_existing">ربط بموظف موجود</option><option value="create_new">إنشاء موظف جديد</option></Select></Field>
