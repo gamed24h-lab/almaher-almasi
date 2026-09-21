@@ -25,10 +25,10 @@ function timelineValue(v){
  return String(v);
 }
 
-export default function Bookings({go,query='',branchParam='',financialParam='',statusParam='',datePresetParam='',fromDateParam='',toDateParam=''}){
+export default function Bookings({go,query='',branchParam='',financialParam='',statusParam='',datePresetParam='',fromDateParam='',toDateParam='',remainingOpParam='',remainingParam=''}){
  const {user}=useAuth();const {data,refresh}=useAppData();
  const [q,setQ]=useState(query),[status,setStatus]=useState('active'),[tripId,setTripId]=useState(''),[branchId,setBranchId]=useState(''),[financial,setFinancial]=useState('all'),[sort,setSort]=useState('newest'),[datePreset,setDatePreset]=useState(''),[fromDate,setFromDate]=useState(''),[toDate,setToDate]=useState('');
- useEffect(()=>{if(query)setQ(query);if(branchParam)setBranchId(branchParam);if(financialParam)setFinancial(financialParam);if(statusParam)setStatus(statusParam);if(datePresetParam)setDatePreset(datePresetParam);if(fromDateParam)setFromDate(fromDateParam);if(toDateParam)setToDate(toDateParam)},[query,branchParam,financialParam,statusParam,datePresetParam,fromDateParam,toDateParam]);
+ useEffect(()=>{if(query)setQ(query);if(branchParam)setBranchId(branchParam);if(financialParam)setFinancial(financialParam);if(statusParam)setStatus(statusParam);if(datePresetParam)setDatePreset(datePresetParam);if(fromDateParam)setFromDate(fromDateParam);if(toDateParam)setToDate(toDateParam);if(remainingParam)setBookingRules(r=>[...r.filter(x=>x.field!=='remaining'),{field:'remaining',operator:remainingOpParam||'gt',value:remainingParam}])},[query,branchParam,financialParam,statusParam,datePresetParam,fromDateParam,toDateParam,remainingOpParam,remainingParam]);
  const [bookingRules,setBookingRules]=useState([]),[bookingRuleMode,setBookingRuleMode]=useState('all');
  const [timeline,setTimeline]=useState(null),[timelineBusy,setTimelineBusy]=useState(false),[timelineError,setTimelineError]=useState('');
  const [cancelTarget,setCancelTarget]=useState(null),[cancelQuote,setCancelQuote]=useState(null),[cancelReason,setCancelReason]=useState(''),[cancelOther,setCancelOther]=useState(''),[cancelMode,setCancelMode]=useState(''),[cancelRefundMethod,setCancelRefundMethod]=useState('cash'),[cancelBusy,setCancelBusy]=useState(false),[cancelError,setCancelError]=useState('');
