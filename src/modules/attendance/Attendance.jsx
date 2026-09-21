@@ -30,8 +30,20 @@ export default function Attendance({initialTab=''}){
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:'',verify:'',statusCode:'',datePreset:'',fromDate:'',toDate:''},unlinked:{q:'',branch:'',device:''}});
  const [logRules,setLogRules]=useState([]),[logRuleMode,setLogRuleMode]=useState('all');
- async function load(){setLoading(true);setError('');try{const out=await api.attendance();setState(out||{})}catch(e){setError(e.message)}finally{setLoading(false)}}
- useEffect(()=>{load()},[]);
+ async function load(options){
+  const silent=options?.silent===true;
+  if(!silent)setLoading(true);
+  if(!silent)setError('');
+  try{const out=await api.attendance();setState(out||{})}catch(e){if(!silent)setError(e.message)}finally{if(!silent)setLoading(false)}
+ }
+ useEffect(()=>{
+  load();
+  const tick=()=>{if(typeof document==='undefined'||document.visibilityState==='visible')load({silent:true})};
+  const id=setInterval(tick,60000);
+  const onVisible=()=>{if(document.visibilityState==='visible')load({silent:true})};
+  if(typeof document!=='undefined')document.addEventListener('visibilitychange',onVisible);
+  return ()=>{clearInterval(id);if(typeof document!=='undefined')document.removeEventListener('visibilitychange',onVisible)}
+ },[]);
 
  const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[];
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
