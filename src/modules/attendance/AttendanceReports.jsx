@@ -43,7 +43,7 @@ function intervalOverlap(a1,a2,b1,b2){return Math.max(0,Math.min(a2,b2)-Math.max
 function distanceToPeriod(m,start,end){const x=adjustedMinute(m,start,end),finish=end<start?end+1440:end,center=(start+finish)/2;return Math.abs(x-center)}
 function ruleOnDay(rule,day){return rule.start_date<=day&&rule.end_date>=day}
 function ruleMinutes(rule){const s=minutesFromClock(rule.start_time),e=minutesFromClock(rule.end_time);return periodDuration(s,e)}
-function statusTone(v){return v==='حضور'?'green':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
+function statusTone(v){return v==='حضور'?'green':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'||v==='استئذان'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
 function reviewLabel(v){return v==='approved'?'معتمدة':v==='waived'?'معفاة':v==='adjusted'?'معدلة':v==='pending'?'بانتظار المراجعة':'—'}
 function reviewTone(v){return v==='approved'?'green':v==='waived'?'blue':v==='adjusted'?'orange':v==='pending'?'red':'blue'}
 function policyFor(employee,policyMap){return {...DEFAULT_POLICY,...(policyMap.get(String(employee?.branch_id))||{})}}
@@ -97,21 +97,25 @@ function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMa
     buckets[best].logs.push(log);
    }
 
-   let totalWork=0,totalLate=0,totalEarly=0,scheduledMinutes=0,permissionScheduledMinutes=0,lateViolations=0,earlyViolations=0,missingPunches=0,missedPeriods=0;
+   let totalWork=0,totalLate=0,totalEarly=0,scheduledMinutes=0,permissionScheduledMinutes=0,lateViolations=0,earlyViolations=0,missingPunches=0,missedPeriods=0,excusedPeriods=0;
    const firstIn=arr.length?logClock(arr[0]):'—',lastOut=arr.length>1?logClock(arr[arr.length-1]):'—',summaries=[];
    for(const b of buckets){
     const p=b.period,start=minutesFromClock(p.start_time),end=minutesFromClock(p.end_time),finish=end<start?end+1440:end,grace=Number(p.grace_minutes||0),ls=b.logs.sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
-    const duration=periodDuration(start,end);scheduledMinutes+=duration;
-    permissionScheduledMinutes+=Math.min(duration,permissionOverlap(permissions,start,finish,start,finish));
-    if(!ls.length){missedPeriods+=1;summaries.push((p.label||('الفترة '+p.sequence_no))+': غياب عن الفترة');continue}
+    const duration=periodDuration(start,end),permissionCovered=Math.min(duration,permissionOverlap(permissions,start,finish,start,finish)),fullyExcused=duration>0&&permissionCovered>=Math.max(0,duration-1),periodLabel=p.label||('الفترة '+p.sequence_no);
+    scheduledMinutes+=duration;permissionScheduledMinutes+=permissionCovered;
+    if(!ls.length){
+      if(fullyExcused){excusedPeriods+=1;summaries.push(periodLabel+': استئذان معتمد '+String(p.start_time||'').slice(0,5)+'–'+String(p.end_time||'').slice(0,5));continue}
+      missedPeriods+=1;summaries.push(periodLabel+': غياب عن الفترة');continue
+    }
     const a=ls[0],z=ls[ls.length-1],aClock=logClock(a),zClock=ls.length>1?logClock(z):'—',aM=adjustedMinute(minutesFromClock(aClock),start,end);
     let late=start!=null&&aM!=null?Math.max(0,aM-(start+grace)):0;
     if(late>0)late=Math.max(0,late-permissionOverlap(permissions,start,finish,start+grace,aM));
     if(late>0){lateViolations+=1;totalLate+=late}
 
     if(ls.length===1){
+      if(fullyExcused){excusedPeriods+=1;summaries.push(periodLabel+': '+aClock+' — استئذان معتمد');continue}
       missingPunches+=1;
-      summaries.push((p.label||('الفترة '+p.sequence_no))+': '+aClock+' — بصمة خروج مفقودة');
+      summaries.push(periodLabel+': '+aClock+' — بصمة خروج مفقودة');
       continue;
     }
 
@@ -146,6 +150,7 @@ function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMa
    let status='راحة';
    if(leave)status='إجازة';
    else if(off&&!arr.length)status='راحة';
+   else if(periods.length&&!arr.length&&excusedPeriods===periods.length)status='استئذان';
    else if(periods.length&&!arr.length)status='غياب';
    else if(arr.length&&periods.length&&(missedPeriods>0||missingPunches>0||shortageMinutes>=Number(policy.partial_absence_threshold_minutes||60)))status='حضور جزئي';
    else if(arr.length&&periods.length)status='حضور';
@@ -173,8 +178,8 @@ function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMa
     schedule_version_id:schedule.scheduleVersion?.id||null,schedule_effective_from:schedule.scheduleVersion?.effective_from||null,schedule_effective_to:schedule.scheduleVersion?.effective_to||null,
     status,first_in:firstIn,last_out:lastOut,periods_summary:leave?(leave.label||'إجازة'):off?(off.label||'راحة'):(summaries.join(' | ')||'لا يوجد دوام'),
     punches:arr.length,work_minutes:totalWork,scheduled_minutes:scheduledMinutes,adjusted_scheduled_minutes:adjustedScheduledMinutes,
-    late_minutes:totalLate,early_leave_minutes:totalEarly,shortage_minutes:shortageMinutes,overtime_minutes:overtimeMinutes,permission_minutes:permissionMinutes,
-    late_violations:lateViolations,early_leave_violations:earlyViolations,missing_punches:missingPunches,missed_periods:missedPeriods,
+    late_minutes:totalLate,early_leave_minutes:totalEarly,shortage_minutes:shortageMinutes,overtime_minutes:overtimeMinutes,permission_minutes:permissionMinutes,approved_permission_minutes:approvedPermissionMinutes,
+    late_violations:lateViolations,early_leave_violations:earlyViolations,missing_punches:missingPunches,missed_periods:missedPeriods,excused_periods:excusedPeriods,
     penalty_minutes:penaltyMinutes,violations_summary:violations.join(' · ')||'—',expected:periods.length>0
    });
   }
@@ -191,12 +196,13 @@ function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMa
 function buildMonthly(daily){
  const map=new Map();
  for(const r of daily){
-  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,partial_days:0,absent_days:0,leave_days:0,off_days:0,late_days:0,early_days:0,missing_punch_days:0,total_minutes:0,scheduled_minutes:0,shortage_minutes:0,early_leave_minutes:0,overtime_minutes:0,permission_minutes:0,penalty_minutes:0,approved_penalty_minutes:0,pending_review_count:0,reviewed_violation_days:0,punches:0};
+  const key=r.employee_id||('orphan:'+r.name),x=map.get(key)||{id:key,employee_code:r.employee_code,name:r.name,working_days:0,present_days:0,partial_days:0,absent_days:0,leave_days:0,permission_days:0,off_days:0,late_days:0,early_days:0,missing_punch_days:0,total_minutes:0,scheduled_minutes:0,shortage_minutes:0,early_leave_minutes:0,overtime_minutes:0,permission_minutes:0,penalty_minutes:0,approved_penalty_minutes:0,pending_review_count:0,reviewed_violation_days:0,punches:0};
   if(r.expected)x.working_days+=1;
   if(r.punches>0)x.present_days+=1;
   if(r.status==='حضور جزئي')x.partial_days+=1;
   if(r.status==='غياب')x.absent_days+=1;
   if(r.status==='إجازة')x.leave_days+=1;
+  if(Number(r.approved_permission_minutes||0)>0||r.status==='استئذان')x.permission_days+=1;
   if(r.status==='راحة')x.off_days+=1;
   if(r.late_minutes>0)x.late_days+=1;
   if(r.early_leave_minutes>0)x.early_days+=1;
@@ -295,7 +301,7 @@ export default function AttendanceReports({state,onError,onNotice}){
 
  const rawCols=[{key:'employee',label:'الموظف',render:r=>employeeMap.get(String(r.attendance_employee_id))?.name||r.employee_name||('PIN '+r.device_pin)},{key:'pin',label:'PIN',render:r=>r.device_pin},{key:'device',label:'الجهاز',render:r=>deviceMap.get(String(r.device_id))?.name||r.serial_number},{key:'time',label:'الوقت',render:r=>fmtDate(r.occurred_at)},{key:'status',label:'الحالة',render:r=>r.status_code??'—'},{key:'verify',label:'التحقق',render:r=>r.verify_code??'—'}];
  const dailyCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'periods_summary',label:'الفترات / الاستثناء'},{key:'first_in',label:'أول دخول'},{key:'last_out',label:'آخر خروج'},{key:'work',label:'عمل فعلي',render:r=>humanMinutes(r.work_minutes)},{key:'late',label:'التأخير',render:r=>r.late_minutes?<Badge tone="orange">{humanMinutes(r.late_minutes)}</Badge>:'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?<Badge tone="orange">{humanMinutes(r.early_leave_minutes)}</Badge>:'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?<Badge tone="red">{humanMinutes(r.shortage_minutes)}</Badge>:'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches?<Badge tone="red">{r.missing_punches}</Badge>:'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'}];
- const monthlyCols=[{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'working_days',label:'أيام العمل'},{key:'present_days',label:'حضور'},{key:'partial_days',label:'حضور جزئي',render:r=>r.partial_days?<Badge tone="orange">{r.partial_days}</Badge>:0},{key:'absent_days',label:'غياب',render:r=>r.absent_days?<Badge tone="red">{r.absent_days}</Badge>:0},{key:'leave_days',label:'إجازات'},{key:'late_days',label:'تأخير',render:r=>r.late_days?<Badge tone="orange">{r.late_days}</Badge>:0},{key:'early_days',label:'انصراف مبكر',render:r=>r.early_days?<Badge tone="orange">{r.early_days}</Badge>:0},{key:'missing_punch_days',label:'بصمة ناقصة',render:r=>r.missing_punch_days?<Badge tone="red">{r.missing_punch_days}</Badge>:0},{key:'hours',label:'ساعات فعلية',render:r=>humanMinutes(r.total_minutes)},{key:'shortage',label:'إجمالي النقص',render:r=>humanMinutes(r.shortage_minutes)},{key:'ot',label:'إضافي',render:r=>humanMinutes(r.overtime_minutes)},{key:'permission',label:'استئذان',render:r=>humanMinutes(r.permission_minutes)},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes?<Badge tone="green">{humanMinutes(r.approved_penalty_minutes)}</Badge>:'—'},{key:'pending',label:'معلق للمراجعة',render:r=>r.pending_review_count?<Badge tone="orange">{r.pending_review_count}</Badge>:0}];
+ const monthlyCols=[{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'working_days',label:'أيام العمل'},{key:'present_days',label:'حضور'},{key:'partial_days',label:'حضور جزئي',render:r=>r.partial_days?<Badge tone="orange">{r.partial_days}</Badge>:0},{key:'absent_days',label:'غياب',render:r=>r.absent_days?<Badge tone="red">{r.absent_days}</Badge>:0},{key:'leave_days',label:'إجازات'},{key:'permission_days',label:'أيام استئذان'},{key:'late_days',label:'تأخير',render:r=>r.late_days?<Badge tone="orange">{r.late_days}</Badge>:0},{key:'early_days',label:'انصراف مبكر',render:r=>r.early_days?<Badge tone="orange">{r.early_days}</Badge>:0},{key:'missing_punch_days',label:'بصمة ناقصة',render:r=>r.missing_punch_days?<Badge tone="red">{r.missing_punch_days}</Badge>:0},{key:'hours',label:'ساعات فعلية',render:r=>humanMinutes(r.total_minutes)},{key:'shortage',label:'إجمالي النقص',render:r=>humanMinutes(r.shortage_minutes)},{key:'ot',label:'إضافي',render:r=>humanMinutes(r.overtime_minutes)},{key:'permission',label:'استئذان',render:r=>humanMinutes(r.permission_minutes)},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes?<Badge tone="green">{humanMinutes(r.approved_penalty_minutes)}</Badge>:'—'},{key:'pending',label:'معلق للمراجعة',render:r=>r.pending_review_count?<Badge tone="orange">{r.pending_review_count}</Badge>:0}];
  const violationCols=[{key:'day',label:'التاريخ'},{key:'employee_code',label:'الكود'},{key:'name',label:'الموظف'},{key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{r.status}</Badge>},{key:'violations_summary',label:'المخالفات'},{key:'late',label:'تأخير',render:r=>r.late_minutes?humanMinutes(r.late_minutes):'—'},{key:'early',label:'انصراف مبكر',render:r=>r.early_leave_minutes?humanMinutes(r.early_leave_minutes):'—'},{key:'shortage',label:'نقص ساعات',render:r=>r.shortage_minutes?humanMinutes(r.shortage_minutes):'—'},{key:'missing',label:'بصمة ناقصة',render:r=>r.missing_punches||'—'},{key:'penalty',label:'جزاء مقترح',render:r=>r.penalty_minutes?<Badge tone="red">{humanMinutes(r.penalty_minutes)}</Badge>:'—'},{key:'review',label:'قرار HR',render:r=><div><Badge tone={reviewTone(r.review_status)}>{reviewLabel(r.review_status)}</Badge>{r.reviewed_by&&<div className="muted-small">{r.reviewed_by}</div>}</div>},{key:'approved',label:'جزاء معتمد',render:r=>r.approved_penalty_minutes==null?'—':<Badge tone={r.approved_penalty_minutes?'green':'blue'}>{humanMinutes(r.approved_penalty_minutes)}</Badge>},{key:'note',label:'ملاحظة',render:r=>r.review_note||'—'},{key:'action',label:'',render:r=>state.permissions?.review_violations&&r.employee_id&&!frozen?<Button onClick={()=>openReview(r)}>مراجعة</Button>:frozen?<Badge tone="blue">مقفل</Badge>:'—'}];
 
  function applySavedView(v={}){setFilters(x=>({...x,...v}));setLoaded(false);setMonthClosure(null)}
