@@ -33,25 +33,35 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
   const out=[],branches=safeArray(data.branches),enc=encodeURIComponent;
   const branch=branches.find(b=>matchesListQuery(query,b.name,b.branch_name,b.city));
   const branchName=branch?.name||branch?.branch_name||'',bid=branch?.id?enc(branch.id):'';
-  const add=(key,title,sub,path,Icon=Search)=>out.push({key:'smart-'+key,kind:'أمر ذكي',title,sub,path,Icon});
+  const add=(key,title,sub,path,Icon=Search,filters=[])=>out.push({key:'smart-'+key,kind:'أمر ذكي',title,sub,path,Icon,filters});
   const hasWord=(...words)=>words.some(w=>matchesListQuery(query,w));
   const wantsBookings=hasWord('حجوزات','الحجوزات','حجز'),wantsTrips=hasWord('رحلات','الرحلات','رحلة'),wantsStaff=hasWord('موظفين','الموظفين','موظفي','موظف');
   const wantsUnpaid=hasWord('غير مسددة','غير مسدد','غير مدفوع','متبقي','جزئي'),wantsPaid=hasWord('مسددة','مسدد بالكامل','مدفوع بالكامل');
   const wantsToday=hasWord('اليوم','اليومية'),wantsActive=hasWord('النشطين','نشطين','النشطة','نشطة','نشط'),wantsPending=hasWord('معلقة','معلق','قيد المراجعة','بانتظار');
   if(wantsBookings&&(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking'))){
    const params=[];if(branch)params.push('branch='+bid);if(wantsUnpaid)params.push('financial=unpaid');else if(wantsPaid)params.push('financial=paid');if(wantsPending)params.push('status=pending');
-   if(params.length)add('bookings-'+params.join('-'),'الحجوزات'+(branch?' · '+branchName:'')+(wantsUnpaid?' · غير مسددة':wantsPaid?' · مسددة':'')+(wantsPending?' · قيد المراجعة':''),'فتح سجل الحجوزات مع تطبيق الفلاتر المطلوبة','/bookings?'+params.join('&'),ClipboardList);
+   if(params.length)add('bookings-'+params.join('-'),'الحجوزات'+(branch?' · '+branchName:'')+(wantsUnpaid?' · غير مسددة':wantsPaid?' · مسددة':'')+(wantsPending?' · قيد المراجعة':''),'فتح سجل الحجوزات مع تطبيق الفلاتر المطلوبة','/bookings?'+params.join('&'),ClipboardList,[branch&&`الفرع: ${branchName}`,wantsUnpaid?'المالية: غير مسددة':wantsPaid?'المالية: مسددة':'',wantsPending?'الحالة: قيد المراجعة':''].filter(Boolean));
   }
   if(wantsTrips&&(has(user,'trips')||has(user,'operations'))){
    const params=[];if(branch)params.push('branch='+bid);if(wantsToday)params.push('date='+new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Riyadh'}));if(wantsActive)params.push('status=active');
-   if(params.length)add('trips-'+params.join('-'),'الرحلات'+(branch?' · '+branchName:'')+(wantsToday?' · اليوم':'')+(wantsActive?' · النشطة':''),'فتح الرحلات مع تطبيق الفلاتر المطلوبة','/trips?'+params.join('&'),BusFront);
+   if(params.length)add('trips-'+params.join('-'),'الرحلات'+(branch?' · '+branchName:'')+(wantsToday?' · اليوم':'')+(wantsActive?' · النشطة':''),'فتح الرحلات مع تطبيق الفلاتر المطلوبة','/trips?'+params.join('&'),BusFront,[branch&&`الفرع: ${branchName}`,wantsToday?'التاريخ: اليوم':'',wantsActive?'الحالة: نشطة':''].filter(Boolean));
   }
   if(wantsStaff&&branch&&(has(user,'manageUsers')||has(user,'managePermissions'))){
    const params=['tab=accounts','branch='+bid];if(wantsActive)params.push('status=active');
-   add('staff-'+bid+(wantsActive?'-active':''),'موظفو '+branchName+(wantsActive?' · النشطون':''),'فتح حسابات الموظفين مع تطبيق الفلاتر المطلوبة','/staff?'+params.join('&'),UserRoundCog);
+   add('staff-'+bid+(wantsActive?'-active':''),'موظفو '+branchName+(wantsActive?' · النشطون':''),'فتح حسابات الموظفين مع تطبيق الفلاتر المطلوبة','/staff?'+params.join('&'),UserRoundCog,[`الفرع: ${branchName}`,wantsActive?'الحالة: نشط':''].filter(Boolean));
   }
   if(hasWord('بصمة','الحضور','حضور')&&(has(user,'attendance_view')||has(user,'attendance_manage_employees')))add('attendance','الحضور والبصمة','فتح مركز الحضور والبصمة','/attendance',UserRoundCog);
   return out;
+ },[q,data.branches,user]);
+ const suggestions=useMemo(()=>{
+  const branches=safeArray(data.branches),sample=branches.slice(0,3),out=[];
+  const push=(key,label)=>{if(!out.some(x=>x.label===label))out.push({key,label})};
+  if(has(user,'viewBookings')||has(user,'editBookings')||has(user,'branchBooking')){
+   push('unpaid','الحجوزات غير المسددة');for(const b of sample){const n=b.name||b.branch_name;if(n)push('booking-'+b.id,`حجوزات فرع ${n} غير المسددة`)}
+  }
+  if(has(user,'trips')||has(user,'operations')){push('today','رحلات اليوم');for(const b of sample){const n=b.name||b.branch_name;if(n)push('trip-'+b.id,`رحلات فرع ${n} اليوم`)}}
+  if(has(user,'manageUsers')||has(user,'managePermissions'))for(const b of sample){const n=b.name||b.branch_name;if(n)push('staff-'+b.id,`موظفي فرع ${n} النشطين`)}
+  const query=q.trim();return (query?out.filter(x=>matchesListQuery(x.label,query)||matchesListQuery(query,x.label)):out).slice(0,6);
  },[q,data.branches,user]);
  const records=useMemo(()=>{
   const out=[];
@@ -79,7 +89,8 @@ export default function GlobalCommandCenter({open,onClose,go,initialQuery=''}) {
   <div className="command-center" role="dialog" aria-modal="true" aria-label="البحث الشامل">
    <div className="command-center-search"><Search size={20}/><input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ابحث في الحجوزات، المسافرين، الرحلات، الموظفين، الوكلاء..." onKeyDown={e=>{if(e.key==='Escape')onClose();else if(e.key==='ArrowDown'){e.preventDefault();setActive(x=>Math.min(x+1,shown.length-1))}else if(e.key==='ArrowUp'){e.preventDefault();setActive(x=>Math.max(0,x-1))}else if(e.key==='Enter'&&shown[active])choose(shown[active])}}/><kbd>ESC</kbd></div>
    <div className="command-center-meta"><span>{q.trim()?'نتائج البحث':'الوصول السريع'}</span><span><Command size={13}/> Ctrl / ⌘ + K</span></div>
-   <div className="command-center-results">{shown.length?shown.map((r,i)=>{const Icon=r.Icon||(r.kind==='حجز'?ClipboardList:r.kind==='مسافر'?Users:r.kind==='رحلة'?BusFront:r.kind==='موظف'?UserRoundCog:r.kind==='وكيل'?Handshake:r.kind==='فرع'?Building2:Clock3);return <button key={r.key} className={i===active?'active':''} onMouseEnter={()=>setActive(i)} onClick={()=>choose(r)}><span className="command-icon"><Icon size={18}/></span><span className="command-copy"><b>{r.title}</b><small>{r.kind}{r.sub?' · '+r.sub:''}</small></span><ArrowLeft size={16}/></button>}):<div className="command-center-empty">لا توجد نتائج مطابقة ضمن البيانات المصرح لك بعرضها.</div>}</div>
+   {suggestions.length>0&&<div className="command-suggestions"><span className="command-suggestions-label">اقتراحات</span>{suggestions.map(x=><button type="button" key={x.key} onClick={()=>setQ(x.label)}>{x.label}</button>)}</div>}
+   <div className="command-center-results">{shown.length?shown.map((r,i)=>{const Icon=r.Icon||(r.kind==='حجز'?ClipboardList:r.kind==='مسافر'?Users:r.kind==='رحلة'?BusFront:r.kind==='موظف'?UserRoundCog:r.kind==='وكيل'?Handshake:r.kind==='فرع'?Building2:Clock3);return <button key={r.key} className={i===active?'active':''} onMouseEnter={()=>setActive(i)} onClick={()=>choose(r)}><span className="command-icon"><Icon size={18}/></span><span className="command-copy"><b>{r.title}</b><small>{r.kind}{r.sub?' · '+r.sub:''}</small>{r.filters?.length>0&&<span className="command-filter-preview">{r.filters.map(x=><em key={x}>{x}</em>)}</span>}</span><ArrowLeft size={16}/></button>}):<div className="command-center-empty">لا توجد نتائج مطابقة ضمن البيانات المصرح لك بعرضها.</div>}</div>
    <div className="command-center-footer"><span>↑ ↓ للتنقل</span><span>Enter للفتح</span><span>Esc للإغلاق</span></div>
   </div>
  </div>;
