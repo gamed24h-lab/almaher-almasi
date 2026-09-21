@@ -361,22 +361,57 @@ async function autoSyncDriftedDeviceClocks(env,state,systemActor){
  }
  return {queued,skipped,errors};
 }
+function promiseTimeout(promise,ms,message){
+ let timer;
+ return Promise.race([
+  Promise.resolve(promise).finally(()=>clearTimeout(timer)),
+  new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error(message||'انتهت مهلة العملية.'),{status:504,code:'WATCHDOG_TIMEOUT'})),ms)})
+ ]);
+}
+async function reconcilePendingClockSyncArtifacts(env){
+ const now=new Date(),nowIso=now.toISOString(),staleCutoff=new Date(now.getTime()-8*60*1000).toISOString(),recentCutoff=new Date(now.getTime()-4*60*1000).toISOString();
+ const staleRuns=await rest(env,'attendance_watchdog_runs?source=eq.scheduled&status=eq.running&started_at=lt.'+enc(staleCutoff)+'&select=id,started_at&limit=100').catch(()=>[]);
+ for(const run of staleRuns||[]){
+  const startedMs=new Date(run.started_at||0).getTime(),duration=Number.isFinite(startedMs)?Math.max(0,now.getTime()-startedMs):null;
+  await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'failed',completed_at:nowIso,duration_ms:duration,error_text:'انتهت مهلة تشغيل المراقب قبل اكتماله؛ تم إغلاق التشغيل العالق تلقائيًا.',metadata:{auto_closed_stale_run:true}},prefer:'return=minimal'}).catch(()=>{});
+ }
+ const devices=await rest(env,'attendance_devices?status=eq.active&select=id,branch_id,metadata').catch(()=>[]);let resolvedNotifications=0,resolvedIncidents=0,pendingDevices=0;
+ for(const device of devices||[]){
+  const clock=device?.metadata?.clock_drift||{},sync=device?.metadata?.last_clock_sync||{},clockCheckedMs=new Date(clock.checked_at||0).getTime(),syncMs=new Date(sync.accepted_at||sync.time_callback_at||sync.requested_at||0).getTime(),pending=clock.confirmed===true&&sync.awaiting_verification===true&&['accepted','accepted_unverified','queued'].includes(txt(sync.status))&&Number.isFinite(syncMs)&&(!Number.isFinite(clockCheckedMs)||syncMs>clockCheckedMs);
+  if(!pending)continue;pendingDevices+=1;
+  const notes=await rest(env,'attendance_notifications?device_id=eq.'+enc(device.id)+'&active=eq.true&select=id,notification_key,category,metadata,status&limit=100').catch(()=>[]);
+  for(const n of notes||[]){
+   const isClock=txt(n.notification_key)==='device_clock_drift:'+device.id;
+   const signals=Array.isArray(n?.metadata?.signals)?n.metadata.signals.map(txt).filter(Boolean):[],isWatch=txt(n.category)==='predictive'&&txt(n?.metadata?.type)==='watch'&&signals.length>0&&signals.every(s=>s==='درجة صحة الجهاز الحالية منخفضة.');
+   if(!isClock&&!isWatch)continue;
+   await rest(env,'attendance_notifications?id=eq.'+enc(n.id),{method:'PATCH',body:{active:false,status:'resolved',resolved_at:nowIso,resolved_by:'system:clock-sync',resolved_reason:'تم استلام مزامنة الساعة؛ بانتظار بصمة Live للتحقق، فلا يعتبر فرق الساعة السابق مشكلة نشطة.',updated_at:nowIso},prefer:'return=minimal'}).catch(()=>{});resolvedNotifications+=1;
+   const incidents=await rest(env,'attendance_incidents?source_notification_id=eq.'+enc(n.id)+'&source_active=eq.true&select=id,status,started_at,resolution_due_at,resolved_at&limit=20').catch(()=>[]);
+   for(const incident of incidents||[]){
+    const startedMs=new Date(incident.started_at||0).getTime(),duration=Number.isFinite(startedMs)?Math.max(0,Math.round((now.getTime()-startedMs)/1000)):0;
+    await rest(env,'attendance_incidents?id=eq.'+enc(incident.id),{method:'PATCH',body:{source_active:false,status:['resolved','closed'].includes(incident.status)?incident.status:'resolved',resolved_at:incident.resolved_at||nowIso,resolved_by:'system:clock-sync',resolution_reason:'تم استلام مزامنة الساعة؛ بانتظار التحقق من بصمة Live.',resolution_seconds:duration,updated_at:nowIso},prefer:'return=minimal'}).catch(()=>{});resolvedIncidents+=1;
+   }
+  }
+ }
+ const recent=await rest(env,'attendance_watchdog_runs?source=eq.scheduled&status=eq.running&started_at=gte.'+enc(recentCutoff)+'&select=id,started_at&order=started_at.desc&limit=1').catch(()=>[]);
+ return {pending_devices:pendingDevices,resolved_notifications:resolvedNotifications,resolved_incidents:resolvedIncidents,recent_running:recent?.[0]||null,stale_runs_closed:(staleRuns||[]).length};
+}
 async function runAttendanceWatchdog(env,source='scheduled'){
- const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env);
- const runRows=await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source,status:'running',runtime_mode:mode,started_at:startedIso,created_at:startedIso},prefer:'return=representation'}).catch(()=>[]);
+ const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env),preflight=await reconcilePendingClockSyncArtifacts(env);
+ if(source==='scheduled'&&preflight.recent_running)return {ok:true,skipped:true,reason:'previous_watchdog_still_running',previous_run_id:preflight.recent_running.id,preflight};
+ const runRows=await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source,status:'running',runtime_mode:mode,started_at:startedIso,created_at:startedIso,metadata:{preflight}},prefer:'return=representation'}).catch(()=>[]);
  const run=runRows?.[0]||null;
  try{
   const systemActor={id:'system:attendance-watchdog',name:'Attendance Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}};
-  const state=await attendanceState(env,systemActor,new URL('https://attendance-watchdog.internal/api/attendance'));
+  const state=await promiseTimeout(attendanceState(env,systemActor,new URL('https://attendance-watchdog.internal/api/attendance')),210000,'تجاوز مراقب الحضور مهلة 210 ثوانٍ وتم إيقاف هذه الدورة لتجنب تداخل الدورات.');
   const clockSync=await autoSyncDriftedDeviceClocks(env,state,systemActor);
   const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),activeNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved').length,criticalNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&x.severity==='critical').length,activeEscalations=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&Number(x.escalation_level)>0).length;
   const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
-  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0),clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors}},prefer:'return=minimal'}).catch(()=>{});
+  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{preflight,notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0),clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors}},prefer:'return=minimal'}).catch(()=>{});
   if(source==='scheduled'&&startedAt.getUTCMinutes()<5){const cutoff=new Date(startedAt.getTime()-30*86400000).toISOString();await rest(env,'attendance_watchdog_runs?started_at=lt.'+enc(cutoff),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{})}
   return summary;
  }catch(e){
   const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),message=txt(e?.message)||'تعذر تشغيل مراقب تنبيهات الحضور.';
-  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'failed',completed_at:completedAt.toISOString(),duration_ms:durationMs,error_text:message},prefer:'return=minimal'}).catch(()=>{});
+  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'failed',completed_at:completedAt.toISOString(),duration_ms:durationMs,error_text:message,metadata:{preflight,timeout:e?.code==='WATCHDOG_TIMEOUT'}},prefer:'return=minimal'}).catch(()=>{});
   throw e;
  }
 }
