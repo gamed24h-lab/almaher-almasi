@@ -1654,6 +1654,7 @@ async function saveAttendancePolicy(env,me,body){
   attendance_mode:attendanceMode,
   mobile_geofence_enabled:geofenceEnabled,
   mobile_geofence_radius_m:clamp(body.mobile_geofence_radius_m,20,5000,100),
+  mobile_max_accuracy_m:clamp(body.mobile_max_accuracy_m,10,1000,120),
   mobile_location_lat:lat,
   mobile_location_lng:lng,
   mobile_require_trusted_device:body.mobile_require_trusted_device!==false,
