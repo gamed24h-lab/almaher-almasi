@@ -1108,6 +1108,14 @@ function cleanShiftPeriods(v){
  }
  return rows.slice(0,12);
 }
+function scheduleSignature(periods,offDays){
+ const clean=(periods||[]).map((p,i)=>({
+  sequence_no:Number(p.sequence_no||i+1),label:txt(p.label),start_time:cleanTime(p.start_time),end_time:cleanTime(p.end_time),
+  grace_minutes:Math.max(0,Math.min(240,Number(p.grace_minutes??10))),device_shift_template_id:txt(p.device_shift_template_id)||null,
+  weekdays:cleanWeekdays(p.weekdays)
+ })).sort((a,b)=>a.sequence_no-b.sequence_no);
+ return JSON.stringify({periods:clean,weekly_off_days:cleanOffDays(offDays)});
+}
 function safeDeviceText(v,max=40){return txt(v).replace(/[\t\r\n]/g,' ').replace(/[=]/g,'-').slice(0,max)}
 async function replaceShiftPeriods(env,me,employeeId,periods){
  await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(employeeId),{method:'DELETE',prefer:'return=minimal'});
@@ -1667,7 +1675,7 @@ async function resetAttendanceViolationDecision(env,me,body){
 
 async function attendanceState(env,me,url){
  const branchId=requestedBranch(me,{},url),mode=accountMode(me),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
- const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,deleteRequests,calendarRules,policies]=await Promise.all([
+ const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,scheduleVersions,deleteRequests,calendarRules,policies]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
   rest(env,'attendance_raw_logs?select=id,device_id,serial_number,branch_id,device_pin,attendance_employee_id,staff_user_id,employee_name,occurred_at,device_time_raw,status_code,verify_code,work_code,data_environment,received_at&data_environment=eq.'+enc(mode)+logFilter+'&order=occurred_at.desc&limit=500'),
@@ -1676,6 +1684,7 @@ async function attendanceState(env,me,url){
   rest(env,'staff_users?select=id,name,username,role,branch_id,status&status=neq.%D9%85%D9%88%D9%82%D9%88%D9%81'+userFilter+'&order=name.asc'),
   rest(env,'branches'+branchFilter),
   rest(env,'attendance_employee_shift_periods?select=*&active=eq.true&order=attendance_employee_id.asc,sequence_no.asc'),
+  rest(env,'attendance_employee_schedule_versions?select=*&data_environment=eq.'+enc(mode)+empFilter+'&order=attendance_employee_id.asc,effective_from.desc&limit=5000').catch(()=>[]),
   rest(env,'attendance_employee_delete_requests?select=*&order=created_at.desc&limit=100'+deleteFilter),
   rest(env,'attendance_employee_calendar_rules?select=*&status=eq.active&data_environment=eq.'+enc(mode)+calendarFilter+'&order=start_date.desc,created_at.desc&limit=2000'),
   rest(env,'attendance_branch_policies?select=*&data_environment=eq.'+enc(mode)+policyFilter+'&order=branch_id.asc')
@@ -1690,7 +1699,7 @@ async function attendanceState(env,me,url){
    rest(env,'attendance_device_clock_checks?select=id,device_id,branch_id,serial_number,source,device_time_raw,server_time,drift_seconds,status,confirmed,sample_count,metadata,created_at'+inFilter+'&order=created_at.desc&limit=500').catch(()=>[])
  ]):[[],[],[],[],[]];
  const latestDeviceLogs=deviceIds.length?await Promise.all(deviceIds.map(async id=>({device_id:id,row:(await rest(env,'attendance_raw_logs?device_id=eq.'+enc(id)+'&select=occurred_at,received_at&order=occurred_at.desc&limit=1').catch(()=>[]))?.[0]||null}))):[];
- const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
+ const employeeIds=new Set((employees||[]).map(x=>String(x.id))),scopedShiftPeriods=(shiftPeriods||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id))),scopedScheduleVersions=(scheduleVersions||[]).filter(x=>employeeIds.has(String(x.attendance_employee_id)));
  const unlinkedMap=new Map();
  for(const row of unlinkedRows||[]){
   const key=String(row.device_id||'')+'|'+txt(row.device_pin),old=unlinkedMap.get(key);
@@ -1810,7 +1819,7 @@ async function attendanceState(env,me,url){
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
  const linkIdentityReviews=await rest(env,'attendance_link_identity_reviews?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=reviewed_at.desc&limit=2000').catch(()=>[]);
  const selfServiceBiometricRequests=await rest(env,'attendance_self_service_biometric_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=2000').catch(()=>[]);
- return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -1845,12 +1854,17 @@ async function attendanceReport(env,me,body){
  if(txt(body.attendance_employee_id))decisionPath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
  decisionPath+='&order=work_date.asc,updated_at.asc&limit=5000';
  const violationDecisions=await rest(env,decisionPath);
+ let schedulePath='attendance_employee_schedule_versions?select=*&data_environment=eq.'+enc(mode)+'&effective_from=lte.'+enc(txt(body.to_date||body.from_date));
+ if(branchId)schedulePath+='&branch_id=eq.'+enc(branchId);
+ if(txt(body.attendance_employee_id))schedulePath+='&attendance_employee_id=eq.'+enc(body.attendance_employee_id);
+ schedulePath+='&order=attendance_employee_id.asc,effective_from.asc&limit=5000';
+ const scheduleVersions=(await rest(env,schedulePath).catch(()=>[])).filter(v=>!v.effective_to||String(v.effective_to)>=txt(body.from_date));
  let monthClosure=null;
  const fromKey=txt(body.from_date),toKey=txt(body.to_date||body.from_date),period=monthStartKey(fromKey);
  if(branchId&&period&&fromKey===period&&toKey===monthEndKey(period)){
   monthClosure=(await rest(env,'attendance_month_closures?branch_id=eq.'+enc(branchId)+'&period_month=eq.'+enc(period)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  }
- return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_clock_history_matching_observed_drift'}};
+ return {ok:true,logs,calendar_rules:calendarRules,violation_decisions:violationDecisions,schedule_versions:scheduleVersions,month_closure:monthClosure,from_date:fromKey,to_date:toKey,environment:mode,branch_id:branchId||null,truncated:Array.isArray(rawLogs)&&rawLogs.length>=10000,clock_correction:{corrected_logs:clockCorrectedCount,device_ids:[...correctedDeviceIds],method:'confirmed_clock_history_matching_observed_drift'}};
 }
 
 async function saveDevice(env,me,body){
@@ -2266,17 +2280,31 @@ async function saveEmployee(env,me,body){
  const id=txt(body.id),name=txt(body.name),branchId=elevated(me)?txt(body.branch_id):actorBranch(me),staffId=txt(body.staff_user_id),requestedEnv=body.data_environment==='production'?'production':'training',systemMode=await runtimeMode(env);
  if(!name)throw Object.assign(new Error('اسم الموظف مطلوب.'),{status:400});if(!branchId)throw Object.assign(new Error('اختر فرع الموظف.'),{status:400});if(requestedEnv==='production'&&systemMode!=='production')throw Object.assign(new Error('لا يمكن إنشاء موظف حضور Production بينما النظام في وضع التدريب.'),{status:409});
  let staff=null;if(staffId){const rows=await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1');staff=rows?.[0]||null;if(!staff)throw Object.assign(new Error('حساب الموظف المختار غير موجود.'),{status:404});if(!elevated(me)&&txt(staff.branch_id)!==actorBranch(me))throw Object.assign(new Error('لا يمكن ربط حساب من فرع آخر.'),{status:403})}
- let before=null;if(id){before=await scopedEmployee(env,me,id);if(!before)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404})}
+ let before=null,beforePeriods=[];if(id){before=await scopedEmployee(env,me,id);if(!before)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});beforePeriods=await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(id)+'&active=eq.true&select=*&order=sequence_no.asc').catch(()=>[])}
  const suppliedPeriods=Array.isArray(body.shift_periods),periods=suppliedPeriods?cleanShiftPeriods(body.shift_periods):cleanShiftPeriods([{label:'الفترة الأولى',start_time:body.shift_start,end_time:body.shift_end,grace_minutes:body.grace_minutes}]);
- const firstPeriod=periods[0]||null;
- const payload={name,branch_id:branchId,phone:txt(body.phone)||null,national_id:txt(body.national_id)||null,department:txt(body.department)||null,job_title:txt(body.job_title)||null,staff_user_id:staff?.id||null,shift_start:firstPeriod?.start_time||null,shift_end:firstPeriod?.end_time||null,grace_minutes:firstPeriod?.grace_minutes??Math.max(0,Math.min(240,Number(body.grace_minutes||0))),weekly_off_days:cleanOffDays(body.weekly_off_days),status:body.status==='inactive'?'inactive':'active',data_environment:requestedEnv,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
+ const firstPeriod=periods[0]||null,weeklyOffDays=cleanOffDays(body.weekly_off_days);
+ const previousPeriods=beforePeriods.length?cleanShiftPeriods(beforePeriods):(before?.shift_start&&before?.shift_end?cleanShiftPeriods([{label:'الفترة الأولى',start_time:before.shift_start,end_time:before.shift_end,grace_minutes:before.grace_minutes,weekdays:[0,1,2,3,4,5,6]}]):[]);
+ const scheduleChanged=!id||scheduleSignature(previousPeriods,before?.weekly_off_days||[])!==scheduleSignature(periods,weeklyOffDays);
+ const scheduleEffectiveFrom=txt(body.schedule_effective_from)||saudiTodayKey();
+ if(scheduleChanged&&!/^\d{4}-\d{2}-\d{2}$/.test(scheduleEffectiveFrom))throw Object.assign(new Error('حدد تاريخ سريان صحيح لجدول الدوام.'),{status:400});
+ if(scheduleChanged&&id)await assertAttendanceMonthOpen(env,branchId,scheduleEffectiveFrom,scheduleEffectiveFrom,requestedEnv);
+ const payload={name,branch_id:branchId,phone:txt(body.phone)||null,national_id:txt(body.national_id)||null,department:txt(body.department)||null,job_title:txt(body.job_title)||null,staff_user_id:staff?.id||null,shift_start:firstPeriod?.start_time||null,shift_end:firstPeriod?.end_time||null,grace_minutes:firstPeriod?.grace_minutes??Math.max(0,Math.min(240,Number(body.grace_minutes||0))),weekly_off_days:weeklyOffDays,status:body.status==='inactive'?'inactive':'active',data_environment:requestedEnv,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
  const employeeCode=txt(body.employee_code);if(employeeCode)payload.employee_code=employeeCode;
  let after;if(id)after=(await rest(env,'attendance_employees?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;else after=(await rest(env,'attendance_employees',{method:'POST',body:{...payload,created_by:actorId(me)||actorName(me)||null},prefer:'return=representation'}))?.[0]||null;
  if(!after)throw Object.assign(new Error('تعذر حفظ موظف الحضور.'),{status:500});
  if(suppliedPeriods)await replaceShiftPeriods(env,me,after.id,periods);
+ let scheduleVersion=null;
+ if(scheduleChanged){
+  scheduleVersion=await rest(env,'rpc/attendance_set_employee_schedule_version',{method:'POST',body:{
+   p_employee_id:after.id,p_branch_id:after.branch_id||null,p_effective_from:scheduleEffectiveFrom,
+   p_shift_periods:periods,p_weekly_off_days:weeklyOffDays,p_environment:requestedEnv,
+   p_reason:txt(body.reason)||('تعديل جدول الدوام ساري من '+scheduleEffectiveFrom),
+   p_actor:actorId(me)||actorName(me)||null
+  }}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر حفظ تاريخ سريان جدول الدوام.'),{status:409})});
+ }
  const autoPush=body.auto_push!==false,devicesQueued=autoPush?await queueEmployeeAutoPush(env,me,after):0;
- await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
- return {ok:true,employee:after,shift_periods:periods,auto_push:autoPush,devices_queued:devicesQueued};
+ await audit(env,me,id?'attendance_employee_update':'attendance_employee_create','attendance_employee',after.id,after.branch_id,before,{...after,shift_periods:periods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,auto_push:autoPush,devices_queued:devicesQueued},txt(body.reason)||'إدارة موظف حضور');
+ return {ok:true,employee:after,shift_periods:periods,schedule_changed:scheduleChanged,schedule_effective_from:scheduleChanged?scheduleEffectiveFrom:null,schedule_version:scheduleVersion,auto_push:autoPush,devices_queued:devicesQueued};
 }
 
 async function promoteInventoryToEmployee(env,device,pin,employee,actorValue){

@@ -45,16 +45,19 @@ function reviewLabel(v){return v==='approved'?'معتمدة':v==='waived'?'مع�
 function reviewTone(v){return v==='approved'?'green':v==='waived'?'blue':v==='adjusted'?'orange':v==='pending'?'red':'blue'}
 function policyFor(employee,policyMap){return {...DEFAULT_POLICY,...(policyMap.get(String(employee?.branch_id))||{})}}
 
-function expectedPeriods(employee,day,periodsMap,rules){
+function expectedPeriods(employee,day,periodsMap,rules,scheduleVersionsMap){
  const dayNo=dayOfWeek(day),dayRules=(rules||[]).filter(r=>ruleOnDay(r,day)),leave=dayRules.find(r=>r.rule_type==='leave'),off=dayRules.find(r=>r.rule_type==='off'),overrides=dayRules.filter(r=>r.rule_type==='work_override');
- if(leave)return {periods:[],dayRules,state:'leave'};
- if(off)return {periods:[],dayRules,state:'off'};
- if(overrides.length)return {periods:overrides.map((r,i)=>({id:r.id,sequence_no:i+1,label:r.label||'دوام مؤقت',start_time:r.start_time,end_time:r.end_time,grace_minutes:r.grace_minutes??employee.grace_minutes??10,weekdays:[dayNo],temporary:true})),dayRules,state:'work'};
- const weeklyOff=(employee.weekly_off_days||[]).map(Number).includes(dayNo);
- if(weeklyOff)return {periods:[],dayRules,state:'off'};
- let periods=(periodsMap.get(String(employee.id))||[]).filter(p=>{const days=Array.isArray(p.weekdays)&&p.weekdays.length?p.weekdays.map(Number):[0,1,2,3,4,5,6];return days.includes(dayNo)});
- if(!periods.length&&employee.shift_start&&employee.shift_end)periods=[{sequence_no:1,label:'الفترة الأولى',start_time:employee.shift_start,end_time:employee.shift_end,grace_minutes:employee.grace_minutes??10,weekdays:[dayNo]}];
- return {periods:[...periods].sort((a,b)=>Number(a.sequence_no)-Number(b.sequence_no)),dayRules,state:periods.length?'work':'off'};
+ if(leave)return {periods:[],dayRules,state:'leave',scheduleVersion:null};
+ if(off)return {periods:[],dayRules,state:'off',scheduleVersion:null};
+ if(overrides.length)return {periods:overrides.map((r,i)=>({id:r.id,sequence_no:i+1,label:r.label||'دوام مؤقت',start_time:r.start_time,end_time:r.end_time,grace_minutes:r.grace_minutes??employee.grace_minutes??10,weekdays:[dayNo],temporary:true})),dayRules,state:'work',scheduleVersion:null};
+ const versions=scheduleVersionsMap?.get(String(employee.id))||[],version=versions.find(v=>String(v.effective_from)<=day&&(!v.effective_to||String(v.effective_to)>=day))||null;
+ const weeklyOffDays=version&&Array.isArray(version.weekly_off_days)?version.weekly_off_days:(employee.weekly_off_days||[]);
+ const weeklyOff=weeklyOffDays.map(Number).includes(dayNo);
+ if(weeklyOff)return {periods:[],dayRules,state:'off',scheduleVersion:version};
+ const sourcePeriods=version&&Array.isArray(version.shift_periods)?version.shift_periods:(periodsMap.get(String(employee.id))||[]);
+ let periods=(sourcePeriods||[]).filter(p=>{const days=Array.isArray(p.weekdays)&&p.weekdays.length?p.weekdays.map(Number):[0,1,2,3,4,5,6];return days.includes(dayNo)});
+ if(!version&&!periods.length&&employee.shift_start&&employee.shift_end)periods=[{sequence_no:1,label:'الفترة الأولى',start_time:employee.shift_start,end_time:employee.shift_end,grace_minutes:employee.grace_minutes??10,weekdays:[dayNo]}];
+ return {periods:[...periods].sort((a,b)=>Number(a.sequence_no)-Number(b.sequence_no)),dayRules,state:periods.length?'work':'off',scheduleVersion:version};
 }
 function permissionOverlap(permissions,start,finish,from,to){
  let total=0;
@@ -67,7 +70,7 @@ function permissionOverlap(permissions,start,finish,from,to){
  return total;
 }
 
-function buildDaily(logs,employees,periodsMap,rules,policyMap,fromDate,toDate,filterEmployeeId,filterDeviceId,links){
+function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMap,fromDate,toDate,filterEmployeeId,filterDeviceId,links){
  const grouped=new Map();
  for(const log of logs||[]){
   const day=dayKey(log.occurred_at),emp=log.attendance_employee_id?String(log.attendance_employee_id):'',key=(emp||('orphan:'+String(log.employee_name||log.device_pin||'unknown')+':'+String(log.device_id||'')))+'|'+day,arr=grouped.get(key)||[];
@@ -81,7 +84,7 @@ function buildDaily(logs,employees,periodsMap,rules,policyMap,fromDate,toDate,fi
   const employeeRules=(rules||[]).filter(r=>String(r.attendance_employee_id)===String(employee.id)),policy=policyFor(employee,policyMap);
   for(const day of days){
    const key=String(employee.id)+'|'+day,arr=(grouped.get(key)||[]).sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));used.add(key);
-   const schedule=expectedPeriods(employee,day,periodsMap,employeeRules),periods=schedule.periods,dayRules=schedule.dayRules;
+   const schedule=expectedPeriods(employee,day,periodsMap,employeeRules,scheduleVersionsMap),periods=schedule.periods,dayRules=schedule.dayRules;
    const leave=dayRules.find(r=>r.rule_type==='leave'),off=dayRules.find(r=>r.rule_type==='off'),permissions=dayRules.filter(r=>r.rule_type==='permission'),overtimes=dayRules.filter(r=>r.rule_type==='overtime');
    const buckets=periods.map(p=>({period:p,logs:[]}));
    for(const log of arr){
@@ -164,6 +167,7 @@ function buildDaily(logs,employees,periodsMap,rules,policyMap,fromDate,toDate,fi
 
    rows.push({
     id:String(employee.id)+'-'+day,day,employee_id:employee.id,employee_code:employee.employee_code||'—',name:employee.name,branch_id:employee.branch_id,
+    schedule_version_id:schedule.scheduleVersion?.id||null,schedule_effective_from:schedule.scheduleVersion?.effective_from||null,schedule_effective_to:schedule.scheduleVersion?.effective_to||null,
     status,first_in:firstIn,last_out:lastOut,periods_summary:leave?(leave.label||'إجازة'):off?(off.label||'راحة'):(summaries.join(' | ')||'لا يوجد دوام'),
     punches:arr.length,work_minutes:totalWork,scheduled_minutes:scheduledMinutes,adjusted_scheduled_minutes:adjustedScheduledMinutes,
     late_minutes:totalLate,early_leave_minutes:totalEarly,shortage_minutes:shortageMinutes,overtime_minutes:overtimeMinutes,permission_minutes:permissionMinutes,
@@ -207,13 +211,14 @@ export default function AttendanceReports({state,onError,onNotice}){
  const policyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
- const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),branch_id:state.scope?.branch_id||'',attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[monthClosure,setMonthClosure]=useState(null),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const [filters,setFilters]=useState({from_date:todayKey(),to_date:todayKey(),branch_id:state.scope?.branch_id||'',attendance_employee_id:'',device_id:'',report_type:'daily'}),[logs,setLogs]=useState([]),[reportRules,setReportRules]=useState([]),[reportScheduleVersions,setReportScheduleVersions]=useState([]),[violationDecisions,setViolationDecisions]=useState([]),[monthClosure,setMonthClosure]=useState(null),[busy,setBusy]=useState(false),[truncated,setTruncated]=useState(false),[loaded,setLoaded]=useState(false);
+ const scheduleVersionsMap=useMemo(()=>{const m=new Map();for(const v of reportScheduleVersions||[]){const k=String(v.attendance_employee_id),a=m.get(k)||[];a.push(v);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.effective_from).localeCompare(String(x.effective_from)));return m},[reportScheduleVersions]);
  const [reviewRow,setReviewRow]=useState(null),[reviewForm,setReviewForm]=useState({decision_status:'approved',approved_penalty_minutes:0,manager_note:'',reason:''}),[reviewBusy,setReviewBusy]=useState(false);
  const [reopenOpen,setReopenOpen]=useState(false),[reopenReason,setReopenReason]=useState(''),[closeBusy,setCloseBusy]=useState(false);
  const decisionMap=useMemo(()=>new Map((violationDecisions||[]).map(d=>[String(d.attendance_employee_id)+'|'+String(d.work_date),d])),[violationDecisions]);
  const reportEmployees=useMemo(()=>employees.filter(e=>!filters.branch_id||String(e.branch_id)===String(filters.branch_id)),[employees,filters.branch_id]);
  const reportDevices=useMemo(()=>devices.filter(d=>!filters.branch_id||String(d.branch_id)===String(filters.branch_id)),[devices,filters.branch_id]);
- const rawDaily=useMemo(()=>loaded?buildDaily(logs,reportEmployees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,reportEmployees,periodsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
+ const rawDaily=useMemo(()=>loaded?buildDaily(logs,reportEmployees,periodsMap,scheduleVersionsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links):[],[loaded,logs,reportEmployees,periodsMap,scheduleVersionsMap,reportRules,policyMap,filters.from_date,filters.to_date,filters.attendance_employee_id,filters.device_id,links]);
  const liveDaily=useMemo(()=>rawDaily.map(r=>{const violation=r.status==='غياب'||r.status==='حضور جزئي'||r.late_minutes>0||r.early_leave_minutes>0||r.missing_punches>0||r.shortage_minutes>0,d=r.employee_id?decisionMap.get(String(r.employee_id)+'|'+String(r.day)):null;return {...r,review_status:d?.decision_status||(violation?'pending':'none'),approved_penalty_minutes:d?Number(d.approved_penalty_minutes||0):null,review_note:d?.manager_note||'',reviewed_by:d?.reviewed_by||'',reviewed_at:d?.reviewed_at||null,decision_id:d?.id||null}}),[rawDaily,decisionMap]);
  const frozen=monthClosure?.status==='closed'&&monthClosure?.snapshot&&isFullMonth(filters.from_date,filters.to_date);
  const daily=useMemo(()=>frozen&&Array.isArray(monthClosure?.snapshot?.daily)?monthClosure.snapshot.daily:liveDaily,[frozen,monthClosure,liveDaily]);
@@ -236,8 +241,8 @@ export default function AttendanceReports({state,onError,onNotice}){
   setBusy(true);onError?.('');
   try{
    const out=await api.attendanceWrite({action:'report',...filters,branch_id:selectedBranchId});
-   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setViolationDecisions(out.violation_decisions||[]);setMonthClosure(out.month_closure||null);setTruncated(!!out.truncated);setLoaded(true);
-   onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء و'+String((out.violation_decisions||[]).length)+' قرار HR في الفترة.');
+   setLogs(out.logs||[]);setReportRules(out.calendar_rules||[]);setReportScheduleVersions(out.schedule_versions||[]);setViolationDecisions(out.violation_decisions||[]);setMonthClosure(out.month_closure||null);setTruncated(!!out.truncated);setLoaded(true);
+   onNotice?.('تم تجهيز الكشف: '+String((out.logs||[]).length)+' حركة بصمة و'+String((out.schedule_versions||[]).length)+' نسخة دوام تاريخية و'+String((out.calendar_rules||[]).length)+' قاعدة/استثناء.');
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
  }
  async function closeMonth(){
