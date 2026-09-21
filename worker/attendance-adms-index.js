@@ -684,6 +684,44 @@ function clockDriftText(seconds){
  if(abs>=3600){const h=abs/3600;return dir+' '+(Math.abs(h-Math.round(h))<0.03?Math.round(h):h.toFixed(1))+' ساعة'}
  return dir+' '+Math.round(abs/60)+' دقيقة';
 }
+function zktecoOldEncodeUtc(value=new Date()){
+ const d=value instanceof Date?value:new Date(value);if(Number.isNaN(d.getTime()))throw new Error('وقت السيرفر غير صالح.');
+ const y=d.getUTCFullYear(),m=d.getUTCMonth()+1,day=d.getUTCDate(),h=d.getUTCHours(),min=d.getUTCMinutes(),sec=d.getUTCSeconds();
+ return (((y-2000)*12*31+(m-1)*31+day-1)*86400)+((h*60+min)*60)+sec;
+}
+function zktecoClockCommand(at=new Date()){
+ const encoded=zktecoOldEncodeUtc(at),serverTz='+0300';
+ return {encoded,serverTz,command:'SET OPTIONS DateTime='+encoded+',ServerTZ='+serverTz,algorithm:'zkteco_old_encode_utc_v1'};
+}
+async function queueClockSync(env,device,me,{source='manual',force=false}={}){
+ if(!device?.id)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});
+ if(device.status!=='active')throw Object.assign(new Error('جهاز البصمة موقوف.'),{status:409});
+ const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.clock_sync&status=in.(queued,sent)&select=id&order=id.desc&limit=1').catch(()=>[]);
+ if(pending?.length)return {ok:true,queued:false,command_id:pending[0].id,message:'يوجد تحديث لساعة الجهاز قيد التنفيذ بالفعل.'};
+ if(await hasAttendanceHistoryTransfer(env,device))throw Object.assign(new Error('يوجد نقل سجل حضور تاريخي قيد التنفيذ. انتظر اكتماله قبل تعديل ساعة الجهاز.'),{status:409});
+ const previous=device?.metadata?.last_clock_sync||{},lastMs=new Date(previous.requested_at||previous.accepted_at||0).getTime();
+ if(!force&&Number.isFinite(lastMs)&&Date.now()-lastMs<6*3600000)return {ok:true,queued:false,cooldown:true,command_id:previous.command_id||null,message:'تمت محاولة مزامنة الساعة خلال آخر 6 ساعات؛ لن يكررها النظام تلقائيًا الآن.'};
+ const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),created=await queueCommands(env,device,me,[{type:'clock_sync',command:spec.command,metadata:{clock_sync:true,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null}}]),cmd=created?.[0]||null;
+ const meta={...(device.metadata||{}),last_clock_sync:{status:'queued',command_id:cmd?.id||null,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null,awaiting_verification:true,verification_samples:0}};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:requestedAt},prefer:'return=minimal'}).catch(()=>{});device.metadata=meta;
+ await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:cmd?.id||null,source,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm},source==='auto'?'مزامنة تلقائية لساعة جهاز البصمة':'مزامنة ساعة جهاز البصمة مع وقت السيرفر');
+ return {ok:true,queued:true,command_id:cmd?.id||null,encoded_time:spec.encoded,server_tz:spec.serverTz,message:'تم إرسال تحديث الساعة الفعلية للجهاز من السيرفر. سيتم التحقق من النتيجة مع أول حركة Live جديدة.'};
+}
+async function updateClockSyncResult(env,cmd,rc,resultBody){
+ if(!cmd?.device_id||cmd.command_type!=='clock_sync')return;
+ const device=(await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;if(!device)return;
+ const now=new Date().toISOString(),meta={...(device.metadata||{})},old=meta.last_clock_sync||{},same=!old.command_id||String(old.command_id)===String(cmd.id),sync={...(same?old:{}),command_id:cmd.id,source:cmd?.metadata?.source||old.source||'manual',requested_at:cmd?.metadata?.requested_at||old.requested_at||cmd.created_at||null,encoded_time:cmd?.metadata?.encoded_time??old.encoded_time??null,server_tz:cmd?.metadata?.server_tz||old.server_tz||'+0300',algorithm:cmd?.metadata?.algorithm||old.algorithm||'zkteco_old_encode_utc_v1',result_code:rc,result_body:txt(resultBody).slice(0,500),status:rc===0?'accepted':'failed',awaiting_verification:rc===0,accepted_at:rc===0?now:null,failed_at:rc===0?null:now,verification_samples:0};
+ meta.last_clock_sync=sync;await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
+ if(rc===0)await recordDeviceHealthEvent(env,{event_key:'clock_sync_accepted:'+cmd.id,device_id:device.id,branch_id:device.branch_id,event_type:'clock_sync_accepted',severity:'info',status:'closed',started_at:now,ended_at:now,command_id:cmd.id,result_code:rc,summary:'استلم الجهاز أمر مزامنة الساعة من السيرفر بنجاح، وبانتظار التحقق من حركة Live.',metadata:{server_tz:sync.server_tz,encoded_time:sync.encoded_time,algorithm:sync.algorithm}});
+}
+async function serveDeviceClock(env,device,request,url){
+ const now=new Date(),spec=zktecoClockCommand(now),servedAt=now.toISOString(),meta={...(device.metadata||{})},sync=meta.last_clock_sync||{};
+ meta.last_clock_server_response={served_at:servedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,path:url.pathname,type:txt(url.searchParams.get('type'))||'time'};
+ if(sync.awaiting_verification)meta.last_clock_sync={...sync,time_callback_at:servedAt,time_callback_path:url.pathname,server_time_served:spec.encoded,server_tz:spec.serverTz};
+ await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:servedAt},prefer:'return=minimal'}).catch(()=>{});
+ const body='DateTime='+spec.encoded+',ServerTZ='+spec.serverTz;
+ return new Response(body,{status:200,headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store','Date':now.toUTCString()}});
+}
 async function hasAttendanceHistoryTransfer(env,device){
  if(device?.metadata?.force_attlog_replay)return true;
  const rows=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&status=in.(queued,sent)&command_type=in.(sync_attlog,history_attlog,history_attlog_replay)&select=id&limit=1').catch(()=>[]);
@@ -720,7 +758,7 @@ async function probeDeviceClock(env,me,body){
 }
 async function handleClockOptionsPayload(env,device,url,body){
  const type=lower(url.searchParams.get('type'));if(type!=='options')return false;
- const info=parseDeviceInfo(body),dateTime=txt(info.datetime),serverTz=txt(info.servertz),now=new Date().toISOString(),meta={...(device.metadata||{})},probe={checked_at:now,datetime:dateTime||null,server_tz:serverTz||null,raw:String(body||'').slice(0,2000),datetime_mode:/^\d{9,12}$/.test(dateTime)?'unix':/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(dateTime)?'text':'unknown'};
+ const info=parseDeviceInfo(body),dateTime=txt(info.datetime),serverTz=txt(info.servertz),now=new Date().toISOString(),meta={...(device.metadata||{})},probe={checked_at:now,datetime:dateTime||null,server_tz:serverTz||null,raw:String(body||'').slice(0,2000),datetime_mode:/^\d{8,12}$/.test(dateTime)?'encoded_seconds':/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(dateTime)?'text':'unknown'};
  meta.clock_probe=probe;await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
  const pending=await rest(env,'attendance_device_commands?device_id=eq.'+enc(device.id)+'&command_type=eq.clock_probe&status=in.(queued,sent,success)&select=id&order=id.desc&limit=1').catch(()=>[]),cmd=pending?.[0];
  if(cmd?.id)await rest(env,'attendance_device_commands?id=eq.'+enc(cmd.id),{method:'PATCH',body:{status:'success',result_code:0,result_body:String(body||'').slice(0,2000),completed_at:now,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
@@ -729,10 +767,7 @@ async function handleClockOptionsPayload(env,device,url,body){
 async function syncDeviceClock(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لمزامنة ساعة جهاز البصمة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
- const probe=device?.metadata?.clock_probe||{};if(probe.datetime_mode!=='unix')throw Object.assign(new Error('لن يتم تعديل الساعة تلقائيًا قبل تأكيد صيغة الوقت التي يدعمها هذا الجهاز. شغّل «فحص الساعة» أولًا.'),{status:409});
- const nowUnix=Math.floor(Date.now()/1000),command='SET OPTIONS DateTime='+nowUnix+',ServerTZ=+0300',created=await queueCommands(env,device,me,[{type:'clock_sync',command,metadata:{clock_sync:true,server_tz:'+0300',unix_time:nowUnix,requested_at:new Date().toISOString()}}]);
- await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:created?.[0]?.id||null,server_tz:'+0300'},'مزامنة ساعة جهاز البصمة مع وقت السيرفر والمنطقة الزمنية');
- return {ok:true,queued:true,command_id:created?.[0]?.id||null,message:'تم تجهيز مزامنة الساعة. سيتم التحقق تلقائيًا من أول حركة جديدة.'};
+ return await queueClockSync(env,device,me,{source:'manual',force:true});
 }
 
 function deviceHealthSnapshot(device,latestLog,deviceCommands=[],unlinkedCount=0,unlinkedTruncated=false){
@@ -867,6 +902,7 @@ async function completeDeviceCommand(env,body){
   const cmd=rows?.[0];
   if(cmd&&rc!==0)await recordDeviceHealthEvent(env,{event_key:'command_failed:'+cmd.id,device_id:cmd.device_id,branch_id:null,event_type:'command_failed',severity:['history_attlog','history_attlog_replay','sync_attlog','sync_users','diagnostic_info'].includes(cmd.command_type)?'warning':'info',started_at:now,ended_at:now,duration_seconds:0,command_id:cmd.id,result_code:rc,summary:'فشل أمر '+cmd.command_type+(rc!=null?' (Code '+rc+')':''),metadata:{command_type:cmd.command_type,history_strategy:cmd?.metadata?.history_strategy||null}});
   if(cmd&&['sync_info','diagnostic_info'].includes(cmd.command_type))await updateDeviceInfoFromInfoCommand(env,cmd,raw,rc).catch(()=>{});
+  if(cmd?.command_type==='clock_sync')await updateClockSyncResult(env,cmd,rc,line).catch(()=>{});
   if(cmd?.command_type==='history_attlog'&&rc===0){
    const devices=await rest(env,'attendance_devices?id=eq.'+enc(cmd.device_id)+'&select=*&limit=1').catch(()=>[]);
    const device=devices?.[0]||null,strategy=txt(cmd?.metadata?.history_strategy)||'range_space';
@@ -914,6 +950,10 @@ async function admsRequest(request,env){
  const device=await getDevice(env,serial).catch(()=>null);
  if(!device||device.status!=='active')return plain('ERROR: DEVICE_NOT_REGISTERED',200);
 
+ if(request.method==='GET'&&url.pathname==='/iclock/rtdata'&&lower(url.searchParams.get('type'))==='time'){
+   await touchDevice(env,device,request,url).catch(()=>{});
+   return await serveDeviceClock(env,device,request,url);
+ }
  if(request.method==='GET'&&url.pathname==='/iclock/cdata'){
    await touchDevice(env,device,request,url).catch(()=>{});
    return plain(handshake(serial,device));
