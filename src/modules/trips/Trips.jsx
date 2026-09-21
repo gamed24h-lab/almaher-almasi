@@ -21,14 +21,14 @@ const dateCode=d=>String(d||'').replaceAll('-','').slice(2);
 const friendlyError=e=>{const m=String(e?.message||e||'');if(/Return date cannot be before departure date/i.test(m))return 'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب.';if(/trips_status_check/i.test(m))return 'حالة الرحلة غير متوافقة مع إعدادات النظام.';return m||'تعذر تنفيذ العملية.'};
 function branchCode(name=''){const n=String(name);if(n.includes('تبوك'))return'TAB';if(n.includes('تيماء'))return'TYM';if(n.includes('عرعر'))return'ARR';if(n.includes('سكاكا'))return'SAK';if(n.includes('دومة'))return'DOM';if(n.includes('طبرجل'))return'TBJ';if(n.includes('القريات'))return'QUR';if(n.includes('طريف'))return'TUR';if(n.includes('مكة'))return'MAK';if(n.includes('المدينة'))return'MED';if(n.includes('جدة'))return'JED';if(n.includes('الرياض'))return'RUH';return'BRN'}
 
-export default function Trips({go,query='',branchParam='',statusParam='',dateParam='',fromDateParam='',toDateParam='',capacityOpParam='',capacityParam=''}){
+export default function Trips({go,query='',branchParam='',statusParam='',dateParam='',fromDateParam='',toDateParam='',capacityOpParam='',capacityParam='',capacityMinParam='',capacityMaxParam='',limitParam='',sortParam=''}){
  const {user}=useAuth(),{data,refresh}=useAppData();
  const [open,setOpen]=useState(false),[err,setErr]=useState(''),[showPast,setShowPast]=useState(false),[editing,setEditing]=useState(null);
  const [mainBranch,setMainBranch]=useState(''),[shared,setShared]=useState([]),[stops,setStops]=useState({}),[saving,setSaving]=useState(false);
  const [scheduleMode,setScheduleMode]=useState('single'),[rangeEnd,setRangeEnd]=useState(''),[weekdays,setWeekdays]=useState([]),[notice,setNotice]=useState(null);
  const [destinationCatalog,setDestinationCatalog]=useState({destinations:[],routes:[]}),[destinationError,setDestinationError]=useState('');
  const [listFilter,setListFilter]=useState({q:'',branch:'',status:'',from:'',to:'',dateFrom:'',dateTo:''});
- useEffect(()=>{if(query||branchParam||statusParam||dateParam||fromDateParam||toDateParam)setListFilter(x=>({...x,q:query||dateParam||x.q,branch:branchParam||x.branch,status:statusParam||x.status,dateFrom:fromDateParam||x.dateFrom||'',dateTo:toDateParam||x.dateTo||''}));if(capacityParam)setListRules(r=>[...r.filter(x=>x.field!=='capacity'),{field:'capacity',operator:capacityOpParam||'lt',value:capacityParam}])},[query,branchParam,statusParam,dateParam,fromDateParam,toDateParam,capacityOpParam,capacityParam]);
+ useEffect(()=>{if(query||branchParam||statusParam||dateParam||fromDateParam||toDateParam)setListFilter(x=>({...x,q:query||dateParam||x.q,branch:branchParam||x.branch,status:statusParam||x.status,dateFrom:fromDateParam||x.dateFrom||'',dateTo:toDateParam||x.dateTo||''}));if(capacityParam||capacityMinParam||capacityMaxParam)setListRules(r=>[...r.filter(x=>x.field!=='capacity'),...(capacityParam?[{field:'capacity',operator:capacityOpParam||'lt',value:capacityParam}]:[]),...(capacityMinParam?[{field:'capacity',operator:'gte',value:capacityMinParam}]:[]),...(capacityMaxParam?[{field:'capacity',operator:'lte',value:capacityMaxParam}]:[])]);if(sortParam==='nearest')setListFilter(x=>({...x,sort:'nearest'}))},[query,branchParam,statusParam,dateParam,fromDateParam,toDateParam,capacityOpParam,capacityParam,capacityMinParam,capacityMaxParam,sortParam]);
  const [listRules,setListRules]=useState([]),[listRuleMode,setListRuleMode]=useState('all');
  const today=new Date().toISOString().slice(0,10);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(t)},[notice]);
@@ -49,14 +49,14 @@ export default function Trips({go,query='',branchParam='',statusParam='',datePar
   {key:'capacity',label:'السعة',type:'number',get:t=>t.booking_capacity||t.default_bus_capacity||t.bus_capacity},
   {key:'price',label:'سعر الذهاب',type:'number',get:t=>t.price_one_way}
  ],[branchOptions,fromOptions,toOptions]);
- const rows=useMemo(()=>visibleTrips.filter(t=>{
+ const rows=useMemo(()=>{const out=visibleTrips.filter(t=>{
   const f=listFilter||{},branch=branchMap.get(String(t.branch_id));
   return (!f.branch||String(t.branch_id||'')===f.branch)
    &&(!f.status||String(t.status||'')===f.status)
    &&(!f.from||String(t.from_city||t.origin||'')===f.from)
    &&(!f.to||String(t.to_city||t.destination||'')===f.to)
    &&matchesListQuery(f.q,t.trip_code,t.code,t.from_city,t.origin,t.to_city,t.destination,t.departure_date,t.return_date,t.status,branch?.name,branch?.branch_name);
- }),[visibleTrips,listFilter,branchMap]);
+ });if(listFilter.sort==='nearest')out.sort((a,b)=>String(a.departure_date||'').localeCompare(String(b.departure_date||'')));return limitParam?out.slice(0,Math.max(1,Number(limitParam)||25)):out},[visibleTrips,listFilter,branchMap,limitParam]);
  const cities=useMemo(()=>{const out=(destinationCatalog.destinations||[]).filter(x=>x.active!==false).map(x=>String(x.city||x.name||'').trim()).filter(Boolean);for(const v of [editing?.from_city,editing?.origin,editing?.to_city,editing?.destination])if(v&&!out.includes(v))out.push(v);return [...new Set(out)]},[destinationCatalog,editing]);
  const activeRoutes=useMemo(()=>(destinationCatalog.routes||[]).filter(x=>x.active!==false),[destinationCatalog]);
  const destinationById=useMemo(()=>new Map((destinationCatalog.destinations||[]).map(x=>[String(x.id),x])),[destinationCatalog]);
