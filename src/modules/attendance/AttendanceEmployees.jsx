@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {CalendarDays,Clock3,Plus,RefreshCw,Trash2,UploadCloud,Users} from 'lucide-react';
+import {CalendarClock,CalendarDays,Clock3,Plus,RefreshCw,Trash2,UploadCloud,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
@@ -15,11 +15,16 @@ function today(){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riya
 const blankRule=()=>({id:'',rule_type:'leave',label:'',start_date:today(),end_date:today(),start_time:'08:00',end_time:'17:00',grace_minutes:10,notes:'',reason:''});
 const ruleLabel=t=>t==='leave'?'إجازة':t==='permission'?'استئذان':t==='overtime'?'عمل إضافي':t==='work_override'?'دوام مؤقت':t==='off'?'راحة / إجازة إضافية':t||'—';
 const ruleTone=t=>t==='leave'||t==='off'?'blue':t==='overtime'?'green':t==='permission'?'orange':'blue';
+const versionSourceLabel=v=>({manual:'تعديل يدوي',audit_backfill:'مستعاد من سجل التدقيق',audit_before:'الجدول السابق لأول تعديل',current_baseline:'خط أساس من الجدول الحالي'}[v]||v||'غير محدد');
+const fmtDateTime=v=>{if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}};
+const offDaysLabel=v=>{const a=Array.isArray(v)?v.map(Number).sort():[];return a.length?a.map(n=>DAYS[n]?.[1]||String(n)).join('، '):'لا توجد راحة أسبوعية'};
+const periodSummary=v=>{const a=Array.isArray(v)?[...v].sort((x,y)=>Number(x.sequence_no||0)-Number(y.sequence_no||0)):[];return a.length?a.map((p,i)=>(p.label||('الفترة '+String(i+1)))+' '+String(p.start_time||'').slice(0,5)+'–'+String(p.end_time||'').slice(0,5)).join(' | '):'لا توجد فترات دوام'};
+const versionSignature=v=>JSON.stringify({periods:(Array.isArray(v?.shift_periods)?v.shift_periods:[]).map((p,i)=>({sequence_no:Number(p.sequence_no||i+1),label:String(p.label||''),start_time:String(p.start_time||'').slice(0,5),end_time:String(p.end_time||'').slice(0,5),grace_minutes:Number(p.grace_minutes||0),weekdays:(Array.isArray(p.weekdays)?p.weekdays:ALL_DAYS).map(Number).sort()})),weekly_off_days:(Array.isArray(v?.weekly_off_days)?v.weekly_off_days:[]).map(Number).sort()});
 
 export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],scheduleVersions=state.scheduleVersions||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[];
  const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState('');
- const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false);
+ const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false),[scheduleHistoryEmployee,setScheduleHistoryEmployee]=useState(null);
  const deleteTimer=useRef(null);
  const [listFilter,setListFilter]=useState({q:'',branch:'',department:'',status:'',device:''});
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
@@ -31,6 +36,22 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const deleteMap=useMemo(()=>{const m=new Map();for(const r of deleteRequests){const k=String(r.attendance_employee_id||'');if(k&&!m.has(k))m.set(k,r)}return m},[deleteRequests]);
  const rulesMap=useMemo(()=>{const m=new Map();for(const r of calendarRules){const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.start_date).localeCompare(String(x.start_date)));return m},[calendarRules]);
  const biometricMap=useMemo(()=>{const m=new Map();for(const r of biometricProfiles){if(r.status!=='active')continue;const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}return m},[biometricProfiles]);
+ const scheduleTimeline=useMemo(()=>{
+  if(!scheduleHistoryEmployee?.id)return [];
+  const asc=(scheduleVersions||[]).filter(v=>String(v.attendance_employee_id)===String(scheduleHistoryEmployee.id)).sort((a,b)=>String(a.effective_from).localeCompare(String(b.effective_from)));
+  return asc.map((v,i)=>{
+   const previous=i?asc[i-1]:null,sameSchedule=!!previous&&versionSignature(previous)===versionSignature(v);
+   const actorName=value=>{
+    const raw=String(value||'').trim();if(!raw)return 'النظام';
+    const user=userMap.get(raw);if(user)return user.name||raw;
+    if(raw.startsWith('system:'))return 'النظام';
+    if(raw.startsWith('schedule_history_'))return 'أداة تصحيح سجل الدوام';
+    if(/^[0-9a-f-]{36}$/i.test(raw))return 'مستخدم محفوظ بالنظام';
+    return raw;
+   };
+   return {...v,previous,sameSchedule,created_actor_label:actorName(v.created_by),updated_actor_label:actorName(v.updated_by)};
+  }).reverse();
+ },[scheduleVersions,scheduleHistoryEmployee,userMap]);
 
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
  const departmentOptions=useMemo(()=>[...new Set(employees.map(e=>String(e.department||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar')).map(v=>({value:v,label:v})),[employees]);
@@ -162,7 +183,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   {key:'device',label:'أجهزة الربط',render:r=>{const ls=linksMap.get(String(r.id))||[];return ls.length?<div style={{display:'grid',gap:2}}>{ls.map(l=><span key={l.id} className="muted-small">{deviceMap.get(String(l.device_id))?.name||'جهاز'} · PIN {l.device_pin}</span>)}</div>:'غير مربوط'}},
   {key:'biometric',label:'الهوية البيومترية',render:r=>{const bs=biometricMap.get(String(r.id))||[],faces=bs.filter(x=>x.biometric_type==='face').length,fingers=bs.filter(x=>x.biometric_type==='finger').length;return bs.length?<div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{faces>0&&<Badge tone="green">وجه {faces}</Badge>}{fingers>0&&<Badge>أصابع {fingers}</Badge>}</div>:<Badge tone="orange">غير مسجل</Badge>}},
   {key:'status',label:'الحالة',render:r=>{const req=deleteMap.get(String(r.id));if(req?.status==='pending')return <Badge tone="orange">جارٍ الحذف من الجهاز</Badge>;if(req?.status==='failed')return <div><Badge tone="red">فشل حذف الجهاز</Badge><div className="muted-small">نجح {req.success_count||0} · فشل {req.failed_count||0}</div></div>;return r.status==='active'?<Badge tone="green">نشط</Badge>:<Badge tone="red">موقوف</Badge>}},
-  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
+  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{(state.permissions?.manage_schedules||state.permissions?.reports)&&<Button onClick={()=>setScheduleHistoryEmployee(r)}><CalendarClock size={14}/> سجل الدوام</Button>}{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
  ];
 
  const calendarCols=[
@@ -224,8 +245,8 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   {form.id&&<div className="field" style={{gridColumn:'1/-1'}}>
    <span>سجل تغييرات الدوام</span>
    <div className="finance-actions">
-    {scheduleVersions.filter(v=>String(v.attendance_employee_id)===String(form.id)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,6).map(v=><Badge key={v.id} tone={v.effective_to?'blue':'green'}>{v.effective_from}{v.effective_to?' ← '+v.effective_to:' ← مستمر'}</Badge>)}
-    {!scheduleVersions.some(v=>String(v.attendance_employee_id)===String(form.id))&&<span className="muted-small">لا يوجد تاريخ سابق مسجل بعد.</span>}
+    {scheduleVersions.filter(v=>String(v.attendance_employee_id)===String(form.id)).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from))).slice(0,4).map(v=><Badge key={v.id} tone={v.effective_to?'blue':'green'}>{v.effective_from}{v.effective_to?' ← '+v.effective_to:' ← مستمر'}</Badge>)}
+    {scheduleVersions.some(v=>String(v.attendance_employee_id)===String(form.id))?<Button type="button" onClick={()=>setScheduleHistoryEmployee(employees.find(e=>String(e.id)===String(form.id))||form)}><CalendarClock size={14}/> فتح سجل الدوام الكامل</Button>:<span className="muted-small">لا يوجد تاريخ سابق مسجل بعد.</span>}
    </div>
   </div>}
 
@@ -238,6 +259,29 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   <div className="success-note" style={{gridColumn:'1/-1'}}><UploadCloud size={16}/> عند الحفظ، النظام يحفظ الجدول ويجهّز رفع بيانات الموظف تلقائيًا لكل جهاز مربوط به. إذا تغير الدوام، يُحفظ كنسخة جديدة من تاريخ السريان وتظل التقارير الأقدم على النسخة السابقة.</div>
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ والرفع...':'حفظ ورفع تلقائيًا'}</Button></div>
  </form></Modal>
+
+ <Modal open={!!scheduleHistoryEmployee} onClose={()=>setScheduleHistoryEmployee(null)} title={scheduleHistoryEmployee?'سجل تغييرات الدوام — '+scheduleHistoryEmployee.name:'سجل تغييرات الدوام'} wide>
+  <div style={{display:'grid',gap:12}}>
+   <div className="success-note"><CalendarClock size={16}/> هذا السجل يعتمد على نسخ الدوام الفعلية التي تستخدمها التقارير. يعرض تاريخ السريان والمنفذ والسبب والجدول قبل/بعد، ولا يعتمد على الجدول الحالي وحده.</div>
+   {scheduleTimeline.length?scheduleTimeline.map(v=><Card key={v.id}>
+    <div className="card-title">
+     <div><h3>{v.effective_from}{v.effective_to?' → '+v.effective_to:' → مستمر'}</h3><small>{versionSourceLabel(v.source_type)}</small></div>
+     <div className="finance-actions"><Badge tone={v.effective_to?'blue':'green'}>{v.effective_to?'نسخة تاريخية':'النسخة الحالية'}</Badge>{v.sameSchedule&&<Badge tone="orange">تثبيت/تصحيح تاريخ — بدون تغيير المواعيد</Badge>}</div>
+    </div>
+    <div className="detail-grid" style={{marginTop:10}}>
+     <div><span>أنشأها</span><strong>{v.created_actor_label}</strong><div className="muted-small">{fmtDateTime(v.created_at)}</div></div>
+     <div><span>آخر تصحيح بواسطة</span><strong>{v.updated_actor_label}</strong><div className="muted-small">{fmtDateTime(v.updated_at)}</div></div>
+     <div><span>سبب التغيير</span><strong>{v.reason||'—'}</strong></div>
+     <div><span>الراحة الأسبوعية بعد التعديل</span><strong>{offDaysLabel(v.weekly_off_days)}</strong></div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:10,marginTop:12}}>
+     <div className="error-box"><strong>قبل</strong><div style={{marginTop:6}}>{v.previous?periodSummary(v.previous.shift_periods):'— بداية السجل —'}</div>{v.previous&&<div className="muted-small">الراحة: {offDaysLabel(v.previous.weekly_off_days)}</div>}</div>
+     <div className="success-note"><strong>بعد</strong><div style={{marginTop:6}}>{periodSummary(v.shift_periods)}</div><div className="muted-small">الراحة: {offDaysLabel(v.weekly_off_days)}</div></div>
+    </div>
+   </Card>):<div className="empty">لا توجد نسخ دوام تاريخية مسجلة لهذا الموظف.</div>}
+   <div className="modal-actions"><Button type="button" onClick={()=>setScheduleHistoryEmployee(null)}>إغلاق</Button></div>
+  </div>
+ </Modal>
 
  <Modal open={calendarOpen} onClose={()=>setCalendarOpen(false)} title={'الجدول والاستثناءات'+(calendarEmployee?' — '+calendarEmployee.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
