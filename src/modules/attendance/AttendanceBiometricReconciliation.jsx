@@ -24,12 +24,13 @@ const typeLabel=t=>({
 export default function AttendanceBiometricReconciliation({state,onChanged,onError,onNotice,onOpenLinks,onOpenDevices}){
  const [filters,setFilters]=useState({q:'',branch:'',device:'',type:'',severity:''}),[busy,setBusy]=useState(''),[autoBusy,setAutoBusy]=useState(false),[lastAuto,setLastAuto]=useState(null);
  const [reviewOpen,setReviewOpen]=useState(false),[reviewIssue,setReviewIssue]=useState(null),[reviewBusy,setReviewBusy]=useState(false),[reviewForm,setReviewForm]=useState({resolution:'confirm_current',new_employee_id:'',snooze_days:7,reason:''}),[requestBusy,setRequestBusy]=useState('');
- const devices=state.devices||[],commands=state.commands||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[],selfRequests=(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending'),users=state.users||[];
+ const devices=state.devices||[],commands=state.commands||[],serverSyncStates=state.biometricSyncStates||[],branches=state.branches||[],employees=state.employees||[],deviceUsers=state.deviceUsers||[],links=(state.links||[]).filter(x=>x.active),states=(state.biometricDeviceStates||[]).filter(x=>x.status==='active'),inventory=(state.biometricInventory||[]).filter(x=>x.status==='active'),reviews=state.linkIdentityReviews||[],selfRequests=(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending'),users=state.users||[];
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const syncStateByDevice=useMemo(()=>{
+  if(serverSyncStates.length)return new Map(serverSyncStates.map(x=>[String(x.device_id),x]));
   const out=new Map(),now=Date.now(),graceMs=8*60*1000;
   for(const d of devices){
    const did=String(d.id),meta=d.metadata||{},smart=meta.last_smart_sync||{};
@@ -44,7 +45,7 @@ export default function AttendanceBiometricReconciliation({state,onChanged,onErr
    out.set(did,{syncing:pending||(awaitingInventory&&withinGrace),timed_out:awaitingInventory&&!pending&&!withinGrace,awaiting_inventory:awaitingInventory,pending,latest_request:latestRequest,received_at:Number.isFinite(received)?received:null});
   }
   return out;
- },[devices,commands]);
+ },[serverSyncStates,devices,commands]);
  const syncingDevices=useMemo(()=>devices.filter(d=>syncStateByDevice.get(String(d.id))?.syncing),[devices,syncStateByDevice]);
  useEffect(()=>{
   if(!syncingDevices.length||!onChanged)return;
