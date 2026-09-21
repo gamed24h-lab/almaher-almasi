@@ -1168,32 +1168,115 @@ async function deleteAttendanceEmployee(env,me,body){
  return {ok:true,pending:true,request_id:requestRow.id,devices:remaining.length,message:'تم إرسال طلب حذف الموظف إلى '+remaining.length+' جهاز/أجهزة. سيُحذف من النظام تلقائيًا بعد تأكيد الأجهزة.'};
 }
 
-async function importDeviceUsers(env,me,body){
- if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة للاستيراد.'),{status:403});
+function matchNameKey(value){
+ return txt(value).toLowerCase()
+  .normalize('NFKC')
+  .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,'')
+  .replace(/ـ/g,'')
+  .replace(/[أإآٱ]/g,'ا')
+  .replace(/ى/g,'ي')
+  .replace(/ؤ/g,'و')
+  .replace(/ئ/g,'ي')
+  .replace(/ة/g,'ه')
+  .replace(/[^\p{L}\p{N}]+/gu,' ')
+  .trim().replace(/\s+/g,' ');
+}
+function matchNameTokens(value){return [...new Set(matchNameKey(value).split(' ').filter(x=>x.length>1))]}
+function deviceEmployeeMatch(deviceUser,employee){
+ const userName=matchNameKey(deviceUser?.name),employeeName=matchNameKey(employee?.name),pin=txt(deviceUser?.device_pin),code=txt(employee?.employee_code);
+ let score=0;const reasons=[];
+ if(userName&&employeeName){
+  if(userName===employeeName){score+=78;reasons.push('الاسم مطابق تمامًا')}
+  else{
+   const a=matchNameTokens(userName),b=matchNameTokens(employeeName),setB=new Set(b),common=a.filter(x=>setB.has(x)).length,union=new Set([...a,...b]).size,ratio=union?common/union:0;
+   if(ratio>=0.8){score+=68;reasons.push('تشابه الاسم مرتفع')}
+   else if(ratio>=0.6){score+=56;reasons.push('تشابه الاسم جيد')}
+   else if((userName.length>=4&&employeeName.includes(userName))||(employeeName.length>=4&&userName.includes(employeeName))){score+=50;reasons.push('أحد الاسمين يحتوي الآخر')}
+  }
+ }
+ if(code&&pin&&code===pin){score+=30;reasons.push('كود الموظف يطابق PIN الجهاز')}
+ if(txt(employee?.status)==='active')score+=2;
+ score=Math.min(100,score);
+ return {score,reasons,confidence:score>=88?'high':score>=68?'medium':score>=48?'low':'none'};
+}
+async function deviceUserMatchPreview(env,me,body){
+ if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة للمطابقة.'),{status:403});
+ const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
+ if(!device.branch_id)throw Object.assign(new Error('اربط الجهاز بفرع أولًا قبل مطابقة الموظفين.'),{status:400});
+ const mode=device.data_environment||accountMode(me);
+ const [deviceUsers,links,employees,inventory,branchLinks]=await Promise.all([
+  rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&select=*&order=device_pin.asc').catch(()=>[]),
+  rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=*').catch(()=>[]),
+  rest(env,'attendance_employees?branch_id=eq.'+enc(device.branch_id)+'&data_environment=eq.'+enc(mode)+'&status=eq.active&select=id,name,employee_code,department,job_title,status,branch_id,data_environment&order=name.asc').catch(()=>[]),
+  rest(env,'attendance_biometric_inventory?device_id=eq.'+enc(device.id)+'&data_environment=eq.'+enc(mode)+'&status=eq.active&select=device_pin,biometric_type,biometric_key').catch(()=>[]),
+  rest(env,'attendance_employee_links?branch_id=eq.'+enc(device.branch_id)+'&active=eq.true&attendance_employee_id=not.is.null&select=device_id,device_pin,attendance_employee_id').catch(()=>[])
+ ]);
+ if(!deviceUsers?.length)throw Object.assign(new Error('لا توجد بيانات موظفين مسحوبة من الجهاز حتى الآن.'),{status:400});
+ const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),inventoryCount=new Map(),sameDeviceEmployee=new Map(),linkCount=new Map();
+ for(const inv of inventory||[]){const p=txt(inv.device_pin);inventoryCount.set(p,(inventoryCount.get(p)||0)+1)}
+ for(const l of links||[]){if(l.attendance_employee_id)sameDeviceEmployee.set(txt(l.attendance_employee_id),txt(l.device_pin))}
+ for(const l of branchLinks||[]){const id=txt(l.attendance_employee_id);if(id)linkCount.set(id,(linkCount.get(id)||0)+1)}
+ const pending=(deviceUsers||[]).filter(u=>!linkMap.get(txt(u.device_pin))?.attendance_employee_id);
+ const rows=pending.map(u=>{
+  const pin=txt(u.device_pin),suggestions=[];
+  for(const employee of employees||[]){
+   const existingPin=sameDeviceEmployee.get(txt(employee.id));if(existingPin&&existingPin!==pin)continue;
+   const match=deviceEmployeeMatch(u,employee);if(match.score<48)continue;
+   suggestions.push({id:employee.id,name:employee.name,employee_code:employee.employee_code||null,department:employee.department||null,job_title:employee.job_title||null,score:match.score,confidence:match.confidence,reasons:match.reasons,linked_devices:linkCount.get(txt(employee.id))||0});
+  }
+  suggestions.sort((a,b)=>b.score-a.score||String(a.name).localeCompare(String(b.name),'ar'));
+  const top=suggestions[0]||null,second=suggestions[1]||null,strong=!!top&&top.score>=88&&(!second||top.score-second.score>=10);
+  return {device_pin:pin,name:txt(u.name)||('PIN '+pin),card_number:txt(u.card_number)||null,privilege:u.privilege??0,biometric_count:inventoryCount.get(pin)||0,suggestions:suggestions.slice(0,5),recommended_action:strong?'link_existing':suggestions.length?'review':'create_new',recommended_employee_id:strong?top.id:null,strong_match:strong};
+ });
+ return {ok:true,device:{id:device.id,name:device.name,branch_id:device.branch_id,data_environment:mode},total_device_users:deviceUsers.length,already_linked:deviceUsers.length-pending.length,pending:rows.length,employees:(employees||[]).map(x=>({id:x.id,name:x.name,employee_code:x.employee_code||null,department:x.department||null,job_title:x.job_title||null})),rows};
+}
+async function applyDeviceUserMatches(env,me,body){
+ if(!canManageEmployees(me)||!canManageLinks(me))throw Object.assign(new Error('تحتاج صلاحية إدارة موظفي الحضور وربط البصمة لتنفيذ المطابقة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});
  if(!device.branch_id)throw Object.assign(new Error('اربط الجهاز بفرع أولًا قبل استيراد الموظفين.'),{status:400});
- const deviceUsers=await rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&select=*&order=device_pin.asc');
- if(!deviceUsers?.length)throw Object.assign(new Error('لا توجد بيانات موظفين مسحوبة من الجهاز حتى الآن.'),{status:400});
- const links=await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&select=*');
- const linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x]));
- const pending=deviceUsers.filter(u=>!linkMap.get(txt(u.device_pin))?.attendance_employee_id);
- if(!pending.length)return {ok:true,imported:0,skipped:deviceUsers.length,message:'كل موظفي الجهاز مستوردون بالفعل.'};
+ const decisions=Array.isArray(body.decisions)?body.decisions.slice(0,500):[];
+ if(!decisions.length)throw Object.assign(new Error('لا توجد قرارات مطابقة للتنفيذ.'),{status:400});
+ const [deviceUsers,links,employees]=await Promise.all([
+  rest(env,'attendance_device_users?device_id=eq.'+enc(device.id)+'&select=*').catch(()=>[]),
+  rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&active=eq.true&select=*').catch(()=>[]),
+  rest(env,'attendance_employees?branch_id=eq.'+enc(device.branch_id)+'&data_environment=eq.'+enc(device.data_environment||accountMode(me))+'&status=eq.active&select=*').catch(()=>[])
+ ]);
+ const userMap=new Map((deviceUsers||[]).map(x=>[txt(x.device_pin),x])),linkMap=new Map((links||[]).map(x=>[txt(x.device_pin),x])),employeeMap=new Map((employees||[]).map(x=>[txt(x.id),x])),seen=new Set(),results=[];
+ let linkedExisting=0,createdNew=0,skipped=0,failed=0,biometricsAttached=0;
  const actorValue=actorId(me)||actorName(me)||null,now=new Date().toISOString();
- const employees=await Promise.all(pending.map(async u=>{
-  const rows=await rest(env,'attendance_employees',{method:'POST',body:{name:txt(u.name)||('PIN '+txt(u.device_pin)),branch_id:device.branch_id,status:'active',data_environment:device.data_environment||'training',notes:'مستورد من جهاز '+device.name+' / PIN '+txt(u.device_pin),created_by:actorValue,updated_by:actorValue,created_at:now,updated_at:now},prefer:'return=representation'});
-  return {user:u,employee:rows?.[0]||null};
- }));
- const valid=employees.filter(x=>x.employee);
- const linkRows=valid.map(({user,employee})=>{const old=linkMap.get(txt(user.device_pin));return {device_id:device.id,device_pin:txt(user.device_pin),attendance_employee_id:employee.id,staff_user_id:old?.staff_user_id||null,branch_id:device.branch_id,display_name:employee.name,active:true,created_by:old?.created_by||actorValue,updated_by:actorValue,created_at:old?.created_at||now,updated_at:now}});
- if(linkRows.length)await rest(env,'attendance_employee_links?on_conflict=device_id%2Cdevice_pin',{method:'POST',body:linkRows,prefer:'resolution=merge-duplicates,return=minimal'});
- await Promise.all(valid.map(({user,employee})=>rest(env,'attendance_raw_logs?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(user.device_pin),{method:'PATCH',body:{attendance_employee_id:employee.id,employee_name:employee.name,branch_id:device.branch_id},prefer:'return=minimal'}).catch(()=>{})));
- let biometricsAttached=0,biometricConflicts=0;
- for(const {user,employee} of valid){
-  const promoted=await promoteInventoryToEmployee(env,device,user.device_pin,employee,actorValue).catch(()=>({attached:0,conflicts:0}));
-  biometricsAttached+=Number(promoted?.attached||0);biometricConflicts+=Number(promoted?.conflicts||0);
+ for(const decision of decisions){
+  const pin=txt(decision?.device_pin),action=txt(decision?.action);
+  if(!pin||seen.has(pin))continue;seen.add(pin);
+  const user=userMap.get(pin);
+  if(!user){results.push({device_pin:pin,status:'failed',message:'PIN غير موجود ضمن الموظفين المسحوبين من الجهاز.'});failed+=1;continue}
+  if(linkMap.get(pin)?.attendance_employee_id){results.push({device_pin:pin,status:'skipped',message:'PIN مربوط بالفعل.'});skipped+=1;continue}
+  if(action==='skip'||!action){results.push({device_pin:pin,status:'skipped',message:'تم ترك السجل بدون تغيير.'});skipped+=1;continue}
+  try{
+   let employee=null,created=false;
+   if(action==='link_existing'){
+    employee=employeeMap.get(txt(decision?.attendance_employee_id))||null;
+    if(!employee)throw new Error('الموظف المختار غير موجود أو خارج نفس الفرع.');
+   }else if(action==='create_new'){
+    let strong=null;
+    for(const candidate of employees||[]){const m=deviceEmployeeMatch(user,candidate);if(m.score>=88){strong={employee:candidate,match:m};break}}
+    if(strong&&!decision?.confirm_duplicate)throw new Error('يوجد تطابق قوي مع موظف موجود ('+strong.employee.name+'). اربطه بالموجود أو فعّل تأكيد إنشاء سجل جديد بعد المراجعة.');
+    const createdRows=await rest(env,'attendance_employees',{method:'POST',body:{name:txt(user.name)||('PIN '+pin),branch_id:device.branch_id,status:'active',data_environment:device.data_environment||'training',notes:'مستورد بعد Smart Employee Matching من جهاز '+device.name+' / PIN '+pin,created_by:actorValue,updated_by:actorValue,created_at:now,updated_at:now},prefer:'return=representation'});
+    employee=createdRows?.[0]||null;created=true;
+    if(!employee)throw new Error('تعذر إنشاء موظف الحضور الجديد.');
+   }else throw new Error('قرار المطابقة غير صحيح.');
+   const linked=await saveLink(env,me,{device_id:device.id,device_pin:pin,attendance_employee_id:employee.id,display_name:employee.name});
+   biometricsAttached+=Number(linked?.biometrics_attached||0);
+   if(created)createdNew+=1;else linkedExisting+=1;
+   results.push({device_pin:pin,status:'success',action,attendance_employee_id:employee.id,employee_name:employee.name,created,biometrics_attached:Number(linked?.biometrics_attached||0)});
+  }catch(e){failed+=1;results.push({device_pin:pin,status:'failed',action,message:e.message||'تعذر تنفيذ المطابقة.'})}
  }
- await audit(env,me,'attendance_device_users_import','attendance_device',device.id,device.branch_id,null,{imported:valid.length,total_device_users:deviceUsers.length,biometrics_attached:biometricsAttached,biometric_conflicts:biometricConflicts},'استيراد موظفي جهاز البصمة إلى موظفي الحضور');
- return {ok:true,imported:valid.length,skipped:deviceUsers.length-valid.length,biometrics_attached:biometricsAttached,biometric_conflicts:biometricConflicts};
+ const summary={linked_existing:linkedExisting,created_new:createdNew,skipped,failed,biometrics_attached:biometricsAttached,total:results.length};
+ await audit(env,me,'attendance_device_user_matching_apply','attendance_device',device.id,device.branch_id,null,{summary,results:results.map(x=>({device_pin:x.device_pin,status:x.status,action:x.action||null,attendance_employee_id:x.attendance_employee_id||null,created:!!x.created,biometrics_attached:x.biometrics_attached||0,message:x.message||null}))},'تطبيق Smart Employee Matching');
+ return {ok:true,...summary,results,message:failed?('تم تنفيذ المطابقة مع '+failed+' حالة تحتاج مراجعة.'):('تم تنفيذ المطابقة: '+linkedExisting+' ربط موجود، '+createdNew+' إنشاء جديد، '+skipped+' متخطى.')};
+}
+async function importDeviceUsers(env,me,body){
+ const preview=await deviceUserMatchPreview(env,me,body);
+ return {...preview,requires_review:true,message:preview.pending?'تم تجهيز معاينة Smart Employee Matching. راجع الربط قبل إنشاء أي موظف جديد.':'كل موظفي الجهاز مربوطون بالفعل.'};
 }
 
 
@@ -2079,6 +2162,8 @@ async function attendanceApi(request,env,ctx){
   if(action==='sync_device_data')return json(await queueDeviceSync(env,me,body));
   if(action==='diagnose_device')return json(await diagnoseDevice(env,me,body));
   if(action==='diagnose_all_devices')return json(await diagnoseAllDevices(env,me,body));
+  if(action==='preview_device_user_matches')return json(await deviceUserMatchPreview(env,me,body));
+  if(action==='apply_device_user_matches')return json(await applyDeviceUserMatches(env,me,body));
   if(action==='import_device_users')return json(await importDeviceUsers(env,me,body));
   if(action==='import_historical_attendance')return json(await importHistoricalAttendance(env,me,body));
   if(action==='save_device_shift_template')return json(await saveDeviceShiftTemplate(env,me,body));
