@@ -706,6 +706,12 @@ function clockDriftText(seconds){
  if(abs>=3600){const h=abs/3600;return dir+' '+(Math.abs(h-Math.round(h))<0.03?Math.round(h):h.toFixed(1))+' ساعة'}
  return dir+' '+Math.round(abs/60)+' دقيقة';
 }
+function canonicalClockDrift(seconds){
+ const raw=Math.round(Number(seconds)||0),hour=Math.round(raw/3600)*3600,minute=Math.round(raw/60)*60;
+ if(Math.abs(raw)>=1800&&Math.abs(raw-hour)<=120)return hour;
+ if(Math.abs(raw-minute)<=5)return minute;
+ return raw;
+}
 function zktecoOldEncodeUtc(value=new Date()){
  const d=value instanceof Date?value:new Date(value);if(Number.isNaN(d.getTime()))throw new Error('وقت السيرفر غير صالح.');
  const y=d.getUTCFullYear(),m=d.getUTCMonth()+1,day=d.getUTCDate(),h=d.getUTCHours(),min=d.getUTCMinutes(),sec=d.getUTCSeconds();
@@ -765,12 +771,12 @@ async function normalizeClockDriftedLogs(env,device,driftSeconds,lookbackDays=2)
 async function recordDeviceClockSample(env,device,serial,body,source='attlog_live'){
  if(!device?.id||await hasAttendanceHistoryTransfer(env,device))return null;
  const serverMs=Date.now(),samples=[];
- for(const raw of String(body||'').split(/\r?\n/)){const f=raw.trim().split('\t'),rawTime=txt(f[1]),iso=parseSaudiDeviceTime(rawTime);if(!iso)continue;const ms=new Date(iso).getTime();if(!Number.isFinite(ms))continue;samples.push({rawTime,ms,drift:Math.round((ms-serverMs)/1000)})}
+ for(const raw of String(body||'').split(/\r?\n/)){const f=raw.trim().split('\t'),rawTime=txt(f[1]),iso=parseSaudiDeviceTime(rawTime);if(!iso)continue;const ms=new Date(iso).getTime();if(!Number.isFinite(ms))continue;const measuredDrift=Math.round((ms-serverMs)/1000);samples.push({rawTime,ms,measuredDrift,drift:canonicalClockDrift(measuredDrift)})}
  if(!samples.length)return null;
  samples.sort((a,b)=>b.ms-a.ms);const sample=samples[0],abs=Math.abs(sample.drift);
  if(abs>48*3600)return null;
  const now=new Date(serverMs).toISOString(),prev=device?.metadata?.clock_drift&&typeof device.metadata.clock_drift==='object'?device.metadata.clock_drift:{},prevAge=prev.checked_at?serverMs-new Date(prev.checked_at).getTime():Infinity,consistent=Number.isFinite(Number(prev.drift_seconds))&&prevAge<=24*3600*1000&&Math.abs(Number(prev.drift_seconds)-sample.drift)<=90,count=consistent?Math.max(1,Number(prev.consecutive_consistent)||1)+1:1,confirmed=abs<=120||count>=2,status=abs<=120?'ok':abs<=15*60?'warning':'critical';
- const clock={drift_seconds:sample.drift,drift_minutes:Math.round(sample.drift/60*10)/10,status,confirmed,consecutive_consistent:count,checked_at:now,source,device_time_raw:sample.rawTime,server_time:now,timezone:device.timezone||'Asia/Riyadh'};
+ const clock={drift_seconds:sample.drift,measured_drift_seconds:sample.measuredDrift,drift_minutes:Math.round(sample.drift/60*10)/10,status,confirmed,consecutive_consistent:count,checked_at:now,source,device_time_raw:sample.rawTime,server_time:now,timezone:device.timezone||'Asia/Riyadh'};
  const meta={...(device.metadata||{}),clock_drift:clock},lastSync=meta.last_clock_sync&&typeof meta.last_clock_sync==='object'?meta.last_clock_sync:null;
  if(lastSync?.awaiting_verification){
   const acceptedMs=new Date(lastSync.accepted_at||lastSync.requested_at||0).getTime();
@@ -784,7 +790,7 @@ async function recordDeviceClockSample(env,device,serial,body,source='attlog_liv
   }
  }
  await Promise.all([
-  rest(env,'attendance_device_clock_checks',{method:'POST',body:{device_id:device.id,branch_id:device.branch_id||null,serial_number:serial||device.serial_number||null,source,device_time_raw:sample.rawTime,server_time:now,drift_seconds:sample.drift,status,confirmed,sample_count:count,metadata:{timezone:clock.timezone,batch_lines:samples.length}},prefer:'return=minimal'}).catch(()=>{}),
+  rest(env,'attendance_device_clock_checks',{method:'POST',body:{device_id:device.id,branch_id:device.branch_id||null,serial_number:serial||device.serial_number||null,source,device_time_raw:sample.rawTime,server_time:now,drift_seconds:sample.drift,status,confirmed,sample_count:count,metadata:{timezone:clock.timezone,batch_lines:samples.length,measured_drift_seconds:sample.measuredDrift,canonical_drift_seconds:sample.drift}},prefer:'return=minimal'}).catch(()=>{}),
   rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:now},prefer:'return=minimal'}).catch(()=>{})
  ]);
  const wasBad=prev.confirmed===true&&Math.abs(Number(prev.drift_seconds)||0)>120;
