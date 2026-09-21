@@ -21,13 +21,14 @@ const dateCode=d=>String(d||'').replaceAll('-','').slice(2);
 const friendlyError=e=>{const m=String(e?.message||e||'');if(/Return date cannot be before departure date/i.test(m))return 'تاريخ العودة لا يمكن أن يكون قبل تاريخ الذهاب.';if(/trips_status_check/i.test(m))return 'حالة الرحلة غير متوافقة مع إعدادات النظام.';return m||'تعذر تنفيذ العملية.'};
 function branchCode(name=''){const n=String(name);if(n.includes('تبوك'))return'TAB';if(n.includes('تيماء'))return'TYM';if(n.includes('عرعر'))return'ARR';if(n.includes('سكاكا'))return'SAK';if(n.includes('دومة'))return'DOM';if(n.includes('طبرجل'))return'TBJ';if(n.includes('القريات'))return'QUR';if(n.includes('طريف'))return'TUR';if(n.includes('مكة'))return'MAK';if(n.includes('المدينة'))return'MED';if(n.includes('جدة'))return'JED';if(n.includes('الرياض'))return'RUH';return'BRN'}
 
-export default function Trips({go}){
+export default function Trips({go,query='',branchParam='',statusParam='',dateParam=''}){
  const {user}=useAuth(),{data,refresh}=useAppData();
  const [open,setOpen]=useState(false),[err,setErr]=useState(''),[showPast,setShowPast]=useState(false),[editing,setEditing]=useState(null);
  const [mainBranch,setMainBranch]=useState(''),[shared,setShared]=useState([]),[stops,setStops]=useState({}),[saving,setSaving]=useState(false);
  const [scheduleMode,setScheduleMode]=useState('single'),[rangeEnd,setRangeEnd]=useState(''),[weekdays,setWeekdays]=useState([]),[notice,setNotice]=useState(null);
  const [destinationCatalog,setDestinationCatalog]=useState({destinations:[],routes:[]}),[destinationError,setDestinationError]=useState('');
  const [listFilter,setListFilter]=useState({q:'',branch:'',status:'',from:'',to:''});
+ useEffect(()=>{if(query||branchParam||statusParam||dateParam)setListFilter(x=>({...x,q:query||dateParam||x.q,branch:branchParam||x.branch,status:statusParam||x.status}))},[query,branchParam,statusParam,dateParam]);
  const [listRules,setListRules]=useState([]),[listRuleMode,setListRuleMode]=useState('all');
  const today=new Date().toISOString().slice(0,10);
  useEffect(()=>{if(!notice)return;const t=setTimeout(()=>setNotice(null),4500);return()=>clearTimeout(t)},[notice]);
