@@ -2861,6 +2861,7 @@ async function captureMobileAttendance(env,me,body,request){
  if(!mobileDevice){
   const initialStatus=policy.mobile_require_trusted_device!==false?'pending':'approved';
   mobileDevice=(await rest(env,'attendance_mobile_devices',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,device_key_hash:deviceHash,device_label:deviceLabel,status:initialStatus,data_environment:mode,first_seen_at:now,last_seen_at:now,approved_at:initialStatus==='approved'?now:null,approved_by:initialStatus==='approved'?'system:auto':null,updated_at:now},prefer:'return=representation'}))?.[0]||null;
+  if(initialStatus==='pending'&&mobileDevice?.id)await upsertAttendanceWorkflowNotification(env,{notification_key:'mobile_device_approval:'+mobileDevice.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'جهاز حضور جوال يحتاج اعتماد — '+employee.name,message:deviceLabel,metadata:{type:'mobile_device_approval',mobile_device_id:mobileDevice.id,attendance_employee_id:employee.id},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
   await audit(env,me,'attendance_mobile_device_registered','attendance_mobile_device',mobileDevice?.id||deviceHash,employee.branch_id,null,{employee_id:employee.id,status:initialStatus,device_label:deviceLabel},'تسجيل جهاز جوال جديد للحضور').catch(()=>{});
  }else{
   await rest(env,'attendance_mobile_devices?id=eq.'+enc(mobileDevice.id),{method:'PATCH',body:{last_seen_at:now,device_label:deviceLabel,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
@@ -2911,6 +2912,7 @@ async function reviewMobileAttendanceDevice(env,me,body){
  if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق فرعك.'),{status:403});
  const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null,payload=decision==='approve'?{status:'approved',approved_at:now,approved_by:who,revoked_at:null,revoked_by:null,review_note:txt(body.reason)||'اعتماد جهاز حضور الجوال',updated_at:now}:{status:'revoked',revoked_at:now,revoked_by:who,review_note:txt(body.reason)||'إلغاء اعتماد جهاز حضور الجوال',updated_at:now};
  const after=(await rest(env,'attendance_mobile_devices?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
+ await resolveAttendanceWorkflowNotification(env,'mobile_device_approval:'+id,decision==='approve'?'تم اعتماد جهاز الجوال':'تم إلغاء اعتماد جهاز الجوال').catch(()=>{});
  await audit(env,me,decision==='approve'?'attendance_mobile_device_approved':'attendance_mobile_device_revoked','attendance_mobile_device',id,before.branch_id,before,after,txt(body.reason)||payload.review_note).catch(()=>{});
  return {ok:true,device:after,message:decision==='approve'?'تم اعتماد جهاز الجوال.':'تم إلغاء اعتماد جهاز الجوال.'};
 }
