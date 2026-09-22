@@ -3,12 +3,14 @@ import {ArrowRight,CheckCircle2,Clock3,Fingerprint,Link2,LogIn,LogOut,MapPin,Ref
 import {useAuth} from '../../core/AuthContext.jsx';
 import {api} from '../../lib/api.js';
 import ModuleShell from '../../components/ModuleShell.jsx';
-import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Table,Textarea} from '../../components/UI.jsx';
+import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 
 function fmt(v){if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}}
 const statusTone=s=>s==='approved'||s==='auto_resolved'?'green':s==='rejected'?'red':s==='pending'?'orange':'gray';
 const statusLabel=s=>({pending:'قيد المراجعة',auto_resolved:'تم تلقائيًا',approved:'معتمد',rejected:'مرفوض',cancelled:'ملغي'}[s]||s||'—');
 const reqType=t=>({account_binding:'ربط الحساب بملف الحضور',claim_unlinked_pin:'تصحيح ربط PIN',wrong_link:'تصحيح ربط خاطئ',not_mine:'هذه البصمة ليست لي',other:'تأكيد الربط'}[t]||t||'—');
+const attendanceCorrectionType=t=>({missing_check_in:'إضافة حضور مفقود',missing_check_out:'إضافة انصراف مفقود',wrong_time:'تصحيح وقت حركة',remove_event:'إلغاء حركة خاطئة'}[t]||t||'—');
+function localToday(){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}catch{return new Date().toISOString().slice(0,10)}}
 function mobileDeviceKey(){
  try{
   const k='almaher-attendance-mobile-device-key';let v=localStorage.getItem(k);
@@ -28,6 +30,7 @@ export default function AttendanceSelfService({go}){
  const [data,setData]=useState(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[mobileBusy,setMobileBusy]=useState(false);
  const [employeeCode,setEmployeeCode]=useState('');
  const [requestOpen,setRequestOpen]=useState(false),[requestTarget,setRequestTarget]=useState(null),[requestReason,setRequestReason]=useState('');
+ const [attendanceCorrection,setAttendanceCorrection]=useState({request_type:'missing_check_in',work_date:localToday(),proposed_time:'08:00',source_key:'',reason:''}),[attendanceCorrectionBusy,setAttendanceCorrectionBusy]=useState(false);
 
  async function load(){
   setLoading(true);setError('');
@@ -37,6 +40,8 @@ export default function AttendanceSelfService({go}){
 
  const pendingRequests=useMemo(()=>((data?.requests||[]).filter(x=>x.status==='pending')),[data]);
  const requestRows=useMemo(()=>(data?.requests||[]).map(x=>({...x,id:x.id||x.requested_at})),[data]);
+ const attendanceCorrectionRows=useMemo(()=>(data?.attendance_correction_requests||[]),[data]);
+ const recentAttendanceOptions=useMemo(()=>(data?.recent_attendance_events||[]).map(x=>({value:x.source_kind+'|'+x.source_event_id,label:(x.event_type==='check_in'?'حضور':'انصراف')+' · '+fmt(x.occurred_at)+' · '+(x.source_kind==='mobile'?'جوال':x.source_kind==='manual'?'تصحيح معتمد':'جهاز بصمة'),row:x})),[data]);
 
  async function captureMobile(eventType){
   setMobileBusy(true);setError('');setNotice('');
@@ -83,12 +88,43 @@ export default function AttendanceSelfService({go}){
    setRequestOpen(false);setNotice(out?.message||'تم إرسال طلب التصحيح.');await load();
   }catch(err){setError(err.message)}finally{setBusy('')}
  }
+ async function submitAttendanceCorrection(e){
+  e.preventDefault();setAttendanceCorrectionBusy(true);setError('');setNotice('');
+  try{
+   const type=attendanceCorrection.request_type,needsSource=type==='wrong_time'||type==='remove_event',selected=recentAttendanceOptions.find(x=>x.value===attendanceCorrection.source_key)?.row||null;
+   if(needsSource&&!selected)throw new Error('اختر الحركة التي تريد تصحيحها.');
+   const out=await api.attendanceSelfServiceWrite({
+    action:'request_attendance_correction',
+    request_type:type,
+    work_date:needsSource?(selected?.work_date||attendanceCorrection.work_date):attendanceCorrection.work_date,
+    proposed_time:type==='remove_event'?null:attendanceCorrection.proposed_time,
+    source_kind:selected?.source_kind||null,
+    source_event_id:selected?.source_event_id||null,
+    reason:attendanceCorrection.reason
+   });
+   setAttendanceCorrection({request_type:'missing_check_in',work_date:localToday(),proposed_time:'08:00',source_key:'',reason:''});
+   setNotice(out?.message||'تم إرسال طلب تصحيح الحركة.');await load();
+  }catch(err){setError(err.message)}finally{setAttendanceCorrectionBusy(false)}
+ }
+ async function cancelAttendanceCorrection(row){
+  if(!confirm('إلغاء طلب التصحيح قبل مراجعته؟'))return;
+  setAttendanceCorrectionBusy(true);setError('');
+  try{const out=await api.attendanceSelfServiceWrite({action:'cancel_attendance_correction',id:row.id});setNotice(out?.message||'تم إلغاء الطلب.');await load()}
+  catch(err){setError(err.message)}finally{setAttendanceCorrectionBusy(false)}
+ }
 
  const requestCols=[
   {key:'type',label:'الطلب',render:r=><div><strong>{reqType(r.request_type)}</strong><div className="muted-small">{r.requested_reason||'—'}</div></div>},
   {key:'pin',label:'الجهاز / PIN',render:r=><div>{r.device_id?<span>PIN <strong dir="ltr">{r.device_pin||'—'}</strong></span>:'—'}</div>},
   {key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{statusLabel(r.status)}</Badge>},
   {key:'date',label:'التاريخ',render:r=><div>{fmt(r.requested_at)}{r.resolution_note&&<div className="muted-small">{r.resolution_note}</div>}</div>}
+ ];
+ const attendanceCorrectionCols=[
+  {key:'type',label:'الطلب',render:r=><div><strong>{attendanceCorrectionType(r.request_type)}</strong><div className="muted-small">{r.work_date} · {r.requested_reason}</div></div>},
+  {key:'time',label:'الوقت المقترح',render:r=>r.proposed_at?fmt(r.proposed_at):'—'},
+  {key:'status',label:'الحالة',render:r=><Badge tone={statusTone(r.status)}>{statusLabel(r.status)}</Badge>},
+  {key:'review',label:'المراجعة',render:r=><div>{r.reviewed_at?fmt(r.reviewed_at):'—'}{r.resolution_note&&<div className="muted-small">{r.resolution_note}</div>}</div>},
+  {key:'action',label:'',render:r=>r.status==='pending'?<Button onClick={()=>cancelAttendanceCorrection(r)} disabled={attendanceCorrectionBusy}>إلغاء الطلب</Button>:'—'}
  ];
 
  if(loading&&!data)return <Loading text="جاري تحميل حالة البصمة..."/>;
@@ -139,6 +175,24 @@ export default function AttendanceSelfService({go}){
      {!!(data.mobile_attendance.today_events||[]).length&&<div><strong>حركات الجوال اليوم</strong><div style={{display:'grid',gap:6,marginTop:6}}>{data.mobile_attendance.today_events.map(ev=><div key={ev.id} className="muted-small"><strong>{ev.event_type==='check_in'?'حضور':'انصراف'}</strong> · {fmt(ev.occurred_at)}{ev.distance_from_site_m!=null?' · '+Math.round(ev.distance_from_site_m)+'م من الموقع':''}</div>)}</div></div>}
     </div>:<div className="training-banner">سياسة هذا الموظف حاليًا لا تسمح بالحضور من الجوال. استخدم جهاز البصمة أو راجع سياسة الفرع.</div>}
    </Card>}
+
+   <Card>
+    <div className="card-title"><div><h3><Clock3 size={19}/> طلب تصحيح حركة حضور</h3><small>الحركة الأصلية لا تُحذف أو تتعدل. بعد اعتماد الموارد البشرية يُضاف تصحيح مستقل وتستخدمه التقارير.</small></div><Badge tone={(attendanceCorrectionRows||[]).some(x=>x.status==='pending')?'orange':'blue'}>{(attendanceCorrectionRows||[]).filter(x=>x.status==='pending').length} قيد المراجعة</Badge></div>
+    <form onSubmit={submitAttendanceCorrection} className="form-grid">
+     <Field label="نوع التصحيح"><Select value={attendanceCorrection.request_type} onChange={e=>setAttendanceCorrection(x=>({...x,request_type:e.target.value,source_key:''}))}>
+      <option value="missing_check_in">إضافة حضور مفقود</option>
+      <option value="missing_check_out">إضافة انصراف مفقود</option>
+      <option value="wrong_time">تصحيح وقت حركة موجودة</option>
+      <option value="remove_event">إلغاء حركة سجلت بالخطأ</option>
+     </Select></Field>
+     {(attendanceCorrection.request_type==='wrong_time'||attendanceCorrection.request_type==='remove_event')?<Field label="الحركة المطلوب تصحيحها"><Select value={attendanceCorrection.source_key} onChange={e=>{const row=recentAttendanceOptions.find(x=>x.value===e.target.value)?.row;setAttendanceCorrection(x=>({...x,source_key:e.target.value,work_date:row?.work_date||x.work_date,proposed_time:row?.occurred_at?new Date(row.occurred_at).toLocaleTimeString('en-GB',{timeZone:'Asia/Riyadh',hour:'2-digit',minute:'2-digit'}):x.proposed_time}))}} required><option value="">اختر من آخر الحركات</option>{recentAttendanceOptions.map(x=><option key={x.value} value={x.value}>{x.label}</option>)}</Select></Field>:<Field label="تاريخ الحركة"><Input type="date" value={attendanceCorrection.work_date} max={localToday()} onChange={e=>setAttendanceCorrection(x=>({...x,work_date:e.target.value}))} required/></Field>}
+     {attendanceCorrection.request_type!=='remove_event'&&<Field label="الوقت الصحيح / المقترح"><Input type="time" value={attendanceCorrection.proposed_time} onChange={e=>setAttendanceCorrection(x=>({...x,proposed_time:e.target.value}))} required/></Field>}
+     <Field label="سبب التصحيح"><Textarea value={attendanceCorrection.reason} onChange={e=>setAttendanceCorrection(x=>({...x,reason:e.target.value}))} placeholder="مثال: نسيت تسجيل الانصراف / سجل الجهاز وقتًا غير صحيح" required/></Field>
+     <div className="success-note" style={{gridColumn:'1/-1'}}><ShieldCheck size={16}/> إرسال الطلب لا يغيّر التقرير فورًا. التعديل يظهر فقط بعد الاعتماد، والشهر المقفل يظل محميًا من أي تصحيح.</div>
+     <div className="modal-actions"><Button variant="primary" type="submit" disabled={attendanceCorrectionBusy}>{attendanceCorrectionBusy?' جاري الإرسال...':' إرسال طلب التصحيح'}</Button></div>
+    </form>
+    {!!attendanceCorrectionRows.length&&<div style={{marginTop:14}}><Table preferenceKey="attendance-self-time-corrections" defaultPageSize={10} rows={attendanceCorrectionRows} columns={attendanceCorrectionCols}/></div>}
+   </Card>
 
    {!!(data.safe_candidates||[]).length&&<Card>
     <div className="card-title"><div><h3><ShieldCheck size={19}/> تصحيح تلقائي آمن متاح</h3><small>هذه الحالات PIN غير مملوك لموظف آخر، في نفس فرعك، ومطابقة الاسم واضحة على السيرفر.</small></div><Badge tone="green">{data.safe_candidates.length}</Badge></div>
