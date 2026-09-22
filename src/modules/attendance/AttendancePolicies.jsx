@@ -42,8 +42,8 @@ export default function AttendancePolicies({state,onChanged,onError,onNotice}){
  async function save(e){
   e.preventDefault();setBusy(true);onError?.('');
   try{
-   await api.attendanceWrite({action:'save_attendance_policy',...form,branch_id:branchId,data_environment:state.scope?.environment||'training'});
-   onNotice?.('تم حفظ سياسة الحضور والمخالفات لهذا الفرع.');
+   const out=await api.attendanceWrite({action:'save_attendance_policy',...form,branch_id:branchId,data_environment:state.scope?.environment||'training'});
+   onNotice?.(out?.scheduled_for_future?'تم حفظ السياسة الجديدة للمستقبل. ستظل السياسة الحالية مطبقة حتى '+String(out.activates_on||form.policy_effective_from)+' ثم تتفعّل الجديدة تلقائيًا.':'تم حفظ سياسة الحضور والمخالفات وأصبحت سارية حسب تاريخها.');
    await onChanged?.();
   }catch(err){onError?.(err.message)}finally{setBusy(false)}
  }
