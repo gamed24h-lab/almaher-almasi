@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BellRing,CalendarClock,Fingerprint,Package,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity,Siren,Smartphone} from 'lucide-react';
+import {BellRing,CalendarClock,Fingerprint,Package,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity,Siren,Smartphone,ClipboardCheck} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
@@ -18,6 +18,7 @@ import AttendancePreventiveMaintenance from './AttendancePreventiveMaintenance.j
 import AttendanceDeviceLifecycle from './AttendanceDeviceLifecycle.jsx';
 import AttendanceBiometricReconciliation from './AttendanceBiometricReconciliation.jsx';
 import AttendanceMobileControl from './AttendanceMobileControl.jsx';
+import AttendanceActionCenter,{attendanceActionItems} from './AttendanceActionCenter.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
 const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
@@ -53,6 +54,7 @@ export default function Attendance({initialTab=''}){
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
  const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length,pendingMobileDevices=mobileDevices.filter(x=>x.status==='pending').length,mobileProblemCount=mobileAttempts.length,mobileBranchCount=branches.filter(b=>['mobile','hybrid'].includes(policies.find(p=>String(p.branch_id)===String(b.id))?.attendance_mode)).length;
+ const actionItems=useMemo(()=>attendanceActionItems(state),[state]),actionCount=actionItems.length;
 
  const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
@@ -106,6 +108,7 @@ export default function Attendance({initialTab=''}){
 
  const tabs=useMemo(()=>[
   {id:'overview',label:'نظرة عامة',icon:LayoutDashboard},
+  {id:'action-center',label:'مركز المتابعة',icon:ClipboardCheck,badge:actionCount||null},
   {id:'employees',label:'الموظفون والجداول',icon:Users,badge:employees.length},
   {id:'devices',label:'الأجهزة والمزامنة',icon:ServerCog,badge:devices.length},
   ...(state.permissions?.manage_biometrics?[{id:'biometric-reconcile',label:'مطابقة البصمات',icon:Fingerprint}]:[]),
@@ -117,7 +120,7 @@ export default function Attendance({initialTab=''}){
   {id:'links',label:'الربط والحركات',icon:Activity,badge:unlinked||null},
   ...(state.permissions?.reports?[{id:'reports',label:'التقارير والمخالفات',icon:BarChart3}]:[]),
   ...(state.permissions?.manage_policies?[{id:'policies',label:'السياسات',icon:SlidersHorizontal}]:[])
- ],[employees.length,devices.length,unlinked,pendingMobileDevices,state.permissions?.manage_biometrics,state.permissions?.manage_policies,state.permissions?.manage_employees,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
+ ],[employees.length,devices.length,unlinked,actionCount,pendingMobileDevices,state.permissions?.manage_biometrics,state.permissions?.manage_policies,state.permissions?.manage_employees,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,initialTab||'overview');
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,tabs.length]);
 
@@ -175,7 +178,8 @@ export default function Attendance({initialTab=''}){
    <Card><div className="card-title"><div><h3>آخر الحركات</h3><small>آخر 10 بصمات مستلمة للمتابعة السريعة</small></div><Badge>{Math.min(10,logs.length)}</Badge></div><Table preferenceKey="attendance-overview-logs" defaultPageSize={10} rows={logs.slice(0,10)} columns={logCols}/></Card>
   </>}
 
-  {activeTab==='employees'&&<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
+    {activeTab==='action-center'&&<AttendanceActionCenter state={state} onOpenMobile={()=>setActiveTab('mobile')} onOpenEmployees={()=>setActiveTab('employees')} onOpenPolicies={()=>setActiveTab('policies')} onOpenLinks={()=>setActiveTab('links')}/>}
+{activeTab==='employees'&&<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
   {activeTab==='devices'&&<><AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenLinks={()=>setActiveTab('links')}/><Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><><SmartListFilters storageKey="attendance-devices-filters" search={listFilters.devices.q} onSearchChange={v=>setListFilter('devices','q',v)} searchPlaceholder="ابحث باسم الجهاز أو السيريال أو الموديل..." totalCount={devices.length} resultCount={filteredDevices.length} onReset={()=>resetListFilter('devices')} filters={[
  {key:'branch',label:'الفرع',value:listFilters.devices.branch,onChange:v=>setListFilter('devices','branch',v),options:branchOptions},
  {key:'connectivity',label:'الاتصال',value:listFilters.devices.connectivity,onChange:v=>setListFilter('devices','connectivity',v),options:[{value:'online',label:'متصل / حديث'},{value:'offline',label:'غير متصل'}]},
