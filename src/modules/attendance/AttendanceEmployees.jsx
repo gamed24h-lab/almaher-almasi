@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {CalendarClock,CalendarDays,Clock3,Plus,RefreshCw,Trash2,UploadCloud,Users} from 'lucide-react';
+import {CalendarClock,CalendarDays,Clock3,Plus,RefreshCw,ShieldCheck,Trash2,UploadCloud,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
@@ -25,6 +25,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],scheduleVersions=state.scheduleVersions||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[],mobileDevices=state.mobileDevices||[],policies=state.policies||[];
  const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState(''),[mobileReviewBusy,setMobileReviewBusy]=useState('');
  const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false),[scheduleHistoryEmployee,setScheduleHistoryEmployee]=useState(null);
+ const [policyPreview,setPolicyPreview]=useState(null),[policyPreviewDate,setPolicyPreviewDate]=useState(today()),[policyPreviewBusy,setPolicyPreviewBusy]=useState(false);
  const deleteTimer=useRef(null);
  const [listFilter,setListFilter]=useState({q:'',branch:'',department:'',status:'',device:''});
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
@@ -167,6 +168,13 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   }catch(err){onError?.(err.message)}finally{setDeleteBusy('')}
  }
 
+ async function openPolicyPreview(r,date=today()){
+  setPolicyPreviewBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'preview_attendance_policy',attendance_employee_id:r.id,work_date:date});
+   setPolicyPreview(out);setPolicyPreviewDate(date);
+  }catch(err){onError?.(err.message)}finally{setPolicyPreviewBusy(false)}
+ }
  function openCalendar(r){setCalendarEmployee(r);setRuleForm(blankRule());setCalendarOpen(true)}
  function editRule(r){setRuleForm({...blankRule(),...r,start_time:r.start_time?String(r.start_time).slice(0,5):'08:00',end_time:r.end_time?String(r.end_time).slice(0,5):'17:00',grace_minutes:Number(r.grace_minutes??10),reason:''})}
  async function saveRule(e){
@@ -193,7 +201,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   {key:'biometric',label:'الهوية البيومترية',render:r=>{const bs=biometricMap.get(String(r.id))||[],faces=bs.filter(x=>x.biometric_type==='face').length,fingers=bs.filter(x=>x.biometric_type==='finger').length,mode=branchPolicyMap.get(String(r.branch_id))?.attendance_mode||'biometric';return bs.length?<div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{faces>0&&<Badge tone="green">وجه {faces}</Badge>}{fingers>0&&<Badge>أصابع {fingers}</Badge>}</div>:mode==='mobile'?<Badge tone="green">غير مطلوب</Badge>:mode==='hybrid'?<Badge>اختياري</Badge>:<Badge tone="orange">غير مسجل</Badge>}},
   {key:'mobile',label:'جوال الحضور',render:r=>{const ms=mobileDeviceMap.get(String(r.id))||[];if(!ms.length)return (branchPolicyMap.get(String(r.branch_id))?.attendance_mode==='mobile'||branchPolicyMap.get(String(r.branch_id))?.attendance_mode==='hybrid')?<span className="muted-small">لم يسجل جهازًا بعد</span>:'—';return <div style={{display:'grid',gap:6}}>{ms.slice(0,3).map(m=><div key={m.id}><Badge tone={m.status==='approved'?'green':m.status==='pending'?'orange':'red'}>{m.status==='approved'?'معتمد':m.status==='pending'?'بانتظار الاعتماد':'موقوف'}</Badge><div className="muted-small">{m.device_label||'جوال'}{m.last_seen_at?' · '+fmtDateTime(m.last_seen_at):''}</div>{state.permissions?.manage_employees&&<div className="finance-actions" style={{marginTop:3}}>{m.status!=='approved'&&<Button onClick={()=>reviewMobileDevice(m,'approve')} disabled={mobileReviewBusy===m.id+':approve'}>اعتماد</Button>}{m.status!=='revoked'&&<Button onClick={()=>reviewMobileDevice(m,'revoke')} disabled={mobileReviewBusy===m.id+':revoke'}>إلغاء</Button>}</div>}</div>)}</div>}},
   {key:'status',label:'الحالة',render:r=>{const req=deleteMap.get(String(r.id));if(req?.status==='pending')return <Badge tone="orange">جارٍ الحذف من الجهاز</Badge>;if(req?.status==='failed')return <div><Badge tone="red">فشل حذف الجهاز</Badge><div className="muted-small">نجح {req.success_count||0} · فشل {req.failed_count||0}</div></div>;return r.status==='active'?<Badge tone="green">نشط</Badge>:<Badge tone="red">موقوف</Badge>}},
-  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{(state.permissions?.manage_schedules||state.permissions?.reports)&&<Button onClick={()=>setScheduleHistoryEmployee(r)}><CalendarClock size={14}/> سجل الدوام</Button>}{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
+  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{(state.permissions?.manage_schedules||state.permissions?.reports)&&<Button onClick={()=>setScheduleHistoryEmployee(r)}><CalendarClock size={14}/> سجل الدوام</Button>}<Button onClick={()=>openPolicyPreview(r)} disabled={policyPreviewBusy}><ShieldCheck size={14}/> السياسة الفعلية</Button>{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
  ];
 
  const calendarCols=[
@@ -270,6 +278,32 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   <div className="success-note" style={{gridColumn:'1/-1'}}><UploadCloud size={16}/> عند الحفظ، النظام يحفظ الجدول ويجهّز رفع بيانات الموظف تلقائيًا لكل جهاز مربوط به. إذا تغير الدوام، يُحفظ كنسخة جديدة من تاريخ السريان وتظل التقارير الأقدم على النسخة السابقة.</div>
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ والرفع...':'حفظ ورفع تلقائيًا'}</Button></div>
  </form></Modal>
+
+ <Modal open={!!policyPreview} onClose={()=>setPolicyPreview(null)} title={policyPreview?'السياسة الفعلية — '+policyPreview.employee?.name:'السياسة الفعلية'} wide>
+  {policyPreview&&<div className="form-grid">
+   <Field label="تاريخ المعاينة"><div className="finance-actions"><Input type="date" value={policyPreviewDate} onChange={e=>setPolicyPreviewDate(e.target.value)}/><Button onClick={()=>openPolicyPreview({id:policyPreview.employee.id},policyPreviewDate)} disabled={policyPreviewBusy}>{policyPreviewBusy?'جاري...':'تحديث المعاينة'}</Button></div></Field>
+   <Field label="طريقة الحضور النهائية"><div><Badge tone={policyPreview.attendance_mode==='mobile'?'green':policyPreview.attendance_mode==='hybrid'?'orange':'blue'}>{policyPreview.attendance_mode==='mobile'?'جوال فقط':policyPreview.attendance_mode==='hybrid'?'بصمة أو جوال':'جهاز البصمة فقط'}</Badge><div className="muted-small">بعد تطبيق سياسة الفرع وكل الاستثناءات السارية في هذا التاريخ</div></div></Field>
+   <Field label="سريان سياسة الفرع"><div>{policyPreview.policy?.policy_effective_from||'—'}{policyPreview.policy?.policy_effective_to?' → '+policyPreview.policy.policy_effective_to:' → مستمر'}</div></Field>
+   <Field label="سياسة الموقع"><div>{policyPreview.policy?.mobile_geofence_enabled===false?'بدون نطاق جغرافي':policyPreview.exceptions?.location_exempt?'معفى من الموقع':('داخل '+String(policyPreview.policy?.mobile_geofence_radius_m||100)+'م · دقة GPS ≤ '+String(policyPreview.policy?.mobile_max_accuracy_m||120)+'م')}</div></Field>
+   <div style={{gridColumn:'1/-1'}}>
+    <strong>الاستثناءات الفعالة</strong>
+    <div className="finance-actions" style={{marginTop:8}}>
+     {policyPreview.exceptions?.attendance_exempt&&<Badge tone="blue">معفى من الحضور والانصراف</Badge>}
+     {policyPreview.exceptions?.location_exempt&&<Badge tone="green">معفى من الموقع</Badge>}
+     {policyPreview.exceptions?.late_exempt&&<Badge tone="orange">معفى من التأخير</Badge>}
+     {policyPreview.exceptions?.checkout_exempt&&<Badge tone="orange">معفى من الانصراف</Badge>}
+     {policyPreview.exceptions?.attendance_mode_override&&<Badge>طريقة حضور خاصة</Badge>}
+     {!policyPreview.exceptions?.attendance_exempt&&!policyPreview.exceptions?.location_exempt&&!policyPreview.exceptions?.late_exempt&&!policyPreview.exceptions?.checkout_exempt&&!policyPreview.exceptions?.attendance_mode_override&&<span className="muted-small">لا توجد استثناءات سارية.</span>}
+    </div>
+   </div>
+   {!!policyPreview.active_rules?.length&&<div style={{gridColumn:'1/-1'}}>
+    <strong>القواعد السارية في اليوم</strong>
+    <div style={{display:'grid',gap:6,marginTop:8}}>{policyPreview.active_rules.map(r=><div key={r.id} className="success-note"><Badge tone={ruleTone(r.rule_type)}>{ruleLabel(r.rule_type)}</Badge> <strong>{r.label||'بدون وصف'}</strong><span className="muted-small"> · {r.start_date===r.end_date?r.start_date:r.start_date+' → '+r.end_date}</span></div>)}</div>
+   </div>}
+   {policyPreview.policy?.mobile_require_trusted_device&&policyPreview.mobile_enabled&&<div className="success-note" style={{gridColumn:'1/-1'}}><ShieldCheck size={16}/> تسجيل الجوال لهذا الموظف يتطلب جهازًا موثوقًا ومعتمدًا.</div>}
+   <div className="modal-actions"><Button type="button" onClick={()=>setPolicyPreview(null)}>إغلاق</Button></div>
+  </div>}
+ </Modal>
 
  <Modal open={!!scheduleHistoryEmployee} onClose={()=>setScheduleHistoryEmployee(null)} title={scheduleHistoryEmployee?'سجل تغييرات الدوام — '+scheduleHistoryEmployee.name:'سجل تغييرات الدوام'} wide>
   <div style={{display:'grid',gap:12}}>
