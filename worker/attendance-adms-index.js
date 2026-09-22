@@ -1835,7 +1835,7 @@ async function resetAttendanceViolationDecision(env,me,body){
 }
 
 async function attendanceState(env,me,url){
- const branchId=requestedBranch(me,{},url),mode=accountMode(me),scheduleActivation=await activateDueEmployeeSchedules(env,mode,'state').catch(e=>({ok:false,activated_count:0,activated:[],error:txt(e?.message)})),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyVersionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',mobileDeviceFilter=branchId?'&branch_id=eq.'+enc(branchId):'',correctionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
+ const branchId=requestedBranch(me,{},url),mode=accountMode(me),scheduleActivation=await activateDueEmployeeSchedules(env,mode,'state').catch(e=>({ok:false,activated_count:0,activated:[],error:txt(e?.message)})),workflowReconcile=await reconcileAttendanceWorkflowNotifications(env,mode).catch(e=>({ok:false,error:txt(e?.message)})),dFilter=branchId?'&branch_id=eq.'+enc(branchId):'',lFilter=branchId?'&branch_id=eq.'+enc(branchId):'',logFilter=branchId?'&branch_id=eq.'+enc(branchId):'',empFilter=branchId?'&branch_id=eq.'+enc(branchId):'',userFilter=branchId?'&branch_id=eq.'+enc(branchId):'',deleteFilter=branchId?'&branch_id=eq.'+enc(branchId):'',calendarFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyFilter=branchId?'&branch_id=eq.'+enc(branchId):'',policyVersionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',mobileDeviceFilter=branchId?'&branch_id=eq.'+enc(branchId):'',correctionFilter=branchId?'&branch_id=eq.'+enc(branchId):'',branchFilter=branchId?'?id=eq.'+enc(branchId)+'&select=id,name,status,address':'?select=id,name,status,address&order=name.asc';
  const [devices,links,logs,unlinkedRows,employees,users,branches,shiftPeriods,scheduleVersions,deleteRequests,calendarRules,policies,policyVersions,mobileDevices,mobileEvents,mobileAttempts,correctionRequests]=await Promise.all([
   rest(env,'attendance_devices?select=*&order=created_at.asc'+dFilter),
   rest(env,'attendance_employee_links?select=*&order=created_at.desc'+lFilter),
@@ -1947,9 +1947,13 @@ async function attendanceState(env,me,url){
  const lifecycleCutoff=new Date(Date.now()-365*86400000).toISOString(),deviceAssets=pmDeviceIds.length?await rest(env,'attendance_device_assets?device_id=in.('+pmDeviceIds.map(enc).join(',')+')&select=*&order=updated_at.desc&limit=1000').catch(()=>[]):[],historicalIncidents=pmDeviceIds.length?await rest(env,'attendance_incidents?device_id=in.('+pmDeviceIds.map(enc).join(',')+')&started_at=gte.'+enc(lifecycleCutoff)+'&select=id,device_id,branch_id,started_at,resolution_seconds,status&order=started_at.desc&limit=3000').catch(()=>[]):[],historicalIncidentIds=historicalIncidents.map(x=>x.id).filter(Boolean),historicalMaintenance=historicalIncidentIds.length?await rest(env,'attendance_incident_maintenance?incident_id=in.('+historicalIncidentIds.map(enc).join(',')+')&select=incident_id,total_cost,updated_at&limit=3000').catch(()=>[]):[];
  const lifecycleBuilt=buildDeviceLifecycle(devices,deviceAssets,historicalIncidents,historicalMaintenance,preventiveMaintenanceRuns,deviceHealth),deviceLifecycle=lifecycleBuilt.rows,deviceLifecycleAlerts=lifecycleBuilt.alerts,combinedMaintenanceAlerts=[...preventiveMaintenanceAlerts,...deviceLifecycleAlerts];
  const rawNotifications=await reconcileAttendanceNotifications(env,devices,deviceHealth,devicePredictiveAlerts,combinedMaintenanceAlerts);
+ const workflowPath='attendance_notifications?category=eq.attendance_workflow&select=*'+(branchId?'&branch_id=eq.'+enc(branchId):'')+'&order=active.desc,last_seen_at.desc&limit=2000';
+ const workflowNotifications=(await rest(env,workflowPath).catch(()=>[])).filter(x=>!x?.metadata?.data_environment||txt(x.metadata.data_environment)===mode);
+ const notificationMap=new Map();for(const x of [...(rawNotifications||[]),...workflowNotifications])notificationMap.set(String(x.id||x.notification_key),x);
+ const combinedNotifications=[...notificationMap.values()];
  const allEscalationRules=await rest(env,'attendance_notification_escalation_rules?select=*&order=created_at.asc').catch(()=>[]);
  const escalationRules=(allEscalationRules||[]).filter(r=>!r.branch_id||!branchId||txt(r.branch_id)===txt(branchId));
- const notifications=await applyAttendanceEscalation(env,rawNotifications,escalationRules),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0,level1:0,level2:0,level3:0};
+ const notifications=await applyAttendanceEscalation(env,combinedNotifications,escalationRules),notificationCounts={new:0,seen:0,resolved:0,active:0,critical:0,level1:0,level2:0,level3:0};
  for(const n of notifications||[]){if(n.status==='new')notificationCounts.new+=1;else if(n.status==='seen')notificationCounts.seen+=1;else if(n.status==='resolved')notificationCounts.resolved+=1;if(n.active){notificationCounts.active+=1;if(n.severity==='critical')notificationCounts.critical+=1;if(Number(n.escalation_level)>=1)notificationCounts.level1+=1;if(Number(n.escalation_level)>=2)notificationCounts.level2+=1;if(Number(n.escalation_level)>=3)notificationCounts.level3+=1}}
  const notificationIds=(notifications||[]).map(x=>x.id).filter(Boolean),escalationEvents=notificationIds.length?await rest(env,'attendance_notification_escalation_events?notification_id=in.('+notificationIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=500').catch(()=>[]):[];
  const deliverySettings=await attendanceDeliverySettings(env),deliveries=await syncAttendanceEscalationDeliveries(env,notifications,escalationEvents,devices,branches,deliverySettings),deliveryCounts={ready:0,queued:0,sending:0,sent:0,delivered:0,read:0,failed:0,blocked:0,cancelled:0};
@@ -2014,7 +2018,7 @@ async function attendanceState(env,me,url){
   const snap=active?.policy_snapshot&&typeof active.policy_snapshot==='object'&&!Array.isArray(active.policy_snapshot)?active.policy_snapshot:null;
   return snap?{...basePolicy,...snap,id:basePolicy.id,branch_id:basePolicy.branch_id,data_environment:basePolicy.data_environment,policy_version_id:active.id,policy_effective_from:active.effective_from,policy_effective_to:active.effective_to||null}:basePolicy;
  });
- return {ok:true,scheduleActivation,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies:effectivePolicies,policyVersions,mobileDevices,mobileEvents,mobileAttempts,correctionRequests,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,scheduleActivation,workflowReconcile,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies:effectivePolicies,policyVersions,mobileDevices,mobileEvents,mobileAttempts,correctionRequests,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -2669,6 +2673,44 @@ async function resolveAttendanceWorkflowNotification(env,key,reason='تمت مع
  const now=new Date().toISOString();
  return (await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:{active:false,status:'resolved',resolved_at:now,resolved_by:'system:workflow',resolved_reason:reason,updated_at:now},prefer:'return=representation'}).catch(()=>[]))?.[0]||old;
 }
+async function reconcileAttendanceWorkflowNotifications(env,mode){
+ const day=saudiTodayKey(),d=new Date(day+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+7);const soon=d.toISOString().slice(0,10);
+ const [rules,corrections,mobileDevices,selfRequests,existing]=await Promise.all([
+  rest(env,'attendance_employee_calendar_rules?status=eq.active&data_environment=eq.'+enc(mode)+'&end_date=gte.'+enc(day)+'&end_date=lte.'+enc(soon)+'&select=id,attendance_employee_id,branch_id,rule_type,label,end_date&limit=2000').catch(()=>[]),
+  rest(env,'attendance_correction_requests?status=eq.pending&data_environment=eq.'+enc(mode)+'&select=id,attendance_employee_id,branch_id,work_date,request_type,requested_reason,requested_at&limit=2000').catch(()=>[]),
+  rest(env,'attendance_mobile_devices?status=eq.pending&data_environment=eq.'+enc(mode)+'&select=id,attendance_employee_id,branch_id,device_label,first_seen_at&limit=2000').catch(()=>[]),
+  rest(env,'attendance_self_service_biometric_requests?status=eq.pending&data_environment=eq.'+enc(mode)+'&select=id,attendance_employee_id,branch_id,request_type,requested_reason,requested_at,evidence&limit=2000').catch(()=>[]),
+  rest(env,'attendance_notifications?category=eq.attendance_workflow&select=*&order=last_seen_at.desc&limit=5000').catch(()=>[])
+ ]);
+ const exceptionTypes=new Set(['attendance_exempt','location_exempt','late_exempt','checkout_exempt','attendance_mode_override']);
+ const activeRules=(rules||[]).filter(r=>exceptionTypes.has(txt(r.rule_type)));
+ const employeeIds=[...new Set([...activeRules,...(corrections||[]),...(mobileDevices||[]),...(selfRequests||[])].map(x=>txt(x.attendance_employee_id)).filter(Boolean))];
+ const employees=employeeIds.length?await rest(env,'attendance_employees?id=in.('+employeeIds.map(enc).join(',')+')&select=id,name,employee_code&limit=5000').catch(()=>[]):[],employeeMap=new Map((employees||[]).map(x=>[String(x.id),x]));
+ const desired=[];
+ for(const r of activeRules){
+  const e=employeeMap.get(String(r.attendance_employee_id));
+  desired.push({notification_key:'attendance_exception_expiry:'+r.id,branch_id:r.branch_id||null,category:'attendance_workflow',severity:'info',title:'استثناء حضور سينتهي قريبًا — '+(e?.name||'موظف'),message:'ينتهي الاستثناء بتاريخ '+r.end_date+(r.label?' · '+r.label:''),metadata:{type:'attendance_exception_expiry',rule_id:r.id,attendance_employee_id:r.attendance_employee_id,end_date:r.end_date,rule_type:r.rule_type,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']});
+ }
+ for(const r of corrections||[]){
+  const e=employeeMap.get(String(r.attendance_employee_id));
+  desired.push({notification_key:'attendance_correction_request:'+r.id,branch_id:r.branch_id||null,category:'attendance_workflow',severity:'warning',title:'طلب تصحيح حركة حضور — '+(e?.name||'موظف'),message:(r.requested_reason||'طلب تصحيح')+' · '+r.work_date,metadata:{type:'attendance_correction_request',request_id:r.id,attendance_employee_id:r.attendance_employee_id,work_date:r.work_date,request_type:r.request_type,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']});
+ }
+ for(const r of mobileDevices||[]){
+  const e=employeeMap.get(String(r.attendance_employee_id));
+  desired.push({notification_key:'mobile_device_approval:'+r.id,branch_id:r.branch_id||null,category:'attendance_workflow',severity:'warning',title:'جهاز حضور جوال يحتاج اعتماد — '+(e?.name||'موظف'),message:r.device_label||'جوال الموظف',metadata:{type:'mobile_device_approval',mobile_device_id:r.id,attendance_employee_id:r.attendance_employee_id,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']});
+ }
+ for(const r of selfRequests||[]){
+  const e=employeeMap.get(String(r.attendance_employee_id));
+  desired.push({notification_key:'attendance_self_service_request:'+r.id,branch_id:r.branch_id||null,category:'attendance_workflow',severity:'warning',title:'طلب خدمة ذاتية للحضور — '+(e?.name||r.evidence?.employee_name||'موظف'),message:r.requested_reason||'طلب ربط أو تصحيح يحتاج مراجعة',metadata:{type:'attendance_self_service_request',request_id:r.id,attendance_employee_id:r.attendance_employee_id,request_type:r.request_type,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']});
+ }
+ for(const item of desired)await upsertAttendanceWorkflowNotification(env,item).catch(()=>{});
+ const desiredKeys=new Set(desired.map(x=>x.notification_key));
+ for(const old of existing||[]){
+  if(txt(old?.metadata?.data_environment)!==mode||old.active!==true||desiredKeys.has(txt(old.notification_key)))continue;
+  await resolveAttendanceWorkflowNotification(env,txt(old.notification_key),'زالت أو تمت معالجة حالة المتابعة تلقائيًا').catch(()=>{});
+ }
+ return {ok:true,count:desired.length,exception_expiry:activeRules.length,corrections:(corrections||[]).length,mobile_devices:(mobileDevices||[]).length,self_service:(selfRequests||[]).length};
+}
 function haversineMeters(lat1,lng1,lat2,lng2){
  const r=6371000,toRad=v=>Number(v)*Math.PI/180,a1=toRad(lat1),a2=toRad(lat2),dLat=toRad(Number(lat2)-Number(lat1)),dLng=toRad(Number(lng2)-Number(lng1));
  const a=Math.sin(dLat/2)**2+Math.cos(a1)*Math.cos(a2)*Math.sin(dLng/2)**2;
@@ -2787,7 +2829,7 @@ async function requestEmployeeAttendanceCorrection(env,me,body){
  if(duplicate?.length)throw Object.assign(new Error('يوجد طلب تصحيح مماثل قيد المراجعة بالفعل.'),{status:409});
  const now=new Date().toISOString(),req=(await rest(env,'attendance_correction_requests',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,work_date:workDate,request_type:type,requested_event_type:eventType,proposed_at:proposedAt,source_kind:sourceKind,source_event_id:sourceEventId,requested_reason:reason,evidence,data_environment:mode,requested_at:now,updated_at:now},prefer:'return=representation'}))?.[0]||null;
  if(!req)throw Object.assign(new Error('تعذر إرسال طلب التصحيح.'),{status:500});
- await upsertAttendanceWorkflowNotification(env,{notification_key:'attendance_correction_request:'+req.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'طلب تصحيح حركة حضور — '+employee.name,message:reason,metadata:{type:'attendance_correction_request',request_id:req.id,attendance_employee_id:employee.id,work_date:workDate,request_type:type},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
+ await upsertAttendanceWorkflowNotification(env,{notification_key:'attendance_correction_request:'+req.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'طلب تصحيح حركة حضور — '+employee.name,message:reason,metadata:{type:'attendance_correction_request',request_id:req.id,attendance_employee_id:employee.id,work_date:workDate,request_type:type,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
  await audit(env,me,'attendance_correction_requested','attendance_correction_request',req.id,employee.branch_id,null,req,reason).catch(()=>{});
  return {ok:true,pending:true,request:req,message:'تم إرسال طلب تصحيح الحركة للموارد البشرية، ولن تتغير التقارير إلا بعد الاعتماد.'};
 }
@@ -2861,7 +2903,7 @@ async function captureMobileAttendance(env,me,body,request){
  if(!mobileDevice){
   const initialStatus=policy.mobile_require_trusted_device!==false?'pending':'approved';
   mobileDevice=(await rest(env,'attendance_mobile_devices',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,device_key_hash:deviceHash,device_label:deviceLabel,status:initialStatus,data_environment:mode,first_seen_at:now,last_seen_at:now,approved_at:initialStatus==='approved'?now:null,approved_by:initialStatus==='approved'?'system:auto':null,updated_at:now},prefer:'return=representation'}))?.[0]||null;
-  if(initialStatus==='pending'&&mobileDevice?.id)await upsertAttendanceWorkflowNotification(env,{notification_key:'mobile_device_approval:'+mobileDevice.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'جهاز حضور جوال يحتاج اعتماد — '+employee.name,message:deviceLabel,metadata:{type:'mobile_device_approval',mobile_device_id:mobileDevice.id,attendance_employee_id:employee.id},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
+  if(initialStatus==='pending'&&mobileDevice?.id)await upsertAttendanceWorkflowNotification(env,{notification_key:'mobile_device_approval:'+mobileDevice.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'جهاز حضور جوال يحتاج اعتماد — '+employee.name,message:deviceLabel,metadata:{type:'mobile_device_approval',mobile_device_id:mobileDevice.id,attendance_employee_id:employee.id,data_environment:mode},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
   await audit(env,me,'attendance_mobile_device_registered','attendance_mobile_device',mobileDevice?.id||deviceHash,employee.branch_id,null,{employee_id:employee.id,status:initialStatus,device_label:deviceLabel},'تسجيل جهاز جوال جديد للحضور').catch(()=>{});
  }else{
   await rest(env,'attendance_mobile_devices?id=eq.'+enc(mobileDevice.id),{method:'PATCH',body:{last_seen_at:now,device_label:deviceLabel,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
@@ -3133,6 +3175,6 @@ export default {
  async scheduled(controller,env,ctx){
   await runDeviceClockSyncWatchdog(env).catch(()=>({ok:false}));
   const mode=await runtimeMode(env),inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
-  await Promise.all([inherited,activateDueEmployeeSchedules(env,mode,'scheduled').catch(()=>({ok:false})),runAttendanceQuickWatchdog(env)]);
+  await Promise.all([inherited,activateDueEmployeeSchedules(env,mode,'scheduled').catch(()=>({ok:false})),reconcileAttendanceWorkflowNotifications(env,mode).catch(()=>({ok:false})),runAttendanceQuickWatchdog(env)]);
  }
 };
