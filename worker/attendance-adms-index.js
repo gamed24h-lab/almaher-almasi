@@ -2721,6 +2721,90 @@ async function employeeUnifiedDayAttendance(env,employee,mode,day=saudiTodayKey(
  const last=normalized[normalized.length-1]||null;
  return {events:normalized,mobile_events:visibleMobile,manual_events:visibleManual,last,next_event_type:isInside?'check_out':'check_in',currently_inside:isInside};
 }
+async function employeeRecentCorrectionEvents(env,employee,mode,days=21){
+ const end=saudiDayUtcRange(saudiTodayKey()).end,start=new Date(new Date(end).getTime()-Math.max(1,Math.min(62,Number(days)||21))*86400000).toISOString(),fromDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(start));
+ const [mobile,biometric,manual,overrides]=await Promise.all([
+  rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(start)+'&occurred_at=lt.'+enc(end)+'&select=id,event_type,occurred_at,source&order=occurred_at.asc&limit=1000').catch(()=>[]),
+  rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(start)+'&occurred_at=lt.'+enc(end)+'&select=id,device_id,serial_number,occurred_at,status_code,verify_code&order=occurred_at.asc&limit=2000').catch(()=>[]),
+  rest(env,'attendance_manual_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&work_date=gte.'+enc(fromDay)+'&select=id,event_type,occurred_at,source,work_date&order=occurred_at.asc&limit=1000').catch(()=>[]),
+  rest(env,'attendance_event_overrides?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&work_date=gte.'+enc(fromDay)+'&active=eq.true&select=source_kind,source_event_id&limit=2000').catch(()=>[])
+ ]);
+ const blocked=new Set((overrides||[]).map(x=>txt(x.source_kind)+'|'+txt(x.source_event_id))),raw=[
+  ...(mobile||[]).filter(x=>!blocked.has('mobile|'+String(x.id))).map(x=>({...x,source_kind:'mobile',source_event_id:String(x.id),explicit_event_type:x.event_type})),
+  ...(biometric||[]).filter(x=>!blocked.has('biometric|'+String(x.id))).map(x=>({...x,source_kind:'biometric',source_event_id:String(x.id),explicit_event_type:null})),
+  ...(manual||[]).filter(x=>!blocked.has('manual|'+String(x.id))).map(x=>({...x,source_kind:'manual',source_event_id:String(x.id),explicit_event_type:x.event_type}))
+ ].sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
+ const out=[];let inside=false,lastBio=0,lastDev='';
+ for(const ev of raw){
+  const t=new Date(ev.occurred_at).getTime();let eventType=ev.explicit_event_type;
+  if(ev.source_kind==='biometric'){
+   const dev=String(ev.device_id||ev.serial_number||'');
+   if(Number.isFinite(t)&&lastBio&&dev===lastDev&&t-lastBio>=0&&t-lastBio<=45000)continue;
+   if(Number.isFinite(t)){lastBio=t;lastDev=dev}
+   inside=!inside;eventType=inside?'check_in':'check_out';
+  }else inside=eventType==='check_in';
+  const workDate=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ev.occurred_at));
+  out.push({source_kind:ev.source_kind,source_event_id:ev.source_event_id,event_type:eventType,occurred_at:ev.occurred_at,work_date:workDate});
+ }
+ return out.slice(-200).reverse();
+}
+async function requestEmployeeAttendanceCorrection(env,me,body){
+ const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
+ const mode=account.account_mode==='production'?'production':accountMode(me),employee=await selfServiceEmployee(env,account,mode);
+ if(!employee)throw Object.assign(new Error('اربط حسابك بملف الحضور أولًا.'),{status:409});
+ const type=txt(body.request_type),allowed=new Set(['missing_check_in','missing_check_out','wrong_time','remove_event']);
+ if(!allowed.has(type))throw Object.assign(new Error('نوع طلب التصحيح غير صحيح.'),{status:400});
+ const workDate=txt(body.work_date),today=saudiTodayKey(),reason=txt(body.reason);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(workDate))throw Object.assign(new Error('حدد تاريخ الحركة المطلوب تصحيحها.'),{status:400});
+ if(workDate>today)throw Object.assign(new Error('لا يمكن إرسال تصحيح لحركة في تاريخ مستقبلي.'),{status:400});
+ const oldest=new Date(new Date(today+'T00:00:00+03:00').getTime()-62*86400000).toISOString().slice(0,10);
+ if(workDate<oldest)throw Object.assign(new Error('طلبات التصحيح الذاتي متاحة لآخر 62 يومًا فقط. راجع الموارد البشرية للفترات الأقدم.'),{status:409});
+ if(!reason)throw Object.assign(new Error('اكتب سبب طلب التصحيح.'),{status:400});
+ let eventType=type==='missing_check_in'?'check_in':type==='missing_check_out'?'check_out':null,proposedAt=null,sourceKind=null,sourceEventId=null,evidence={};
+ if(['missing_check_in','missing_check_out','wrong_time'].includes(type)){
+  proposedAt=saudiLocalDateTimeIso(workDate,txt(body.proposed_time));
+  if(!proposedAt)throw Object.assign(new Error('حدد الوقت المقترح بصيغة صحيحة.'),{status:400});
+ }
+ if(['wrong_time','remove_event'].includes(type)){
+  sourceKind=txt(body.source_kind);sourceEventId=txt(body.source_event_id);
+  const recent=await employeeRecentCorrectionEvents(env,employee,mode,62),source=recent.find(x=>x.source_kind===sourceKind&&x.source_event_id===sourceEventId);
+  if(!source)throw Object.assign(new Error('الحركة المطلوب تعديلها غير موجودة ضمن حركاتك أو سبق استبدالها.'),{status:404});
+  if(source.work_date!==workDate)throw Object.assign(new Error('تاريخ الطلب لا يطابق تاريخ الحركة المحددة.'),{status:400});
+  eventType=source.event_type;evidence={source_occurred_at:source.occurred_at,source_event_type:source.event_type};
+ }
+ const duplicate=await rest(env,'attendance_correction_requests?attendance_employee_id=eq.'+enc(employee.id)+'&work_date=eq.'+enc(workDate)+'&request_type=eq.'+enc(type)+'&status=eq.pending&select=id&limit=1').catch(()=>[]);
+ if(duplicate?.length)throw Object.assign(new Error('يوجد طلب تصحيح مماثل قيد المراجعة بالفعل.'),{status:409});
+ const now=new Date().toISOString(),req=(await rest(env,'attendance_correction_requests',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,work_date:workDate,request_type:type,requested_event_type:eventType,proposed_at:proposedAt,source_kind:sourceKind,source_event_id:sourceEventId,requested_reason:reason,evidence,data_environment:mode,requested_at:now,updated_at:now},prefer:'return=representation'}))?.[0]||null;
+ if(!req)throw Object.assign(new Error('تعذر إرسال طلب التصحيح.'),{status:500});
+ await upsertAttendanceWorkflowNotification(env,{notification_key:'attendance_correction_request:'+req.id,branch_id:employee.branch_id||null,category:'attendance_workflow',severity:'warning',title:'طلب تصحيح حركة حضور — '+employee.name,message:reason,metadata:{type:'attendance_correction_request',request_id:req.id,attendance_employee_id:employee.id,work_date:workDate,request_type:type},target_roles:['الموارد البشرية','مدير فرع']}).catch(()=>{});
+ await audit(env,me,'attendance_correction_requested','attendance_correction_request',req.id,employee.branch_id,null,req,reason).catch(()=>{});
+ return {ok:true,pending:true,request:req,message:'تم إرسال طلب تصحيح الحركة للموارد البشرية، ولن تتغير التقارير إلا بعد الاعتماد.'};
+}
+async function cancelEmployeeAttendanceCorrection(env,me,body){
+ const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
+ const id=txt(body.id),req=(await rest(env,'attendance_correction_requests?id=eq.'+enc(id)+'&staff_user_id=eq.'+enc(account.id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!req)throw Object.assign(new Error('طلب التصحيح غير موجود.'),{status:404});
+ if(req.status!=='pending')throw Object.assign(new Error('لا يمكن إلغاء طلب تمت مراجعته بالفعل.'),{status:409});
+ const now=new Date().toISOString(),after=(await rest(env,'attendance_correction_requests?id=eq.'+enc(id),{method:'PATCH',body:{status:'cancelled',reviewed_at:now,reviewed_by:'self:'+account.id,resolution_note:'ألغاه الموظف قبل المراجعة',updated_at:now},prefer:'return=representation'}))?.[0]||req;
+ await resolveAttendanceWorkflowNotification(env,'attendance_correction_request:'+id,'ألغى الموظف الطلب').catch(()=>{});
+ await audit(env,me,'attendance_correction_cancelled','attendance_correction_request',id,req.branch_id,req,after,'إلغاء الموظف لطلب التصحيح').catch(()=>{});
+ return {ok:true,request:after,message:'تم إلغاء طلب التصحيح.'};
+}
+async function reviewAttendanceCorrection(env,me,body){
+ if(!canManageEmployees(me)&&!canReviewViolations(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لمراجعة طلبات تصحيح الحضور.'),{status:403});
+ const id=txt(body.id),decision=txt(body.decision),reason=txt(body.reason);
+ if(!id||!['approve','reject'].includes(decision))throw Object.assign(new Error('حدد الطلب وقرار المراجعة.'),{status:400});
+ const before=(await rest(env,'attendance_correction_requests?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!before)throw Object.assign(new Error('طلب التصحيح غير موجود.'),{status:404});
+ if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الطلب خارج نطاق فرعك.'),{status:403});
+ if(before.status!=='pending')return {ok:true,request:before,message:'هذا الطلب تمت مراجعته بالفعل.'};
+ if(decision==='approve')await assertAttendanceMonthOpen(env,before.branch_id,before.work_date,before.work_date,before.data_environment);
+ const who=actorId(me)||actorName(me)||null,out=await rest(env,'rpc/attendance_resolve_correction_request',{method:'POST',body:{p_request_id:id,p_decision:decision,p_reviewer:who,p_resolution_note:reason||null}}).catch(e=>{throw Object.assign(new Error(e.message||'تعذر معالجة طلب التصحيح.'),{status:409})});
+ const after=out?.request||before;
+ await resolveAttendanceWorkflowNotification(env,'attendance_correction_request:'+id,decision==='approve'?'تم اعتماد طلب التصحيح':'تم رفض طلب التصحيح').catch(()=>{});
+ await audit(env,me,decision==='approve'?'attendance_correction_approved':'attendance_correction_rejected','attendance_correction_request',id,before.branch_id,before,{request:after,manual_event:out?.manual_event||null,override:out?.override||null},reason||'مراجعة طلب تصحيح حضور').catch(()=>{});
+ return {ok:true,...out,message:decision==='approve'?'تم اعتماد التصحيح دون تعديل الحركة الأصلية؛ التقارير ستستخدم طبقة التصحيح المعتمدة.':'تم رفض طلب التصحيح وتسجيل القرار.'};
+}
 async function mobileSelfServiceStatus(env,account,employee,mode){
  const day=saudiTodayKey(),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day),unified=await employeeUnifiedDayAttendance(env,employee,mode,day);
  return {
@@ -2853,8 +2937,12 @@ async function employeeSelfServiceStatus(env,me){
   if(bios.some(x=>x.attendance_employee_id&&txt(x.attendance_employee_id)!==txt(employee.id)))continue;
   safeCandidates.push({device_id:u.device_id,device_name:deviceMap.get(txt(u.device_id))?.name||'جهاز بصمة',device_pin:u.device_pin,device_user_name:u.name||null,match_score:match.score,match_reasons:match.reasons,biometric_count:bios.length});
  }
- const mobileAttendance=await mobileSelfServiceStatus(env,account,employee,mode).catch(e=>({enabled:false,error:e.message||'تعذر تحميل حالة الحضور بالجوال'}));
- return {ok:true,available:true,binding_required:false,account:{id:account.id,name:account.name,branch_id:account.branch_id},employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code,branch_id:employee.branch_id,department:employee.department,job_title:employee.job_title},links:ownLinks,safe_candidates:safeCandidates,conflicts,biometric_profiles:(profiles||[]).filter(x=>x.status==='active'),requests,auto_correct_available:safeCandidates.length>0,mobile_attendance:mobileAttendance};
+ const [mobileAttendance,correctionRequests,recentAttendanceEvents]=await Promise.all([
+  mobileSelfServiceStatus(env,account,employee,mode).catch(e=>({enabled:false,error:e.message||'تعذر تحميل حالة الحضور بالجوال'})),
+  rest(env,'attendance_correction_requests?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&select=*&order=requested_at.desc&limit=50').catch(()=>[]),
+  employeeRecentCorrectionEvents(env,employee,mode,21).catch(()=>[])
+ ]);
+ return {ok:true,available:true,binding_required:false,account:{id:account.id,name:account.name,branch_id:account.branch_id},employee:{id:employee.id,name:employee.name,employee_code:employee.employee_code,branch_id:employee.branch_id,department:employee.department,job_title:employee.job_title},links:ownLinks,safe_candidates:safeCandidates,conflicts,biometric_profiles:(profiles||[]).filter(x=>x.status==='active'),requests,attendance_correction_requests:correctionRequests,recent_attendance_events:recentAttendanceEvents,auto_correct_available:safeCandidates.length>0,mobile_attendance:mobileAttendance};
 }
 async function bindEmployeeSelfService(env,me,body){
  const account=await selfServiceAccount(env,me);if(!account)throw Object.assign(new Error('هذا الحساب غير متاح للخدمة الذاتية.'),{status:403});
@@ -2929,6 +3017,8 @@ async function attendanceSelfServiceApi(request,env,ctx){
   if(action==='auto_correct')return json(await autoCorrectEmployeeBiometric(env,me,body));
   if(action==='confirm_current_link')return json(await confirmEmployeeCurrentLink(env,me,body));
   if(action==='request_correction')return json(await requestEmployeeBiometricCorrection(env,me,body));
+  if(action==='request_attendance_correction')return json(await requestEmployeeAttendanceCorrection(env,me,body));
+  if(action==='cancel_attendance_correction')return json(await cancelEmployeeAttendanceCorrection(env,me,body));
   if(action==='mobile_attendance')return json(await captureMobileAttendance(env,me,body,request));
   return json({error:'إجراء خدمة ذاتية غير مدعوم.'},400);
  }catch(e){return json({error:e.message||'تعذر تنفيذ الخدمة الذاتية للحضور'},e.status||500)}
@@ -3001,6 +3091,7 @@ async function attendanceApi(request,env,ctx){
   if(action==='resolve_link_identity_review')return json(await resolveLinkIdentityReview(env,me,body));
   if(action==='review_self_service_request')return json(await reviewSelfServiceBiometricRequest(env,me,body));
   if(action==='review_mobile_device')return json(await reviewMobileAttendanceDevice(env,me,body));
+  if(action==='review_attendance_correction')return json(await reviewAttendanceCorrection(env,me,body));
   if(action==='preview_attendance_policy')return json(await previewEmployeeAttendancePolicy(env,me,body));
   if(action==='delete_link')return json(await deleteLink(env,me,body));
   if(action==='update_notification')return json(await updateAttendanceNotification(env,me,body));
