@@ -395,7 +395,7 @@ async function reconcilePendingClockSyncArtifacts(env){
  const recent=await rest(env,'attendance_watchdog_runs?source=eq.scheduled&status=eq.running&started_at=gte.'+enc(recentCutoff)+'&select=id,started_at&order=started_at.desc&limit=1').catch(()=>[]);
  return {pending_devices:pendingDevices,resolved_notifications:resolvedNotifications,resolved_incidents:resolvedIncidents,recent_running:recent?.[0]||null,stale_runs_closed:(staleRuns||[]).length};
 }
-async function runAttendanceQuickWatchdog(env){
+async function runAttendanceQuickWatchdog(env,clockSyncResult=null){
  const startedAt=new Date(),startedIso=startedAt.toISOString(),mode=await runtimeMode(env),preflight=await reconcilePendingClockSyncArtifacts(env);
  const devices=await rest(env,'attendance_devices?select=*&order=created_at.asc').catch(()=>[]),ids=(devices||[]).map(x=>x.id).filter(Boolean),idFilter=ids.length?'&device_id=in.('+ids.map(enc).join(',')+')':'';
  if(!ids.length){
@@ -427,7 +427,7 @@ async function runAttendanceQuickWatchdog(env){
  ]);
  const notifications=await applyAttendanceEscalation(env,reconciled,rules||[]);
  await reconcileAttendanceIncidents(env,notifications,policies||[]);
- const clockSync=await autoSyncDriftedDeviceClocks(env,{devices,deviceHealth},{id:'system:attendance-watchdog',name:'Attendance Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}});
+ const clockSync=clockSyncResult||{queued:0,skipped:0,errors:0,error_devices:[]};
  const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),active=(notifications||[]).filter(x=>x.active&&x.status!=='resolved'),critical=active.filter(x=>x.severity==='critical'),escalated=active.filter(x=>Number(x.escalation_level)>0);
  const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),clock_sync_error_devices:Array.isArray(clockSync?.error_devices)?clockSync.error_devices:[],completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
  await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors,clock_sync_error_devices:summary.clock_sync_error_devices},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
@@ -2779,8 +2779,8 @@ async function attendanceApi(request,env,ctx){
 export default {
  async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname.startsWith('/iclock/'))return admsRequest(request,env);if(url.pathname==='/api/attendance/self-service')return attendanceSelfServiceApi(request,env,ctx);if(url.pathname==='/api/attendance')return attendanceApi(request,env,ctx);return appWorker.fetch(request,env,ctx)},
  async scheduled(controller,env,ctx){
-  await runDeviceClockSyncWatchdog(env).catch(()=>({ok:false}));
+  const clockSync=await runDeviceClockSyncWatchdog(env).catch(e=>({ok:false,queued:0,skipped:0,errors:1,error_devices:[{device_id:null,name:'scheduled_clock_sync',error:txt(e?.message)||'clock_sync_watchdog_failed'}]}));
   const mode=await runtimeMode(env),inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
-  await Promise.all([inherited,activateDueEmployeeSchedules(env,mode,'scheduled').catch(()=>({ok:false})),runAttendanceQuickWatchdog(env)]);
+  await Promise.all([inherited,activateDueEmployeeSchedules(env,mode,'scheduled').catch(()=>({ok:false})),runAttendanceQuickWatchdog(env,clockSync)]);
  }
 };
