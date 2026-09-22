@@ -8,7 +8,7 @@ function modeLabel(v){return v==='mobile'?'جوال فقط':v==='hybrid'?'مخت
 function modeTone(v){return v==='mobile'?'green':v==='hybrid'?'orange':'blue'}
 
 export default function AttendanceMobileControl({state,onChanged,onError,onNotice,onOpenPolicies,onOpenEmployees}){
- const branches=state.branches||[],employees=state.employees||[],policies=state.policies||[],mobileDevices=state.mobileDevices||[],mobileEvents=state.mobileEvents||[];
+ const branches=state.branches||[],employees=state.employees||[],policies=state.policies||[],mobileDevices=state.mobileDevices||[],mobileEvents=state.mobileEvents||[],mobileAttempts=state.mobileAttempts||[];
  const [busy,setBusy]=useState('');
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x])),[branches]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
@@ -56,6 +56,7 @@ export default function AttendanceMobileControl({state,onChanged,onError,onNotic
    <Card><div className="stat-card"><div><span>أجهزة موثوقة</span><strong>{approvedDevices.length}</strong></div></div></Card>
    <Card><div className="stat-card"><div><span>تحتاج اعتماد</span><strong>{pendingDevices.length}</strong></div></div></Card>
    <Card><div className="stat-card"><div><span>حركات الجوال اليوم</span><strong>{mobileEvents.length}</strong></div></div></Card>
+   <Card><div className="stat-card"><div><span>محاولات مرفوضة / معلقة</span><strong>{mobileAttempts.length}</strong></div></div></Card>
   </div>
 
   <Card>
@@ -66,6 +67,17 @@ export default function AttendanceMobileControl({state,onChanged,onError,onNotic
   <Card>
    <div className="card-title"><div><h3><ShieldCheck size={19}/> أجهزة الجوال الموثوقة</h3><small>أول جهاز جديد يظل بانتظار الاعتماد عندما تكون سياسة «جهاز موثوق» مفعلة.</small></div><Badge tone={pendingDevices.length?'orange':'green'}>{pendingDevices.length} معلق</Badge></div>
    {mobileDevices.length?<Table preferenceKey="attendance-mobile-devices" defaultPageSize={25} rows={mobileDevices} columns={deviceCols}/>:<div className="success-note"><ShieldCheck size={16}/> لا توجد أجهزة جوال مسجلة حتى الآن.</div>}
+  </Card>
+
+  <Card>
+   <div className="card-title"><div><h3><MapPin size={19}/> محاولات الجوال التي تحتاج متابعة</h3><small>تعرض المحاولات المرفوضة أو الأجهزة التي توقفت عند مرحلة الاعتماد، بدون تحويلها إلى حضور فعلي.</small></div><Badge tone={mobileAttempts.length?'orange':'green'}>{mobileAttempts.length}</Badge></div>
+   {mobileAttempts.length?<Table preferenceKey="attendance-mobile-attempts" defaultPageSize={25} rows={mobileAttempts} columns={[
+    {key:'employee',label:'الموظف',render:r=>{const e=employeeMap.get(String(r.attendance_employee_id));return <div><strong>{e?.name||'موظف'}</strong><div className="muted-small">{branchMap.get(String(r.branch_id))?.name||'—'}</div></div>}},
+    {key:'type',label:'المحاولة',render:r=><Badge tone={r.outcome==='pending_device'?'orange':'red'}>{r.event_type==='check_out'?'انصراف':'حضور'} · {r.outcome==='pending_device'?'اعتماد جهاز':'مرفوضة'}</Badge>},
+    {key:'reason',label:'السبب',render:r=><div><strong>{r.reason_text||r.reason_code}</strong><div className="muted-small">{r.reason_code}</div></div>},
+    {key:'distance',label:'الموقع / الدقة',render:r=><div>{r.distance_from_site_m!=null?Math.round(Number(r.distance_from_site_m))+'م':'—'}<div className="muted-small">{r.accuracy_m!=null?'دقة '+Math.round(Number(r.accuracy_m))+'م':''}</div></div>},
+    {key:'time',label:'وقت المحاولة',render:r=>fmt(r.attempted_at)}
+   ]}/>:<div className="success-note"><ShieldCheck size={16}/> لا توجد محاولات جوال مرفوضة أو معلقة اليوم.</div>}
   </Card>
 
   <Card>
