@@ -2637,6 +2637,27 @@ function saudiDayUtcRange(day){
  const start=new Date(key+'T00:00:00+03:00'),end=new Date(start.getTime()+86400000);
  return {key,start:start.toISOString(),end:end.toISOString()};
 }
+function saudiLocalDateTimeIso(day,time){
+ const d=txt(day),t=txt(time);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(d)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(t))return null;
+ const dt=new Date(d+'T'+t+':00+03:00');
+ return Number.isFinite(dt.getTime())?dt.toISOString():null;
+}
+async function upsertAttendanceWorkflowNotification(env,item){
+ if(!item?.notification_key)return null;
+ const now=new Date().toISOString(),old=(await rest(env,'attendance_notifications?notification_key=eq.'+enc(item.notification_key)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ const payload={branch_id:item.branch_id||null,device_id:null,category:item.category||'attendance_workflow',severity:item.severity||'warning',title:txt(item.title)||'متابعة حضور',message:txt(item.message)||null,active:true,last_seen_at:now,metadata:item.metadata&&typeof item.metadata==='object'?item.metadata:{},target_roles:Array.isArray(item.target_roles)?item.target_roles:['الموارد البشرية'],updated_at:now};
+ if(!old)return (await rest(env,'attendance_notifications',{method:'POST',body:{...payload,notification_key:item.notification_key,status:'new',first_seen_at:now,created_at:now},prefer:'return=representation'}).catch(()=>[]))?.[0]||null;
+ const patch=old.active===false?{...payload,status:'new',first_seen_at:now,seen_at:null,seen_by:null,resolved_at:null,resolved_by:null,resolved_reason:null}:payload;
+ return (await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:patch,prefer:'return=representation'}).catch(()=>[]))?.[0]||old;
+}
+async function resolveAttendanceWorkflowNotification(env,key,reason='تمت معالجة الحالة'){
+ if(!key)return null;
+ const old=(await rest(env,'attendance_notifications?notification_key=eq.'+enc(key)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
+ if(!old||old.active===false)return old;
+ const now=new Date().toISOString();
+ return (await rest(env,'attendance_notifications?id=eq.'+enc(old.id),{method:'PATCH',body:{active:false,status:'resolved',resolved_at:now,resolved_by:'system:workflow',resolved_reason:reason,updated_at:now},prefer:'return=representation'}).catch(()=>[]))?.[0]||old;
+}
 function haversineMeters(lat1,lng1,lat2,lng2){
  const r=6371000,toRad=v=>Number(v)*Math.PI/180,a1=toRad(lat1),a2=toRad(lat2),dLat=toRad(Number(lat2)-Number(lat1)),dLng=toRad(Number(lng2)-Number(lng1));
  const a=Math.sin(dLat/2)**2+Math.cos(a1)*Math.cos(a2)*Math.sin(dLng/2)**2;
@@ -2668,13 +2689,20 @@ async function effectiveEmployeeAttendancePolicy(env,employee,mode,day=saudiToda
 }
 async function employeeUnifiedDayAttendance(env,employee,mode,day=saudiTodayKey()){
  const range=saudiDayUtcRange(day);
- const [mobileEvents,biometricRows]=await Promise.all([
+ const [mobileEvents,biometricRows,manualEvents,overrides]=await Promise.all([
   rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,event_type,occurred_at,accuracy_m,distance_from_site_m,inside_geofence,mobile_device_id,source&order=occurred_at.asc&limit=100').catch(()=>[]),
-  rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,device_id,serial_number,occurred_at,status_code,verify_code,received_at&order=occurred_at.asc&limit=200').catch(()=>[])
+  rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,device_id,serial_number,occurred_at,status_code,verify_code,received_at&order=occurred_at.asc&limit=200').catch(()=>[]),
+  rest(env,'attendance_manual_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&work_date=eq.'+enc(day)+'&select=id,event_type,occurred_at,source,correction_request_id&order=occurred_at.asc&limit=100').catch(()=>[]),
+  rest(env,'attendance_event_overrides?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&work_date=eq.'+enc(day)+'&active=eq.true&select=source_kind,source_event_id,override_action,replacement_manual_event_id&limit=200').catch(()=>[])
  ]);
+ const blocked=new Set((overrides||[]).map(x=>txt(x.source_kind)+'|'+txt(x.source_event_id)));
+ const visibleMobile=(mobileEvents||[]).filter(x=>!blocked.has('mobile|'+String(x.id)));
+ const visibleBiometric=(biometricRows||[]).filter(x=>!blocked.has('biometric|'+String(x.id)));
+ const visibleManual=(manualEvents||[]).filter(x=>!blocked.has('manual|'+String(x.id)));
  const raw=[
-  ...(mobileEvents||[]).map(x=>({...x,attendance_source:'mobile',explicit_event_type:x.event_type})),
-  ...(biometricRows||[]).map(x=>({...x,attendance_source:'biometric',explicit_event_type:null}))
+  ...visibleMobile.map(x=>({...x,attendance_source:'mobile',source_event_id:String(x.id),explicit_event_type:x.event_type})),
+  ...visibleBiometric.map(x=>({...x,attendance_source:'biometric',source_event_id:String(x.id),explicit_event_type:null})),
+  ...visibleManual.map(x=>({...x,attendance_source:'manual',source_event_id:String(x.id),explicit_event_type:x.event_type}))
  ].sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
  const normalized=[];let isInside=false,lastBiometricAt=0,lastBiometricDevice='';
  for(const ev of raw){
@@ -2691,7 +2719,7 @@ async function employeeUnifiedDayAttendance(env,employee,mode,day=saudiTodayKey(
   }
  }
  const last=normalized[normalized.length-1]||null;
- return {events:normalized,mobile_events:mobileEvents||[],last,next_event_type:isInside?'check_out':'check_in',currently_inside:isInside};
+ return {events:normalized,mobile_events:visibleMobile,manual_events:visibleManual,last,next_event_type:isInside?'check_out':'check_in',currently_inside:isInside};
 }
 async function mobileSelfServiceStatus(env,account,employee,mode){
  const day=saudiTodayKey(),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day),unified=await employeeUnifiedDayAttendance(env,employee,mode,day);
