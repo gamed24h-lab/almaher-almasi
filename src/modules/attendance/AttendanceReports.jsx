@@ -1,6 +1,7 @@
 import React,{useMemo,useState} from 'react';
 import {AlertTriangle,CalendarClock,FileText,Lock,Printer,Unlock} from 'lucide-react';
 import {api} from '../../lib/api.js';
+import {ATTENDANCE_WITH_PERMISSION,resolveAttendanceDayStatus} from './attendanceStatus.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea,SavedViews} from '../../components/UI.jsx';
 
 const DEFAULT_POLICY={
@@ -43,7 +44,7 @@ function intervalOverlap(a1,a2,b1,b2){return Math.max(0,Math.min(a2,b2)-Math.max
 function distanceToPeriod(m,start,end){const x=adjustedMinute(m,start,end),finish=end<start?end+1440:end,center=(start+finish)/2;return Math.abs(x-center)}
 function ruleOnDay(rule,day){return rule.start_date<=day&&rule.end_date>=day}
 function ruleMinutes(rule){const s=minutesFromClock(rule.start_time),e=minutesFromClock(rule.end_time);return periodDuration(s,e)}
-function statusTone(v){return v==='حضور'?'green':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'||v==='استئذان'||v==='معفى'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
+function statusTone(v){return v==='حضور'?'green':v===ATTENDANCE_WITH_PERMISSION?'blue':v==='حضور جزئي'?'orange':v==='غياب'?'red':v==='إجازة'||v==='راحة'||v==='استئذان'||v==='معفى'?'blue':v==='حضور خارج الجدول'?'orange':'blue'}
 function reviewLabel(v){return v==='approved'?'معتمدة':v==='waived'?'معفاة':v==='adjusted'?'معدلة':v==='pending'?'بانتظار المراجعة':'—'}
 function reviewTone(v){return v==='approved'?'green':v==='waived'?'blue':v==='adjusted'?'orange':v==='pending'?'red':'blue'}
 const WEEKDAY_LABELS=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
@@ -161,15 +162,18 @@ function buildDaily(logs,employees,periodsMap,scheduleVersionsMap,rules,policyMa
    }
    const permissionMinutes=permissions.reduce((n,r)=>n+ruleMinutes(r),0);
 
-   let status='راحة';
-   if(attendanceExempt)status='معفى';
-   else if(leave)status='إجازة';
-   else if(off&&!arr.length)status='راحة';
-   else if(periods.length&&!arr.length&&excusedPeriods===periods.length)status='استئذان';
-   else if(periods.length&&!arr.length)status='غياب';
-   else if(arr.length&&periods.length&&(missedPeriods>0||missingPunches>0||shortageMinutes>=Number(policy.partial_absence_threshold_minutes||60)))status='حضور جزئي';
-   else if(arr.length&&periods.length)status='حضور';
-   else if(arr.length)status='حضور خارج الجدول';
+   const status=attendanceExempt?'معفى':resolveAttendanceDayStatus({
+    leave:!!leave,
+    off:!!off,
+    periodsCount:periods.length,
+    punches:arr.length,
+    excusedPeriods,
+    missedPeriods,
+    missingPunches,
+    shortageMinutes,
+    partialThreshold:Number(policy.partial_absence_threshold_minutes||60),
+    approvedPermissionMinutes
+   });
 
    let penaltyMinutes=0;
    if(status==='غياب')penaltyMinutes+=Number(policy.absence_penalty_minutes||0);
