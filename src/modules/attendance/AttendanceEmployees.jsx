@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {CalendarClock,CalendarDays,Clock3,Plus,RefreshCw,Trash2,UploadCloud,Users} from 'lucide-react';
+import {CalendarClock,CalendarDays,Clock3,Plus,RefreshCw,ShieldCheck,Trash2,UploadCloud,Users} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,Field,Input,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import RecordTimeline from '../../components/RecordTimeline.jsx';
@@ -12,9 +12,9 @@ const ALL_DAYS=[0,1,2,3,4,5,6];
 const defaultPeriod=()=>({label:'فترة مخصصة',start_time:'08:00',end_time:'17:00',grace_minutes:10,device_shift_template_id:'',source_type:'custom',weekdays:[...ALL_DAYS]});
 const blank={id:'',employee_code:'',name:'',branch_id:'',phone:'',national_id:'',department:'',job_title:'',staff_user_id:'',weekly_off_days:[5],status:'active',data_environment:'training',notes:'',reason:'',schedule_effective_from:today(),shift_periods:[defaultPeriod()]};
 function today(){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}catch{return new Date().toISOString().slice(0,10)}}
-const blankRule=()=>({id:'',rule_type:'leave',label:'',start_date:today(),end_date:today(),start_time:'08:00',end_time:'17:00',grace_minutes:10,notes:'',reason:''});
-const ruleLabel=t=>t==='leave'?'إجازة':t==='permission'?'استئذان':t==='overtime'?'عمل إضافي':t==='work_override'?'دوام مؤقت':t==='off'?'راحة / إجازة إضافية':t||'—';
-const ruleTone=t=>t==='leave'||t==='off'?'blue':t==='overtime'?'green':t==='permission'?'orange':'blue';
+const blankRule=()=>({id:'',rule_type:'leave',label:'',start_date:today(),end_date:today(),start_time:'08:00',end_time:'17:00',grace_minutes:10,policy_payload:{attendance_mode:'mobile'},notes:'',reason:''});
+const ruleLabel=t=>t==='leave'?'إجازة':t==='permission'?'استئذان':t==='overtime'?'عمل إضافي':t==='work_override'?'دوام مؤقت':t==='off'?'راحة / إجازة إضافية':t==='attendance_exempt'?'معفى من الحضور والانصراف':t==='location_exempt'?'معفى من شرط الموقع':t==='late_exempt'?'معفى من التأخير':t==='checkout_exempt'?'معفى من تسجيل الانصراف':t==='attendance_mode_override'?'طريقة حضور خاصة':t||'—';
+const ruleTone=t=>t==='leave'||t==='off'||t==='attendance_exempt'?'blue':t==='overtime'?'green':t==='permission'||t==='late_exempt'||t==='checkout_exempt'?'orange':t==='attendance_mode_override'||t==='location_exempt'?'green':'blue';
 const versionSourceLabel=v=>({manual:'تعديل يدوي',audit_backfill:'مستعاد من سجل التدقيق',audit_before:'الجدول السابق لأول تعديل',current_baseline:'خط أساس من الجدول الحالي'}[v]||v||'غير محدد');
 const fmtDateTime=v=>{if(!v)return '—';try{return new Date(v).toLocaleString('ar-SA',{timeZone:'Asia/Riyadh'})}catch{return String(v)}};
 const offDaysLabel=v=>{const a=Array.isArray(v)?v.map(Number).sort():[];return a.length?a.map(n=>DAYS[n]?.[1]||String(n)).join('، '):'لا توجد راحة أسبوعية'};
@@ -22,9 +22,10 @@ const periodSummary=v=>{const a=Array.isArray(v)?[...v].sort((x,y)=>Number(x.seq
 const versionSignature=v=>JSON.stringify({periods:(Array.isArray(v?.shift_periods)?v.shift_periods:[]).map((p,i)=>({sequence_no:Number(p.sequence_no||i+1),label:String(p.label||''),start_time:String(p.start_time||'').slice(0,5),end_time:String(p.end_time||'').slice(0,5),grace_minutes:Number(p.grace_minutes||0),weekdays:(Array.isArray(p.weekdays)?p.weekdays:ALL_DAYS).map(Number).sort()})),weekly_off_days:(Array.isArray(v?.weekly_off_days)?v.weekly_off_days:[]).map(Number).sort()});
 
 export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
- const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],scheduleVersions=state.scheduleVersions||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[];
- const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState('');
+ const branches=state.branches||[],employees=state.employees||[],users=state.users||[],links=state.links||[],devices=state.devices||[],shiftPeriods=state.shiftPeriods||[],scheduleVersions=state.scheduleVersions||[],deviceShiftTemplates=state.deviceShiftTemplates||[],deleteRequests=state.deleteRequests||[],calendarRules=state.calendarRules||[],biometricProfiles=state.biometricProfiles||[],mobileDevices=state.mobileDevices||[],policies=state.policies||[];
+ const [open,setOpen]=useState(false),[form,setForm]=useState(blank),[busy,setBusy]=useState(false),[pushBusy,setPushBusy]=useState(''),[deleteBusy,setDeleteBusy]=useState(''),[deleteWatching,setDeleteWatching]=useState(''),[mobileReviewBusy,setMobileReviewBusy]=useState('');
  const [calendarOpen,setCalendarOpen]=useState(false),[calendarEmployee,setCalendarEmployee]=useState(null),[ruleForm,setRuleForm]=useState(blankRule()),[ruleBusy,setRuleBusy]=useState(false),[scheduleHistoryEmployee,setScheduleHistoryEmployee]=useState(null);
+ const [policyPreview,setPolicyPreview]=useState(null),[policyPreviewDate,setPolicyPreviewDate]=useState(today()),[policyPreviewBusy,setPolicyPreviewBusy]=useState(false);
  const deleteTimer=useRef(null);
  const [listFilter,setListFilter]=useState({q:'',branch:'',department:'',status:'',device:''});
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
@@ -36,6 +37,8 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
  const deleteMap=useMemo(()=>{const m=new Map();for(const r of deleteRequests){const k=String(r.attendance_employee_id||'');if(k&&!m.has(k))m.set(k,r)}return m},[deleteRequests]);
  const rulesMap=useMemo(()=>{const m=new Map();for(const r of calendarRules){const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.start_date).localeCompare(String(x.start_date)));return m},[calendarRules]);
  const biometricMap=useMemo(()=>{const m=new Map();for(const r of biometricProfiles){if(r.status!=='active')continue;const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}return m},[biometricProfiles]);
+ const branchPolicyMap=useMemo(()=>new Map(policies.map(p=>[String(p.branch_id),p])),[policies]);
+ const mobileDeviceMap=useMemo(()=>{const m=new Map();for(const r of mobileDevices){const k=String(r.attendance_employee_id),a=m.get(k)||[];a.push(r);m.set(k,a)}for(const a of m.values())a.sort((x,y)=>String(y.updated_at||'').localeCompare(String(x.updated_at||'')));return m},[mobileDevices]);
  const scheduleTimeline=useMemo(()=>{
   if(!scheduleHistoryEmployee?.id)return [];
   const asc=(scheduleVersions||[]).filter(v=>String(v.attendance_employee_id)===String(scheduleHistoryEmployee.id)).sort((a,b)=>String(a.effective_from).localeCompare(String(b.effective_from)));
@@ -144,6 +147,13 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
    onNotice?.('تم تجهيز إعادة رفع بيانات الموظف إلى '+String(Math.max(1,Math.floor((out?.count||2)/2)))+' جهاز/أجهزة.');await onChanged?.();
   }catch(err){onError?.(err.message)}finally{setPushBusy('')}
  }
+ async function reviewMobileDevice(row,decision){
+  const key=row.id+':'+decision;setMobileReviewBusy(key);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'review_mobile_device',id:row.id,decision,reason:decision==='approve'?'اعتماد جهاز حضور الجوال':'إلغاء اعتماد جهاز حضور الجوال'});
+   onNotice?.(out?.message||'تم تحديث حالة جهاز الجوال.');await onChanged?.();
+  }catch(err){onError?.(err.message)}finally{setMobileReviewBusy('')}
+ }
  async function removeEmployee(r){
   const linked=linksMap.get(String(r.id))||[],req=deleteMap.get(String(r.id)),retry=req?.status==='failed';
   const msg=linked.length
@@ -159,6 +169,13 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   }catch(err){onError?.(err.message)}finally{setDeleteBusy('')}
  }
 
+ async function openPolicyPreview(r,date=today()){
+  setPolicyPreviewBusy(true);onError?.('');
+  try{
+   const out=await api.attendanceWrite({action:'preview_attendance_policy',attendance_employee_id:r.id,work_date:date});
+   setPolicyPreview(out);setPolicyPreviewDate(date);
+  }catch(err){onError?.(err.message)}finally{setPolicyPreviewBusy(false)}
+ }
  function openCalendar(r){setCalendarEmployee(r);setRuleForm(blankRule());setCalendarOpen(true)}
  function editRule(r){setRuleForm({...blankRule(),...r,start_time:r.start_time?String(r.start_time).slice(0,5):'08:00',end_time:r.end_time?String(r.end_time).slice(0,5):'17:00',grace_minutes:Number(r.grace_minutes??10),reason:''})}
  async function saveRule(e){
@@ -181,10 +198,11 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   {key:'branch',label:'الفرع',render:r=>branchMap.get(String(r.branch_id))||'—'},
   {key:'shift',label:'جدول الدوام',render:r=>{const ps=periodsMap.get(String(r.id))||[];return ps.length?<div style={{display:'grid',gap:3}}>{ps.map(p=><span key={p.id||p.sequence_no} className="muted-small"><Clock3 size={12}/> {p.label||'فترة'}: {String(p.start_time).slice(0,5)} — {String(p.end_time).slice(0,5)} · {(Array.isArray(p.weekdays)?p.weekdays:ALL_DAYS).map(n=>DAYS[n]?.[1]?.slice(0,2)).filter(Boolean).join(' ')}</span>)}</div>:'غير محدد'}},
   {key:'calendar',label:'استثناءات',render:r=>{const rs=rulesMap.get(String(r.id))||[];return rs.length?<div><strong>{rs.length}</strong><div className="muted-small">{rs.slice(0,2).map(x=>ruleLabel(x.rule_type)).join(' · ')}</div></div>:'—'}},
-  {key:'device',label:'أجهزة الربط',render:r=>{const ls=linksMap.get(String(r.id))||[];return ls.length?<div style={{display:'grid',gap:2}}>{ls.map(l=><span key={l.id} className="muted-small">{deviceMap.get(String(l.device_id))?.name||'جهاز'} · PIN {l.device_pin}</span>)}</div>:'غير مربوط'}},
-  {key:'biometric',label:'الهوية البيومترية',render:r=>{const bs=biometricMap.get(String(r.id))||[],faces=bs.filter(x=>x.biometric_type==='face').length,fingers=bs.filter(x=>x.biometric_type==='finger').length;return bs.length?<div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{faces>0&&<Badge tone="green">وجه {faces}</Badge>}{fingers>0&&<Badge>أصابع {fingers}</Badge>}</div>:<Badge tone="orange">غير مسجل</Badge>}},
+  {key:'device',label:'أجهزة الربط',render:r=>{const ls=linksMap.get(String(r.id))||[],mode=branchPolicyMap.get(String(r.branch_id))?.attendance_mode||'biometric';return ls.length?<div style={{display:'grid',gap:2}}>{ls.map(l=><span key={l.id} className="muted-small">{deviceMap.get(String(l.device_id))?.name||'جهاز'} · PIN {l.device_pin}</span>)}</div>:mode==='mobile'?<Badge tone="green">غير مطلوب — جوال</Badge>:mode==='hybrid'?<Badge>اختياري — مختلط</Badge>:'غير مربوط'}},
+  {key:'biometric',label:'الهوية البيومترية',render:r=>{const bs=biometricMap.get(String(r.id))||[],faces=bs.filter(x=>x.biometric_type==='face').length,fingers=bs.filter(x=>x.biometric_type==='finger').length,mode=branchPolicyMap.get(String(r.branch_id))?.attendance_mode||'biometric';return bs.length?<div style={{display:'flex',gap:5,flexWrap:'wrap'}}>{faces>0&&<Badge tone="green">وجه {faces}</Badge>}{fingers>0&&<Badge>أصابع {fingers}</Badge>}</div>:mode==='mobile'?<Badge tone="green">غير مطلوب</Badge>:mode==='hybrid'?<Badge>اختياري</Badge>:<Badge tone="orange">غير مسجل</Badge>}},
+  {key:'mobile',label:'جوال الحضور',render:r=>{const ms=mobileDeviceMap.get(String(r.id))||[];if(!ms.length)return (branchPolicyMap.get(String(r.branch_id))?.attendance_mode==='mobile'||branchPolicyMap.get(String(r.branch_id))?.attendance_mode==='hybrid')?<span className="muted-small">لم يسجل جهازًا بعد</span>:'—';return <div style={{display:'grid',gap:6}}>{ms.slice(0,3).map(m=><div key={m.id}><Badge tone={m.status==='approved'?'green':m.status==='pending'?'orange':'red'}>{m.status==='approved'?'معتمد':m.status==='pending'?'بانتظار الاعتماد':'موقوف'}</Badge><div className="muted-small">{m.device_label||'جوال'}{m.last_seen_at?' · '+fmtDateTime(m.last_seen_at):''}</div>{state.permissions?.manage_employees&&<div className="finance-actions" style={{marginTop:3}}>{m.status!=='approved'&&<Button onClick={()=>reviewMobileDevice(m,'approve')} disabled={mobileReviewBusy===m.id+':approve'}>اعتماد</Button>}{m.status!=='revoked'&&<Button onClick={()=>reviewMobileDevice(m,'revoke')} disabled={mobileReviewBusy===m.id+':revoke'}>إلغاء</Button>}</div>}</div>)}</div>}},
   {key:'status',label:'الحالة',render:r=>{const req=deleteMap.get(String(r.id));if(req?.status==='pending')return <Badge tone="orange">جارٍ الحذف من الجهاز</Badge>;if(req?.status==='failed')return <div><Badge tone="red">فشل حذف الجهاز</Badge><div className="muted-small">نجح {req.success_count||0} · فشل {req.failed_count||0}</div></div>;return r.status==='active'?<Badge tone="green">نشط</Badge>:<Badge tone="red">موقوف</Badge>}},
-  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{(state.permissions?.manage_schedules||state.permissions?.reports)&&<Button onClick={()=>setScheduleHistoryEmployee(r)}><CalendarClock size={14}/> سجل الدوام</Button>}{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
+  {key:'edit',label:'',render:r=>{const req=deleteMap.get(String(r.id)),pending=req?.status==='pending',failed=req?.status==='failed';return <div className="finance-actions"><RecordTimeline entityId={r.id} title={'تاريخ موظف الحضور — '+r.name} subtitle="إنشاء وتعديل الجدول والربط والدمج وأي تغيير مسجل على الموظف." label="السجل"/>{(state.permissions?.manage_schedules||state.permissions?.reports)&&<Button onClick={()=>setScheduleHistoryEmployee(r)}><CalendarClock size={14}/> سجل الدوام</Button>}<Button onClick={()=>openPolicyPreview(r)} disabled={policyPreviewBusy}><ShieldCheck size={14}/> السياسة الفعلية</Button>{state.permissions?.manage_biometrics&&<AttendanceBiometrics state={state} employee={r} onChanged={onChanged} onError={onError} onNotice={onNotice} disabled={pending}/>} {state.permissions?.manage_employees&&<Button onClick={()=>edit(r)} disabled={pending}>تعديل</Button>}{state.permissions?.manage_schedules&&<Button onClick={()=>openCalendar(r)} disabled={pending}><CalendarDays size={14}/> الجدول والاستثناءات</Button>}{state.permissions?.manage_devices&&(linksMap.get(String(r.id))||[]).length>0&&<Button onClick={()=>push(r)} disabled={pushBusy===r.id||pending}><RefreshCw size={14}/>{pushBusy===r.id?' جاري الرفع...':' إعادة رفع'}</Button>}{state.permissions?.delete_employees&&<Button onClick={()=>removeEmployee(r)} disabled={deleteBusy===r.id||pending}><Trash2 size={14}/>{deleteBusy===r.id?' جاري الطلب...':pending?' جارٍ الحذف...':failed?' إعادة محاولة الحذف':' حذف'}</Button>}</div>}}
  ];
 
  const calendarCols=[
@@ -196,6 +214,7 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
 
  const needsTime=['permission','overtime','work_override'].includes(ruleForm.rule_type);
  const needsGrace=ruleForm.rule_type==='work_override';
+ const needsModeOverride=ruleForm.rule_type==='attendance_mode_override';
 
  return <><Card><div className="card-title"><div><h3><Users size={19}/> موظفو الحضور</h3><small>جدول أسبوعي مرن لكل موظف، مع دوام مؤقت وإجازات واستئذان وعمل إضافي حسب التاريخ.</small></div><div className="finance-actions"><Badge>{employees.length}</Badge>{state.permissions?.manage_employees&&<Button variant="primary" onClick={add}><Plus size={15}/> موظف جديد</Button>}</div></div><><SmartListFilters storageKey="attendance-employees-filters" search={listFilter.q} onSearchChange={v=>setListFilter(x=>({...x,q:v}))} searchPlaceholder="ابحث بالاسم أو الكود أو الجوال أو الهوية أو القسم..." totalCount={employees.length} resultCount={filteredEmployees.length} onReset={()=>setListFilter({q:'',branch:'',department:'',status:'',device:''})} filters={[
  {key:'branch',label:'الفرع',value:listFilter.branch,onChange:v=>setListFilter(x=>({...x,branch:v})),options:branchOptions},
@@ -262,6 +281,32 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
   <div className="modal-actions"><Button type="button" onClick={()=>setOpen(false)}>إلغاء</Button><Button variant="primary" type="submit" disabled={busy}>{busy?'جاري الحفظ والرفع...':'حفظ ورفع تلقائيًا'}</Button></div>
  </form></Modal>
 
+ <Modal open={!!policyPreview} onClose={()=>setPolicyPreview(null)} title={policyPreview?'السياسة الفعلية — '+policyPreview.employee?.name:'السياسة الفعلية'} wide>
+  {policyPreview&&<div className="form-grid">
+   <Field label="تاريخ المعاينة"><div className="finance-actions"><Input type="date" value={policyPreviewDate} onChange={e=>setPolicyPreviewDate(e.target.value)}/><Button onClick={()=>openPolicyPreview({id:policyPreview.employee.id},policyPreviewDate)} disabled={policyPreviewBusy}>{policyPreviewBusy?'جاري...':'تحديث المعاينة'}</Button></div></Field>
+   <Field label="طريقة الحضور النهائية"><div><Badge tone={policyPreview.attendance_mode==='mobile'?'green':policyPreview.attendance_mode==='hybrid'?'orange':'blue'}>{policyPreview.attendance_mode==='mobile'?'جوال فقط':policyPreview.attendance_mode==='hybrid'?'بصمة أو جوال':'جهاز البصمة فقط'}</Badge><div className="muted-small">بعد تطبيق سياسة الفرع وكل الاستثناءات السارية في هذا التاريخ</div></div></Field>
+   <Field label="سريان سياسة الفرع"><div>{policyPreview.policy?.policy_effective_from||'—'}{policyPreview.policy?.policy_effective_to?' → '+policyPreview.policy.policy_effective_to:' → مستمر'}</div></Field>
+   <Field label="سياسة الموقع"><div>{policyPreview.policy?.mobile_geofence_enabled===false?'بدون نطاق جغرافي':policyPreview.exceptions?.location_exempt?'معفى من الموقع':('داخل '+String(policyPreview.policy?.mobile_geofence_radius_m||100)+'م · دقة GPS ≤ '+String(policyPreview.policy?.mobile_max_accuracy_m||120)+'م')}</div></Field>
+   <div style={{gridColumn:'1/-1'}}>
+    <strong>الاستثناءات الفعالة</strong>
+    <div className="finance-actions" style={{marginTop:8}}>
+     {policyPreview.exceptions?.attendance_exempt&&<Badge tone="blue">معفى من الحضور والانصراف</Badge>}
+     {policyPreview.exceptions?.location_exempt&&<Badge tone="green">معفى من الموقع</Badge>}
+     {policyPreview.exceptions?.late_exempt&&<Badge tone="orange">معفى من التأخير</Badge>}
+     {policyPreview.exceptions?.checkout_exempt&&<Badge tone="orange">معفى من الانصراف</Badge>}
+     {policyPreview.exceptions?.attendance_mode_override&&<Badge>طريقة حضور خاصة</Badge>}
+     {!policyPreview.exceptions?.attendance_exempt&&!policyPreview.exceptions?.location_exempt&&!policyPreview.exceptions?.late_exempt&&!policyPreview.exceptions?.checkout_exempt&&!policyPreview.exceptions?.attendance_mode_override&&<span className="muted-small">لا توجد استثناءات سارية.</span>}
+    </div>
+   </div>
+   {!!policyPreview.active_rules?.length&&<div style={{gridColumn:'1/-1'}}>
+    <strong>القواعد السارية في اليوم</strong>
+    <div style={{display:'grid',gap:6,marginTop:8}}>{policyPreview.active_rules.map(r=><div key={r.id} className="success-note"><Badge tone={ruleTone(r.rule_type)}>{ruleLabel(r.rule_type)}</Badge> <strong>{r.label||'بدون وصف'}</strong><span className="muted-small"> · {r.start_date===r.end_date?r.start_date:r.start_date+' → '+r.end_date}</span></div>)}</div>
+   </div>}
+   {policyPreview.policy?.mobile_require_trusted_device&&policyPreview.mobile_enabled&&<div className="success-note" style={{gridColumn:'1/-1'}}><ShieldCheck size={16}/> تسجيل الجوال لهذا الموظف يتطلب جهازًا موثوقًا ومعتمدًا.</div>}
+   <div className="modal-actions"><Button type="button" onClick={()=>setPolicyPreview(null)}>إغلاق</Button></div>
+  </div>}
+ </Modal>
+
  <Modal open={!!scheduleHistoryEmployee} onClose={()=>setScheduleHistoryEmployee(null)} title={scheduleHistoryEmployee?'سجل تغييرات الدوام — '+scheduleHistoryEmployee.name:'سجل تغييرات الدوام'} wide>
   <div style={{display:'grid',gap:12}}>
    <div className="success-note"><CalendarClock size={16}/> هذا السجل يعتمد على نسخ الدوام الفعلية التي تستخدمها التقارير. يعرض تاريخ السريان والمنفذ والسبب والجدول قبل/بعد، ولا يعتمد على الجدول الحالي وحده.</div>
@@ -287,15 +332,17 @@ export default function AttendanceEmployees({state,onChanged,onError,onNotice}){
 
  <Modal open={calendarOpen} onClose={()=>setCalendarOpen(false)} title={'الجدول والاستثناءات'+(calendarEmployee?' — '+calendarEmployee.name:'')} wide>
   <div style={{display:'grid',gap:14}}>
-   <div className="success-note"><CalendarDays size={16}/> استخدم «دوام مؤقت» لتغيير دوام يوم أو فترة محددة، و«إجازة/راحة» لإلغاء الالتزام، و«استئذان» للسماح بجزء من الدوام، و«عمل إضافي» لتسجيل وقت إضافي معتمد.</div>
+   <div className="success-note"><CalendarDays size={16}/> استخدم «دوام مؤقت» لتغيير دوام يوم أو فترة محددة، و«إجازة/راحة» لإلغاء الالتزام، و«استئذان» للسماح بجزء من الدوام. استثناءات سياسة الحضور مثل «معفى بالكامل» أو «معفى من الموقع» تُطبق فقط داخل فترة السريان المحددة ثم يعود الموظف تلقائيًا لسياسة فرعه.</div>
    <Card><div className="card-title"><h3>الاستثناءات المسجلة</h3><Badge>{(rulesMap.get(String(calendarEmployee?.id))||[]).length}</Badge></div><Table preferenceKey="attendance-calendar-rules" defaultPageSize={25} rows={rulesMap.get(String(calendarEmployee?.id))||[]} columns={calendarCols}/></Card>
    <Card><form onSubmit={saveRule} className="form-grid">
-    <Field label="النوع"><Select value={ruleForm.rule_type} onChange={e=>setRuleForm(x=>({...x,rule_type:e.target.value}))}><option value="leave">إجازة</option><option value="off">راحة / إجازة إضافية</option><option value="permission">استئذان</option><option value="overtime">عمل إضافي</option><option value="work_override">دوام مؤقت</option></Select></Field>
+    <Field label="النوع"><Select value={ruleForm.rule_type} onChange={e=>setRuleForm(x=>({...x,rule_type:e.target.value}))}><option value="leave">إجازة</option><option value="off">راحة / إجازة إضافية</option><option value="permission">استئذان</option><option value="overtime">عمل إضافي</option><option value="work_override">دوام مؤقت</option><option value="attendance_exempt">معفى من الحضور والانصراف بالكامل</option><option value="location_exempt">معفى من شرط الموقع</option><option value="late_exempt">معفى من التأخير</option><option value="checkout_exempt">معفى من تسجيل الانصراف</option><option value="attendance_mode_override">طريقة حضور خاصة للموظف</option></Select></Field>
     <Field label="الوصف"><Input value={ruleForm.label||''} onChange={e=>setRuleForm(x=>({...x,label:e.target.value}))} placeholder="مثال: مهمة خارجية / دوام رمضان"/></Field>
     <Field label="من تاريخ"><Input type="date" value={ruleForm.start_date||''} onChange={e=>setRuleForm(x=>({...x,start_date:e.target.value,end_date:x.end_date&&x.end_date>=e.target.value?x.end_date:e.target.value}))} required/></Field>
     <Field label="إلى تاريخ"><Input type="date" value={ruleForm.end_date||''} min={ruleForm.start_date||''} onChange={e=>setRuleForm(x=>({...x,end_date:e.target.value}))} required/></Field>
     {needsTime&&<><Field label="من الساعة"><Input type="time" value={ruleForm.start_time||''} onChange={e=>setRuleForm(x=>({...x,start_time:e.target.value}))} required/></Field><Field label="إلى الساعة"><Input type="time" value={ruleForm.end_time||''} onChange={e=>setRuleForm(x=>({...x,end_time:e.target.value}))} required/></Field></>}
     {needsGrace&&<Field label="السماح بالدقائق"><Input type="number" min="0" max="240" value={ruleForm.grace_minutes??10} onChange={e=>setRuleForm(x=>({...x,grace_minutes:Number(e.target.value||0)}))}/></Field>}
+    {needsModeOverride&&<Field label="طريقة الحضور الخاصة"><Select value={ruleForm.policy_payload?.attendance_mode||'mobile'} onChange={e=>setRuleForm(x=>({...x,policy_payload:{...(x.policy_payload||{}),attendance_mode:e.target.value}}))}><option value="biometric">جهاز البصمة فقط</option><option value="mobile">الجوال فقط</option><option value="hybrid">البصمة أو الجوال</option></Select></Field>}
+    {['attendance_exempt','location_exempt','late_exempt','checkout_exempt','attendance_mode_override'].includes(ruleForm.rule_type)&&<div className="success-note" style={{gridColumn:'1/-1'}}>{ruleForm.rule_type==='attendance_exempt'?'خلال هذه الفترة لن يُحسب الموظف غائبًا أو متأخرًا بسبب عدم وجود حركة، وسيظهر في التقرير كـ «معفى».':ruleForm.rule_type==='location_exempt'?'الموظف يظل مطالبًا بالتسجيل، لكن عند تفعيل الحضور بالجوال لن يطبق عليه شرط نطاق موقع الفرع خلال هذه الفترة.':ruleForm.rule_type==='late_exempt'?'الحضور يظل مطلوبًا، لكن التأخير لا يُسجل كمخالفة خلال فترة الاستثناء.':ruleForm.rule_type==='checkout_exempt'?'تسجيل الحضور يظل مطلوبًا، وعدم وجود حركة انصراف لا يُعامل كبصمة ناقصة خلال فترة الاستثناء.':'هذه الطريقة تتغلب على طريقة الحضور الأساسية للفرع خلال فترة السريان فقط.'}</div>}
     <Field label="ملاحظات"><Textarea value={ruleForm.notes||''} onChange={e=>setRuleForm(x=>({...x,notes:e.target.value}))}/></Field>
     <Field label="سبب التعديل"><Input value={ruleForm.reason||''} onChange={e=>setRuleForm(x=>({...x,reason:e.target.value}))} placeholder="اختياري"/></Field>
     <div className="modal-actions"><Button type="button" onClick={()=>setRuleForm(blankRule())}>جديد</Button><Button variant="primary" type="submit" disabled={ruleBusy}>{ruleBusy?'جاري الحفظ...':ruleForm.id?'حفظ التعديل':'إضافة'}</Button></div>
