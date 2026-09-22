@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BellRing,CalendarClock,Fingerprint,Package,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity,Siren} from 'lucide-react';
+import {BellRing,CalendarClock,Fingerprint,Package,RefreshCw,Plus,Link2,Wifi,WifiOff,Settings2,ShieldCheck,LayoutDashboard,Users,ServerCog,BarChart3,SlidersHorizontal,Activity,Siren,Smartphone} from 'lucide-react';
 import {api} from '../../lib/api.js';
 import {Badge,Button,Card,ErrorBox,Field,Input,Modal,Select,Table} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
@@ -17,6 +17,7 @@ import AttendanceIncidents from './AttendanceIncidents.jsx';
 import AttendancePreventiveMaintenance from './AttendancePreventiveMaintenance.jsx';
 import AttendanceDeviceLifecycle from './AttendanceDeviceLifecycle.jsx';
 import AttendanceBiometricReconciliation from './AttendanceBiometricReconciliation.jsx';
+import AttendanceMobileControl from './AttendanceMobileControl.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
 const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
@@ -25,7 +26,7 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance({initialTab=''}){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],clockChecks:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],incidentMaintenance:[],maintenanceActions:[],maintenanceAnalytics:{},preventiveMaintenancePlans:[],preventiveMaintenanceRuns:[],preventiveMaintenanceAlerts:[],preventiveMaintenanceAnalytics:{},deviceAssets:[],deviceAssetEvents:[],deviceLifecycle:[],deviceLifecycleAlerts:[],deviceLifecycleAnalytics:{},watchdog:null,deleteRequests:[],calendarRules:[],policies:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],scheduleVersions:[],biometricProfiles:[],biometricDeviceStates:[],biometricInventory:[],biometricEnrollmentRequests:[],linkIdentityReviews:[],selfServiceBiometricRequests:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],clockChecks:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],incidentMaintenance:[],maintenanceActions:[],maintenanceAnalytics:{},preventiveMaintenancePlans:[],preventiveMaintenanceRuns:[],preventiveMaintenanceAlerts:[],preventiveMaintenanceAnalytics:{},deviceAssets:[],deviceAssetEvents:[],deviceLifecycle:[],deviceLifecycleAlerts:[],deviceLifecycleAnalytics:{},watchdog:null,deleteRequests:[],calendarRules:[],policies:[],policyVersions:[],mobileDevices:[],mobileEvents:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],scheduleVersions:[],biometricProfiles:[],biometricDeviceStates:[],biometricInventory:[],biometricEnrollmentRequests:[],linkIdentityReviews:[],selfServiceBiometricRequests:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:'',verify:'',statusCode:'',datePreset:'',fromDate:'',toDate:''},unlinked:{q:'',branch:'',device:''}});
@@ -45,13 +46,13 @@ export default function Attendance({initialTab=''}){
   return ()=>{clearInterval(id);if(typeof document!=='undefined')document.removeEventListener('visibilitychange',onVisible)}
  },[]);
 
- const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[];
+ const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[],mobileDevices=state.mobileDevices||[],mobileEvents=state.mobileEvents||[],policies=state.policies||[];
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
- const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length;
+ const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length,pendingMobileDevices=mobileDevices.filter(x=>x.status==='pending').length,mobileBranchCount=branches.filter(b=>['mobile','hybrid'].includes(policies.find(p=>String(p.branch_id)===String(b.id))?.attendance_mode)).length;
 
  const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
@@ -108,6 +109,7 @@ export default function Attendance({initialTab=''}){
   {id:'employees',label:'الموظفون والجداول',icon:Users,badge:employees.length},
   {id:'devices',label:'الأجهزة والمزامنة',icon:ServerCog,badge:devices.length},
   ...(state.permissions?.manage_biometrics?[{id:'biometric-reconcile',label:'مطابقة البصمات',icon:Fingerprint}]:[]),
+  ...((state.permissions?.manage_policies||state.permissions?.manage_employees)?[{id:'mobile',label:'الحضور بالجوال',icon:Smartphone,badge:pendingMobileDevices||null}]:[]),
   {id:'alerts',label:'التنبيهات',icon:BellRing,badge:Number(state.notificationCounts?.new||0)||null},
   {id:'incidents',label:'الحوادث و SLA',icon:Siren,badge:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0)||null},
   {id:'preventive',label:'الصيانة الوقائية',icon:CalendarClock,badge:Number(state.preventiveMaintenanceAnalytics?.overdue||0)+Number(state.preventiveMaintenanceAnalytics?.due_soon||0)||null},
@@ -115,7 +117,7 @@ export default function Attendance({initialTab=''}){
   {id:'links',label:'الربط والحركات',icon:Activity,badge:unlinked||null},
   ...(state.permissions?.reports?[{id:'reports',label:'التقارير والمخالفات',icon:BarChart3}]:[]),
   ...(state.permissions?.manage_policies?[{id:'policies',label:'السياسات',icon:SlidersHorizontal}]:[])
- ],[employees.length,devices.length,unlinked,state.permissions?.manage_biometrics,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
+ ],[employees.length,devices.length,unlinked,pendingMobileDevices,state.permissions?.manage_biometrics,state.permissions?.manage_policies,state.permissions?.manage_employees,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,initialTab||'overview');
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,tabs.length]);
 
@@ -168,7 +170,7 @@ export default function Attendance({initialTab=''}){
   <ErrorBox error={error}/>{notice&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}>{notice}</div>}
 
   {activeTab==='overview'&&<>
-   <div className="stats-grid"><Card><div className="stat-card"><div><span>الأجهزة</span><strong>{devices.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>متصل الآن</span><strong>{onlineCount}</strong></div></div></Card><Card><div className="stat-card"><div><span>بصمات اليوم</span><strong>{todayLogs.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>غير مرتبطة بموظف</span><strong>{unlinked}</strong></div></div></Card></div>
+   <div className="stats-grid"><Card><div className="stat-card"><div><span>الأجهزة</span><strong>{devices.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>متصل الآن</span><strong>{onlineCount}</strong></div></div></Card><Card><div className="stat-card"><div><span>بصمات اليوم</span><strong>{todayLogs.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>حركات الجوال اليوم</span><strong>{mobileEvents.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>فروع جوال / مختلط</span><strong>{mobileBranchCount}</strong></div></div></Card><Card><div className="stat-card"><div><span>أجهزة جوال تنتظر اعتماد</span><strong>{pendingMobileDevices}</strong></div></div></Card><Card><div className="stat-card"><div><span>غير مرتبطة بموظف</span><strong>{unlinked}</strong></div></div></Card></div>
    <Card><div className="card-title"><div><h3><Fingerprint size={19}/> إعداد ADMS المركزي</h3><small>حالة الاتصال المعتمدة لأجهزة ZKTeco</small></div><Badge tone="green">ZKTeco Push</Badge></div><div className="stats-grid"><Card><div className="stat-card"><div><span>Domain</span><strong dir="ltr">{state.adms?.host||'system.almaheralmasi.sa'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Port</span><strong>{state.adms?.port||443}</strong></div></div></Card><Card><div className="stat-card"><div><span>HTTPS</span><strong>{state.adms?.https===false?'OFF':'ON'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Proxy</span><strong>OFF</strong></div></div></Card></div><div className="success-note"><ShieldCheck size={16}/> النظام يستقبل الحركات، ويمكنه اكتشاف حالة بصمات الأصابع والوجه الموجودة على أجهزة ZKTeco. يتم حفظ PIN ونوع البصمة ورقم الإصبع والحالة فقط، ولا يتم حفظ قالب FP/Face الخام.</div></Card>
    <Card><div className="card-title"><div><h3>آخر الحركات</h3><small>آخر 10 بصمات مستلمة للمتابعة السريعة</small></div><Badge>{Math.min(10,logs.length)}</Badge></div><Table preferenceKey="attendance-overview-logs" defaultPageSize={10} rows={logs.slice(0,10)} columns={logCols}/></Card>
   </>}
@@ -180,6 +182,7 @@ export default function Attendance({initialTab=''}){
  {key:'status',label:'الحالة',value:listFilters.devices.status,onChange:v=>setListFilter('devices','status',v),options:[{value:'active',label:'نشط'},{value:'disabled',label:'موقوف'}]}
  ]}/><Table preferenceKey="attendance-devices" defaultPageSize={25} rows={filteredDevices} columns={deviceCols}/></></Card></>}
   {activeTab==='biometric-reconcile'&&state.permissions?.manage_biometrics&&<AttendanceBiometricReconciliation state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenLinks={()=>setActiveTab('links')} onOpenDevices={()=>setActiveTab('devices')}/>}
+  {activeTab==='mobile'&&(state.permissions?.manage_policies||state.permissions?.manage_employees)&&<AttendanceMobileControl state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenPolicies={()=>setActiveTab('policies')} onOpenEmployees={()=>setActiveTab('employees')}/>}
   {activeTab==='alerts'&&<AttendanceNotifications state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenDevices={()=>setActiveTab('devices')} onOpenLinks={()=>setActiveTab('links')} onOpenPreventive={()=>setActiveTab('preventive')} onOpenLifecycle={()=>setActiveTab('lifecycle')}/>}
   {activeTab==='incidents'&&<AttendanceIncidents state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenDevices={()=>setActiveTab('devices')} onOpenLinks={()=>setActiveTab('links')} onOpenPreventive={()=>setActiveTab('preventive')}/>}
   {activeTab==='preventive'&&<AttendancePreventiveMaintenance state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenIncidents={()=>setActiveTab('incidents')}/>}
