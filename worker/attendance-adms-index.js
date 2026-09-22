@@ -342,24 +342,24 @@ async function retryAttendanceDelivery(env,me,body){
 
 async function runDeviceClockSyncWatchdog(env){
  const mode=await runtimeMode(env),systemActor={id:'system:clock-watchdog',name:'Clock Sync Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}},devices=await rest(env,'attendance_devices?status=eq.active&select=*&order=created_at.asc').catch(()=>[]);
- let queued=0,skipped=0,errors=0,eligible=0;
+ let queued=0,skipped=0,errors=0,eligible=0;const errorDevices=[];
  for(const device of devices||[]){
   const clock=device?.metadata?.clock_drift||{},drift=Number(clock.drift_seconds),fresh=ageSeconds(clock.checked_at),seenAge=ageSeconds(device.last_command_poll_at||device.last_seen_at);
   if(clock.confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||fresh==null||fresh>6*3600||seenAge==null||seenAge>1800)continue;
   eligible+=1;
-  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else errors+=1}
+  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
  }
- return {ok:true,devices:(devices||[]).length,eligible,queued,skipped,errors,checked_at:new Date().toISOString()};
+ return {ok:true,devices:(devices||[]).length,eligible,queued,skipped,errors,error_devices:errorDevices,checked_at:new Date().toISOString()};
 }
 async function autoSyncDriftedDeviceClocks(env,state,systemActor){
- const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,errors=0;
+ const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,errors=0;const errorDevices=[];
  for(const h of health){
   const drift=Number(h?.clock_drift_seconds),fresh=ageSeconds(h?.clock_checked_at);
   if(h?.clock_confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||h.connection==='offline'||fresh==null||fresh>6*3600)continue;
   const device=map.get(String(h.device_id));if(!device||device.status!=='active')continue;
-  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else errors+=1}
+  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
  }
- return {queued,skipped,errors};
+ return {queued,skipped,errors,error_devices:errorDevices};
 }
 function promiseTimeout(promise,ms,message){
  let timer;
@@ -429,8 +429,8 @@ async function runAttendanceQuickWatchdog(env){
  await reconcileAttendanceIncidents(env,notifications,policies||[]);
  const clockSync=await autoSyncDriftedDeviceClocks(env,{devices,deviceHealth},{id:'system:attendance-watchdog',name:'Attendance Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}});
  const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),active=(notifications||[]).filter(x=>x.active&&x.status!=='resolved'),critical=active.filter(x=>x.severity==='critical'),escalated=active.filter(x=>Number(x.escalation_level)>0);
- const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
- await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
+ const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),clock_sync_error_devices:Array.isArray(clockSync?.error_devices)?clockSync.error_devices:[],completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
+ await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors,clock_sync_error_devices:summary.clock_sync_error_devices},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
  return summary;
 }
 async function runAttendanceWatchdog(env,source='scheduled'){
@@ -802,13 +802,13 @@ async function queueClockSync(env,device,me,{source='manual',force=false}={}){
  if(await hasAttendanceHistoryTransfer(env,device))throw Object.assign(new Error('يوجد نقل سجل حضور تاريخي قيد التنفيذ. انتظر اكتماله قبل تعديل ساعة الجهاز.'),{status:409});
  const previous=device?.metadata?.last_clock_sync||{},lastMs=new Date(previous.requested_at||previous.accepted_at||0).getTime();
  if(!force&&Number.isFinite(lastMs)&&Date.now()-lastMs<6*3600000)return {ok:true,queued:false,cooldown:true,command_id:previous.command_id||null,message:'تمت محاولة مزامنة الساعة خلال آخر 6 ساعات؛ لن يكررها النظام تلقائيًا الآن.'};
- const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),group='clock-sync:'+device.id+':'+Date.now(),created=await queueCommands(env,device,me,[
-  {type:'clock_timezone_sync',command:'SET OPTIONS TimeZone=3',operation_group_id:group,metadata:{clock_timezone_sync:true,source,requested_at:requestedAt,timezone:'Asia/Riyadh',offset_hours:3}},
+ const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),group=crypto.randomUUID(),machineTz='+0300',created=await queueCommands(env,device,me,[
+  {type:'clock_timezone_sync',command:'SET OPTIONS MachineTZ='+machineTz,operation_group_id:group,metadata:{clock_timezone_sync:true,source,requested_at:requestedAt,timezone:'Asia/Riyadh',machine_tz:machineTz,offset_hours:3}},
   {type:'clock_sync',command:spec.command,operation_group_id:group,metadata:{clock_sync:true,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null}}
  ]),timezoneCmd=created?.find(x=>x.command_type==='clock_timezone_sync')||null,cmd=created?.find(x=>x.command_type==='clock_sync')||null;
- const meta={...(device.metadata||{}),last_clock_sync:{status:'queued',command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,timezone:'Asia/Riyadh',timezone_offset_hours:3,algorithm:spec.algorithm,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null,awaiting_verification:true,verification_samples:0}};
+ const meta={...(device.metadata||{}),last_clock_sync:{status:'queued',command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,source,requested_at:requestedAt,encoded_time:spec.encoded,server_tz:spec.serverTz,timezone:'Asia/Riyadh',machine_tz:machineTz,timezone_offset_hours:3,algorithm:spec.algorithm,operation_group_id:group,previous_drift_seconds:device?.metadata?.clock_drift?.drift_seconds??null,awaiting_verification:true,verification_samples:0}};
  await rest(env,'attendance_devices?id=eq.'+enc(device.id),{method:'PATCH',body:{metadata:meta,updated_at:requestedAt},prefer:'return=minimal'}).catch(()=>{});device.metadata=meta;
- await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:cmd?.id||null,source,encoded_time:spec.encoded,server_tz:spec.serverTz,algorithm:spec.algorithm},source==='auto'?'مزامنة تلقائية لساعة جهاز البصمة':'مزامنة ساعة جهاز البصمة مع وقت السيرفر');
+ await audit(env,me,'attendance_device_clock_sync_requested','attendance_device',device.id,device.branch_id,null,{command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,operation_group_id:group,source,encoded_time:spec.encoded,server_tz:spec.serverTz,machine_tz:machineTz,algorithm:spec.algorithm},source==='auto'?'مزامنة تلقائية لساعة جهاز البصمة':'مزامنة ساعة جهاز البصمة مع وقت السيرفر');
  return {ok:true,queued:true,command_id:cmd?.id||null,timezone_command_id:timezoneCmd?.id||null,encoded_time:spec.encoded,server_tz:spec.serverTz,message:'تم إرسال ضبط المنطقة الزمنية للسعودية ثم تحديث الساعة الفعلية من السيرفر. سيتم التحقق من النتيجة من حركات Live الجديدة.'};
 }
 async function updateClockSyncResult(env,cmd,rc,resultBody){
