@@ -129,14 +129,14 @@ export default function AttendanceSelfService({go}){
       {data.mobile_attendance.policy?.location_exempt&&<Badge tone="blue"><MapPin size={14}/> معفى من شرط الموقع</Badge>}
       {data.mobile_attendance.policy?.require_trusted_device&&<Badge><ShieldCheck size={14}/> جهاز موثوق مطلوب</Badge>}
      </div>
-     <div className="success-note"><Clock3 size={16}/> آخر حالة اليوم: {(data.mobile_attendance.today_events||[]).length?((data.mobile_attendance.today_events.at(-1)?.event_type==='check_in'?'حضور':'انصراف')+' — '+fmt(data.mobile_attendance.today_events.at(-1)?.occurred_at)):'لا توجد حركة مسجلة اليوم'}</div>
+     <div className="success-note"><Clock3 size={16}/> آخر حالة اليوم: {data.mobile_attendance.last_attendance_event?((data.mobile_attendance.last_attendance_event.event_type==='check_in'?'حضور':'انصراف')+' — '+fmt(data.mobile_attendance.last_attendance_event.occurred_at)+' · '+(data.mobile_attendance.last_attendance_event.source==='mobile'?'جوال':'جهاز بصمة')):'لا توجد حركة مسجلة اليوم'}{Number(data.mobile_attendance.today_punches||0)>0&&<span className="muted-small"> · إجمالي الحركات {data.mobile_attendance.today_punches}</span>}</div>
      <div>
       <Button variant="primary" onClick={()=>captureMobile(data.mobile_attendance.next_event_type||'check_in')} disabled={mobileBusy}>
        {(data.mobile_attendance.next_event_type||'check_in')==='check_in'?<LogIn size={16}/>:<LogOut size={16}/>}
        {mobileBusy?' جاري التحقق والتسجيل...':(data.mobile_attendance.next_event_type||'check_in')==='check_in'?' تسجيل حضور الآن':' تسجيل انصراف الآن'}
       </Button>
      </div>
-     {!!(data.mobile_attendance.today_events||[]).length&&<div style={{display:'grid',gap:6}}>{data.mobile_attendance.today_events.map(ev=><div key={ev.id} className="muted-small"><strong>{ev.event_type==='check_in'?'حضور':'انصراف'}</strong> · {fmt(ev.occurred_at)}{ev.distance_from_site_m!=null?' · '+Math.round(ev.distance_from_site_m)+'م من الموقع':''}</div>)}</div>}
+     {!!(data.mobile_attendance.today_events||[]).length&&<div><strong>حركات الجوال اليوم</strong><div style={{display:'grid',gap:6,marginTop:6}}>{data.mobile_attendance.today_events.map(ev=><div key={ev.id} className="muted-small"><strong>{ev.event_type==='check_in'?'حضور':'انصراف'}</strong> · {fmt(ev.occurred_at)}{ev.distance_from_site_m!=null?' · '+Math.round(ev.distance_from_site_m)+'م من الموقع':''}</div>)}</div></div>}
     </div>:<div className="training-banner">سياسة هذا الموظف حاليًا لا تسمح بالحضور من الجوال. استخدم جهاز البصمة أو راجع سياسة الفرع.</div>}
    </Card>}
 
