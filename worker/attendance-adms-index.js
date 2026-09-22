@@ -1961,7 +1961,8 @@ async function attendanceState(env,me,url){
  for(const x of deliveries||[]){if(Object.prototype.hasOwnProperty.call(deliveryCounts,x.status))deliveryCounts[x.status]+=1}
  const sanitizedDeliveries=(deliveries||[]).map(x=>({...x,destination_masked:maskAttendanceDestination(x.channel,x.destination),destination:undefined}));
  const allIncidentPolicies=await rest(env,'attendance_incident_sla_policies?select=*&order=created_at.asc').catch(()=>[]),incidentPolicies=(allIncidentPolicies||[]).filter(p=>!p.branch_id||!branchId||txt(p.branch_id)===txt(branchId));
- const incidents=await reconcileAttendanceIncidents(env,notifications,incidentPolicies),incidentIds=incidents.map(x=>x.id).filter(Boolean),incidentEvents=incidentIds.length?await rest(env,'attendance_incident_events?incident_id=in.('+incidentIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=1000').catch(()=>[]):[];
+ const incidentNotifications=(notifications||[]).filter(x=>x.category!=='attendance_workflow');
+ const incidents=await reconcileAttendanceIncidents(env,incidentNotifications,incidentPolicies),incidentIds=incidents.map(x=>x.id).filter(Boolean),incidentEvents=incidentIds.length?await rest(env,'attendance_incident_events?incident_id=in.('+incidentIds.map(enc).join(',')+')&select=*&order=created_at.desc&limit=1000').catch(()=>[]):[];
  const incidentCounts={open:0,acknowledged:0,investigating:0,resolved:0,closed:0,breached:0,critical:0,unassigned:0};
  let responseSum=0,responseN=0,resolutionSum=0,resolutionN=0;const monthCutoff=Date.now()-30*86400000,deviceIncidentMap=new Map(),branchIncidentMap=new Map();
  for(const x of incidents||[]){
@@ -3088,6 +3089,7 @@ async function reviewSelfServiceBiometricRequest(env,me,body){
  if(decision==='reject'){
   if(!canManageLinks(me)&&!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لرفض طلب التصحيح.'),{status:403});
   const after=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id),{method:'PATCH',body:{status:'rejected',resolved_at:now,resolved_by:who,resolution_note:reason||'تم رفض الطلب بعد المراجعة'},prefer:'return=representation'}))?.[0]||req;
+  await resolveAttendanceWorkflowNotification(env,'attendance_self_service_request:'+id,'تم رفض طلب الخدمة الذاتية').catch(()=>{});
   await audit(env,me,'attendance_self_service_request_rejected','attendance_self_service_request',id,req.branch_id,req,after,reason||'رفض طلب خدمة ذاتية').catch(()=>{});
   return {ok:true,request:after,message:'تم رفض الطلب وتسجيل السبب.'};
  }
@@ -3102,6 +3104,7 @@ async function reviewSelfServiceBiometricRequest(env,me,body){
   await rest(env,'attendance_employee_links?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:staff.id,updated_by:who,updated_at:now},prefer:'return=minimal'}).catch(()=>{});
   await rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id),{method:'PATCH',body:{staff_user_id:staff.id},prefer:'return=minimal'}).catch(()=>{});
   const after=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id),{method:'PATCH',body:{status:'approved',resolved_at:now,resolved_by:who,resolution_note:reason||'تم اعتماد ربط الحساب بملف الحضور'},prefer:'return=representation'}))?.[0]||req;
+  await resolveAttendanceWorkflowNotification(env,'attendance_self_service_request:'+id,'تم اعتماد ربط الحساب بملف الحضور').catch(()=>{});
   await audit(env,me,'attendance_self_service_binding_approved','attendance_employee',employee.id,employee.branch_id,{staff_user_id:employee.staff_user_id},{staff_user_id:staff.id,request_id:id},reason||'اعتماد ربط حساب الموظف').catch(()=>{});
   return {ok:true,request:after,message:'تم اعتماد ربط حساب الموظف بملف الحضور.'};
  }
