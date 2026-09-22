@@ -19,6 +19,7 @@ import AttendanceDeviceLifecycle from './AttendanceDeviceLifecycle.jsx';
 import AttendanceBiometricReconciliation from './AttendanceBiometricReconciliation.jsx';
 import AttendanceMobileControl from './AttendanceMobileControl.jsx';
 import AttendanceActionCenter,{attendanceActionItems} from './AttendanceActionCenter.jsx';
+import AttendanceApprovals from './AttendanceApprovals.jsx';
 
 const blankDevice={id:'',name:'',serial_number:'',model:'',branch_id:'',connection_mode:'adms',status:'active',data_environment:'training',reason:''};
 const blankLink={id:'',device_id:'',device_pin:'',attendance_employee_id:'',staff_user_id:'',display_name:''};
@@ -27,7 +28,7 @@ function dayKey(v){try{const p=new Intl.DateTimeFormat('en',{timeZone:'Asia/Riya
 function online(d){const v=d?.last_command_poll_at||d?.last_seen_at;if(!v)return false;return Date.now()-new Date(v).getTime()<30*60*1000}
 
 export default function Attendance({initialTab=''}){
- const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],clockChecks:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],incidentMaintenance:[],maintenanceActions:[],maintenanceAnalytics:{},preventiveMaintenancePlans:[],preventiveMaintenanceRuns:[],preventiveMaintenanceAlerts:[],preventiveMaintenanceAnalytics:{},deviceAssets:[],deviceAssetEvents:[],deviceLifecycle:[],deviceLifecycleAlerts:[],deviceLifecycleAnalytics:{},watchdog:null,deleteRequests:[],calendarRules:[],policies:[],policyVersions:[],mobileDevices:[],mobileEvents:[],mobileAttempts:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],scheduleVersions:[],biometricProfiles:[],biometricDeviceStates:[],biometricInventory:[],biometricEnrollmentRequests:[],linkIdentityReviews:[],selfServiceBiometricRequests:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const [state,setState]=useState({devices:[],deviceUsers:[],commands:[],deviceShiftTemplates:[],deviceHealth:[],deviceHealthHistory:[],devicePredictiveAlerts:[],healthEvents:[],clockChecks:[],notifications:[],notificationCounts:{},escalationRules:[],escalationEvents:[],deliverySettings:{},deliveries:[],deliveryCounts:{},incidents:[],incidentCounts:{},incidentAnalytics:{},incidentPolicies:[],incidentEvents:[],incidentMaintenance:[],maintenanceActions:[],maintenanceAnalytics:{},preventiveMaintenancePlans:[],preventiveMaintenanceRuns:[],preventiveMaintenanceAlerts:[],preventiveMaintenanceAnalytics:{},deviceAssets:[],deviceAssetEvents:[],deviceLifecycle:[],deviceLifecycleAlerts:[],deviceLifecycleAnalytics:{},watchdog:null,deleteRequests:[],calendarRules:[],policies:[],policyVersions:[],mobileDevices:[],mobileEvents:[],mobileAttempts:[],correctionRequests:[],links:[],logs:[],unlinkedGroups:[],unlinkedTotal:0,employees:[],shiftPeriods:[],scheduleVersions:[],biometricProfiles:[],biometricDeviceStates:[],biometricInventory:[],biometricEnrollmentRequests:[],linkIdentityReviews:[],selfServiceBiometricRequests:[],users:[],branches:[],permissions:{},adms:{}}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [deviceOpen,setDeviceOpen]=useState(false),[deviceForm,setDeviceForm]=useState(blankDevice),[deviceBusy,setDeviceBusy]=useState(false);
  const [linkOpen,setLinkOpen]=useState(false),[linkForm,setLinkForm]=useState(blankLink),[linkBusy,setLinkBusy]=useState(false);
  const [listFilters,setListFilters]=useState({devices:{q:'',branch:'',connectivity:'',status:''},links:{q:'',branch:'',device:''},logs:{q:'',branch:'',device:'',employee:'',environment:'',verify:'',statusCode:'',datePreset:'',fromDate:'',toDate:''},unlinked:{q:'',branch:'',device:''}});
@@ -47,14 +48,14 @@ export default function Attendance({initialTab=''}){
   return ()=>{clearInterval(id);if(typeof document!=='undefined')document.removeEventListener('visibilitychange',onVisible)}
  },[]);
 
- const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[],mobileDevices=state.mobileDevices||[],mobileEvents=state.mobileEvents||[],mobileAttempts=state.mobileAttempts||[],policies=state.policies||[];
+ const branches=state.branches||[],devices=state.devices||[],links=state.links||[],logs=state.logs||[],unlinkedGroups=state.unlinkedGroups||[],employees=state.employees||[],users=state.users||[],deviceUsers=state.deviceUsers||[],mobileDevices=state.mobileDevices||[],mobileEvents=state.mobileEvents||[],mobileAttempts=state.mobileAttempts||[],correctionRequests=state.correctionRequests||[],policies=state.policies||[];
  const branchMap=useMemo(()=>new Map(branches.map(x=>[String(x.id),x.name||x.id])),[branches]);
  const deviceMap=useMemo(()=>new Map(devices.map(x=>[String(x.id),x])),[devices]);
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
  const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length,pendingMobileDevices=mobileDevices.filter(x=>x.status==='pending').length,mobileProblemCount=mobileAttempts.length,mobileBranchCount=branches.filter(b=>['mobile','hybrid'].includes(policies.find(p=>String(p.branch_id)===String(b.id))?.attendance_mode)).length;
- const actionItems=useMemo(()=>attendanceActionItems(state),[state]),actionCount=actionItems.length;
+ const actionItems=useMemo(()=>attendanceActionItems(state),[state]),actionCount=actionItems.length,pendingApprovalCount=correctionRequests.filter(x=>x.status==='pending').length+mobileDevices.filter(x=>x.status==='pending').length+(state.selfServiceBiometricRequests||[]).filter(x=>x.status==='pending').length;
 
  const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
@@ -109,6 +110,7 @@ export default function Attendance({initialTab=''}){
  const tabs=useMemo(()=>[
   {id:'overview',label:'نظرة عامة',icon:LayoutDashboard},
   {id:'action-center',label:'مركز المتابعة',icon:ClipboardCheck,badge:actionCount||null},
+  ...((state.permissions?.manage_employees||state.permissions?.manage_policies||state.permissions?.manage_links)?[{id:'approvals',label:'الموافقات',icon:ShieldCheck,badge:pendingApprovalCount||null}]:[]),
   {id:'employees',label:'الموظفون والجداول',icon:Users,badge:employees.length},
   {id:'devices',label:'الأجهزة والمزامنة',icon:ServerCog,badge:devices.length},
   ...(state.permissions?.manage_biometrics?[{id:'biometric-reconcile',label:'مطابقة البصمات',icon:Fingerprint}]:[]),
@@ -120,7 +122,7 @@ export default function Attendance({initialTab=''}){
   {id:'links',label:'الربط والحركات',icon:Activity,badge:unlinked||null},
   ...(state.permissions?.reports?[{id:'reports',label:'التقارير والمخالفات',icon:BarChart3}]:[]),
   ...(state.permissions?.manage_policies?[{id:'policies',label:'السياسات',icon:SlidersHorizontal}]:[])
- ],[employees.length,devices.length,unlinked,actionCount,pendingMobileDevices,state.permissions?.manage_biometrics,state.permissions?.manage_policies,state.permissions?.manage_employees,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
+ ],[employees.length,devices.length,unlinked,actionCount,pendingApprovalCount,pendingMobileDevices,state.permissions?.manage_biometrics,state.permissions?.manage_policies,state.permissions?.manage_employees,state.permissions?.manage_links,state.notificationCounts?.new,state.incidentCounts?.open,state.incidentCounts?.acknowledged,state.incidentCounts?.investigating,state.preventiveMaintenanceAnalytics?.overdue,state.preventiveMaintenanceAnalytics?.due_soon,state.deviceLifecycleAnalytics?.replace_soon,state.deviceLifecycleAnalytics?.replacement_review,state.permissions?.reports,state.permissions?.manage_policies]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:attendance',tabs,initialTab||'overview');
  useEffect(()=>{if(initialTab&&tabs.some(t=>t.id===initialTab))setActiveTab(initialTab)},[initialTab,tabs.length]);
 
@@ -179,6 +181,7 @@ export default function Attendance({initialTab=''}){
   </>}
 
     {activeTab==='action-center'&&<AttendanceActionCenter state={state} onOpenMobile={()=>setActiveTab('mobile')} onOpenEmployees={()=>setActiveTab('employees')} onOpenPolicies={()=>setActiveTab('policies')} onOpenLinks={()=>setActiveTab('links')}/>}
+  {activeTab==='approvals'&&(state.permissions?.manage_employees||state.permissions?.manage_policies||state.permissions?.manage_links)&&<AttendanceApprovals state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenEmployees={()=>setActiveTab('employees')} onOpenBiometrics={()=>setActiveTab('biometric-reconcile')}/>}
 {activeTab==='employees'&&<AttendanceEmployees state={state} onChanged={load} onError={setError} onNotice={setNotice}/>}
   {activeTab==='devices'&&<><AttendanceDeviceData state={state} onChanged={load} onError={setError} onNotice={setNotice} onOpenLinks={()=>setActiveTab('links')}/><Card><div className="card-title"><h3>أجهزة البصمة</h3><Badge>{devices.length}</Badge></div><><SmartListFilters storageKey="attendance-devices-filters" search={listFilters.devices.q} onSearchChange={v=>setListFilter('devices','q',v)} searchPlaceholder="ابحث باسم الجهاز أو السيريال أو الموديل..." totalCount={devices.length} resultCount={filteredDevices.length} onReset={()=>resetListFilter('devices')} filters={[
  {key:'branch',label:'الفرع',value:listFilters.devices.branch,onChange:v=>setListFilter('devices','branch',v),options:branchOptions},
