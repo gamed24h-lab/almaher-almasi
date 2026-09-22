@@ -133,8 +133,9 @@ async function updateAttendanceNotification(env,me,body){
  const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;let patch;
  if(op==='seen')patch={status:before.status==='resolved'?'resolved':'seen',seen_at:before.seen_at||now,seen_by:before.seen_by||who,updated_at:now};
  else if(op==='resolved'){
-  if(!canManageDevices(me)&&!canManageLinks(me))throw Object.assign(new Error('لا توجد صلاحية لمعالجة هذا التنبيه.'),{status:403});
-  patch={status:'resolved',resolved_at:now,resolved_by:who,resolved_reason:txt(body.reason)||'تمت المعالجة يدويًا',updated_at:now};
+  const workflow=before.category==='attendance_workflow',allowed=workflow?(canManageEmployees(me)||canManagePolicies(me)||canReviewViolations(me)||elevated(me)):(canManageDevices(me)||canManageLinks(me));
+  if(!allowed)throw Object.assign(new Error('لا توجد صلاحية لمعالجة هذا التنبيه.'),{status:403});
+  patch={status:'resolved',active:false,resolved_at:now,resolved_by:who,resolved_reason:txt(body.reason)||'تمت المعالجة يدويًا',updated_at:now};
  }else throw Object.assign(new Error('إجراء التنبيه غير صحيح.'),{status:400});
  const after=(await rest(env,'attendance_notifications?id=eq.'+enc(id),{method:'PATCH',body:patch,prefer:'return=representation'}))?.[0]||null;
  await audit(env,me,op==='seen'?'attendance_notification_seen':'attendance_notification_resolved','attendance_notification',id,before.branch_id,before,after,txt(body.reason)||'إدارة تنبيه الحضور');
