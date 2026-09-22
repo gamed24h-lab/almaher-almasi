@@ -2666,16 +2666,43 @@ async function effectiveEmployeeAttendancePolicy(env,employee,mode,day=saudiToda
  };
  return {...policy,attendance_mode:attendanceMode,mobile_enabled:attendanceMode==='mobile'||attendanceMode==='hybrid',rules,exceptions};
 }
+async function employeeUnifiedDayAttendance(env,employee,mode,day=saudiTodayKey()){
+ const range=saudiDayUtcRange(day);
+ const [mobileEvents,biometricRows]=await Promise.all([
+  rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,event_type,occurred_at,accuracy_m,distance_from_site_m,inside_geofence,mobile_device_id,source&order=occurred_at.asc&limit=100').catch(()=>[]),
+  rest(env,'attendance_raw_logs?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,device_id,serial_number,occurred_at,status_code,verify_code,received_at&order=occurred_at.asc&limit=200').catch(()=>[])
+ ]);
+ const raw=[
+  ...(mobileEvents||[]).map(x=>({...x,attendance_source:'mobile',explicit_event_type:x.event_type})),
+  ...(biometricRows||[]).map(x=>({...x,attendance_source:'biometric',explicit_event_type:null}))
+ ].sort((a,b)=>new Date(a.occurred_at)-new Date(b.occurred_at));
+ const normalized=[];let isInside=false,lastBiometricAt=0,lastBiometricDevice='';
+ for(const ev of raw){
+  const t=new Date(ev.occurred_at).getTime();
+  if(ev.attendance_source==='biometric'){
+   const dev=String(ev.device_id||ev.serial_number||'');
+   if(Number.isFinite(t)&&lastBiometricAt&&dev===lastBiometricDevice&&t-lastBiometricAt>=0&&t-lastBiometricAt<=45000)continue;
+   if(Number.isFinite(t)){lastBiometricAt=t;lastBiometricDevice=dev}
+   isInside=!isInside;
+   normalized.push({...ev,event_type:isInside?'check_in':'check_out'});
+  }else{
+   isInside=ev.explicit_event_type==='check_in';
+   normalized.push({...ev,event_type:ev.explicit_event_type});
+  }
+ }
+ const last=normalized[normalized.length-1]||null;
+ return {events:normalized,mobile_events:mobileEvents||[],last,next_event_type:isInside?'check_out':'check_in',currently_inside:isInside};
+}
 async function mobileSelfServiceStatus(env,account,employee,mode){
- const day=saudiTodayKey(),range=saudiDayUtcRange(day),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day);
- const events=await rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=id,event_type,occurred_at,accuracy_m,distance_from_site_m,inside_geofence,mobile_device_id,source&order=occurred_at.asc&limit=50').catch(()=>[]);
- const last=events?.[events.length-1]||null,nextEvent=!events?.length||last?.event_type==='check_out'?'check_in':'check_out';
+ const day=saudiTodayKey(),policy=await effectiveEmployeeAttendancePolicy(env,employee,mode,day),unified=await employeeUnifiedDayAttendance(env,employee,mode,day);
  return {
   enabled:policy.mobile_enabled,
   exempt:policy.exceptions?.attendance_exempt===true,
   attendance_mode:policy.attendance_mode,
-  next_event_type:nextEvent,
-  today_events:events||[],
+  next_event_type:unified.next_event_type,
+  today_events:unified.mobile_events||[],
+  last_attendance_event:unified.last?{id:unified.last.id,event_type:unified.last.event_type,occurred_at:unified.last.occurred_at,source:unified.last.attendance_source}:null,
+  today_punches:unified.events.length,
   policy:{
    geofence_enabled:policy.mobile_geofence_enabled!==false,
    geofence_radius_m:Number(policy.mobile_geofence_radius_m||100),
@@ -2733,9 +2760,9 @@ async function captureMobileAttendance(env,me,body,request){
   lat=Number(body.latitude);lng=Number(body.longitude);accuracy=Number.isFinite(Number(body.accuracy_m))?Number(body.accuracy_m):null;
  }
 
- const range=saudiDayUtcRange(day),todayEvents=await rest(env,'attendance_mobile_events?attendance_employee_id=eq.'+enc(employee.id)+'&data_environment=eq.'+enc(mode)+'&occurred_at=gte.'+enc(range.start)+'&occurred_at=lt.'+enc(range.end)+'&select=*&order=occurred_at.asc&limit=50').catch(()=>[]),last=todayEvents?.[todayEvents.length-1]||null;
+ const unified=await employeeUnifiedDayAttendance(env,employee,mode,day),last=unified.last;
  if(eventType==='check_out'&&!last){await recordMobileAttendanceAttempt(env,{employee,account,mode,mobileDevice,eventType,reasonCode:'checkout_without_checkin',reasonText:'محاولة انصراف بدون حضور سابق اليوم',latitude:lat,longitude:lng,accuracy,distance,deviceLabel,request});throw Object.assign(new Error('لا يوجد حضور مسجل اليوم حتى يتم تسجيل الانصراف.'),{status:409})}
- if(last?.event_type===eventType)return {ok:true,duplicate:true,event:last,message:eventType==='check_in'?'حضورك مسجل بالفعل.':'انصرافك مسجل بالفعل.'};
+ if(eventType!==unified.next_event_type)return {ok:true,duplicate:true,event:last,message:eventType==='check_in'?'أنت مسجل كحاضر بالفعل؛ الحركة التالية هي الانصراف.':'أنت مسجل كمنصرف بالفعل؛ الحركة التالية هي الحضور.'};
  const requestId=txt(body.request_id)||crypto.randomUUID(),dedupeKey='mobile|'+employee.id+'|'+requestId;
  const policySnapshot={attendance_mode:policy.attendance_mode,mobile_geofence_enabled:policy.mobile_geofence_enabled!==false,mobile_geofence_radius_m:Number(policy.mobile_geofence_radius_m||100),mobile_max_accuracy_m:Number(policy.mobile_max_accuracy_m||120),mobile_require_trusted_device:policy.mobile_require_trusted_device!==false,location_exempt:policy.exceptions?.location_exempt===true,policy_version_id:policy.policy_version_id||null,policy_effective_from:policy.policy_effective_from||null};
  const event=(await rest(env,'attendance_mobile_events',{method:'POST',body:{attendance_employee_id:employee.id,staff_user_id:account.id,branch_id:employee.branch_id||null,mobile_device_id:mobileDevice?.id||null,event_type:eventType,occurred_at:now,latitude:lat,longitude:lng,accuracy_m:accuracy,distance_from_site_m:distance,inside_geofence:inside,source:'mobile_web',policy_snapshot:policySnapshot,metadata:{source_ip:clientIp(request),device_label:deviceLabel},data_environment:mode,dedupe_key:dedupeKey},prefer:'return=representation'}))?.[0]||null;
