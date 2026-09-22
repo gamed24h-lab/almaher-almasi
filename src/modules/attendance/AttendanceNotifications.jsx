@@ -14,7 +14,7 @@ function statusView(v,active){
  if(v==='seen')return {tone:'blue',label:'تمت المشاهدة'};
  return {tone:'orange',label:'جديد'};
 }
-function categoryLabel(v){return v==='predictive'?'استباقي':v==='linking'?'ربط الحركات':v==='device_health'?'صحة الجهاز':v==='maintenance'?'صيانة وقائية':'كل الأنواع'}
+function categoryLabel(v){return v==='predictive'?'استباقي':v==='linking'?'ربط الحركات':v==='device_health'?'صحة الجهاز':v==='maintenance'?'صيانة وقائية':v==='attendance_workflow'?'متابعة الحضور':'كل الأنواع'}
 function severityLabel(v){return v==='critical'?'حرج':v==='warning'?'تحذير':v==='info'?'معلومة':'كل الأولويات'}
 function roleLabel(v){return v||'بدون مستلم'}
 function levelLabel(v){const n=Number(v)||0;return n>=3?'المستوى 3 — مدير عام':n===2?'المستوى 2 — مدير فرع':n===1?'المستوى 1 — موارد بشرية':'لم يبدأ التصعيد'}
@@ -30,7 +30,7 @@ function deliveryStatus(v){
 const blankRule={id:'',branch_id:'',category:'*',severity:'warning',active:true,level1_minutes:0,level2_minutes:120,level3_minutes:240,level1_role:'الموارد البشرية',level2_role:'مدير فرع',level3_role:'مدير عام',whatsapp:false,email:false};
 const blankDeliverySettings={whatsapp_enabled:false,email_enabled:false,auto_dispatch:false,whatsapp_provider:'notification_jobs',email_provider:''};
 
-export default function AttendanceNotifications({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks,onOpenPreventive,onOpenLifecycle}){
+export default function AttendanceNotifications({state,onChanged,onError,onNotice,onOpenDevices,onOpenLinks,onOpenPreventive,onOpenLifecycle,onOpenApprovals}){
  const notifications=state.notifications||[],devices=state.devices||[],branches=state.branches||[],counts=state.notificationCounts||{},rules=state.escalationRules||[],events=state.escalationEvents||[],deliveries=state.deliveries||[],deliveryCounts=state.deliveryCounts||{},deliverySettings=state.deliverySettings||blankDeliverySettings,watchdog=state.watchdog||null;
  const [status,setStatus]=useState('open'),[severity,setSeverity]=useState('all'),[deviceId,setDeviceId]=useState('all'),[query,setQuery]=useState(''),[busy,setBusy]=useState('');
  const [rulesOpen,setRulesOpen]=useState(false),[ruleForm,setRuleForm]=useState(blankRule),[ruleBusy,setRuleBusy]=useState(false),[deliveryForm,setDeliveryForm]=useState(blankDeliverySettings),[deliveryBusy,setDeliveryBusy]=useState(false);
@@ -72,6 +72,7 @@ export default function AttendanceNotifications({state,onChanged,onError,onNotic
   }catch(e){onError?.(e.message)}finally{setBusy('')}
  }
  function openTarget(row){
+  if(row.category==='attendance_workflow'){onOpenApprovals?.();return}
   if(row.category==='linking'){onOpenLinks?.();return}
   if(row.category==='maintenance'&&String(row?.metadata?.type||'').startsWith('asset_')){onOpenLifecycle?.();return}
   if(row.category==='maintenance'){onOpenPreventive?.();return}
