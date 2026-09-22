@@ -1768,24 +1768,24 @@ async function saveAttendancePolicy(env,me,body){
   updated_at:now
  };
  const before=(await rest(env,'attendance_branch_policies?branch_id=eq.'+enc(branchId)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'))?.[0]||null;
- const rows=await rest(env,'attendance_branch_policies?on_conflict=branch_id%2Cdata_environment',{method:'POST',body:{...payload,created_by:before?.created_by||actorValue},prefer:'resolution=merge-duplicates,return=representation'});
- const after=rows?.[0]||null;if(!after)throw Object.assign(new Error('تعذر حفظ سياسة الحضور.'),{status:500});
-
- const versions=await rest(env,'attendance_branch_policy_versions?branch_id=eq.'+enc(branchId)+'&data_environment=eq.'+enc(mode)+'&select=*&order=effective_from.asc&limit=1000').catch(()=>[]);
- const shiftDate=(dateText,days)=>{const d=new Date(String(dateText)+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10)};
- const exact=(versions||[]).find(v=>String(v.effective_from)===effectiveFrom)||null;
- const previous=[...(versions||[])].filter(v=>String(v.effective_from)<effectiveFrom).sort((a,b)=>String(b.effective_from).localeCompare(String(a.effective_from)))[0]||null;
- const next=[...(versions||[])].filter(v=>String(v.effective_from)>effectiveFrom).sort((a,b)=>String(a.effective_from).localeCompare(String(b.effective_from)))[0]||null;
- const versionEnd=next?shiftDate(next.effective_from,-1):null,reason=txt(body.reason)||'إدارة سياسة الحضور والمخالفات';
- if(previous&&String(previous.effective_to||'')!==shiftDate(effectiveFrom,-1)){
-  await rest(env,'attendance_branch_policy_versions?id=eq.'+enc(previous.id),{method:'PATCH',body:{effective_to:shiftDate(effectiveFrom,-1),updated_by:actorValue,updated_at:now},prefer:'return=minimal'});
- }
- let policyVersion=null;
- const versionPayload={branch_id:branchId,data_environment:mode,effective_from:effectiveFrom,effective_to:versionEnd,policy_snapshot:after,reason,updated_by:actorValue,updated_at:now};
- if(exact)policyVersion=(await rest(env,'attendance_branch_policy_versions?id=eq.'+enc(exact.id),{method:'PATCH',body:versionPayload,prefer:'return=representation'}))?.[0]||null;
- else policyVersion=(await rest(env,'attendance_branch_policy_versions',{method:'POST',body:{...versionPayload,created_by:actorValue,created_at:now},prefer:'return=representation'}))?.[0]||null;
- await audit(env,me,before?'attendance_policy_update':'attendance_policy_create','attendance_branch_policy',after.id,branchId,before,{...after,policy_version_id:policyVersion?.id||null},reason);
- return {ok:true,policy:after,policy_version:policyVersion};
+ const reason=txt(body.reason)||'إدارة سياسة الحضور والمخالفات';
+ const atomic=await rest(env,'rpc/attendance_save_branch_policy_version',{method:'POST',body:{
+  p_branch_id:branchId,
+  p_environment:mode,
+  p_effective_from:effectiveFrom,
+  p_policy_snapshot:payload,
+  p_reason:reason,
+  p_actor:actorValue
+ }}).catch(e=>{
+  const msg=String(e?.message||'');
+  if(msg.includes('attendance_branch_not_found'))throw Object.assign(new Error('الفرع غير موجود.'),{status:404});
+  if(msg.includes('attendance_policy_effective_from_required'))throw Object.assign(new Error('حدد تاريخ سريان صحيح لسياسة الحضور.'),{status:400});
+  throw Object.assign(new Error(msg||'تعذر حفظ سياسة الحضور بتاريخ السريان.'),{status:409});
+ });
+ const after=atomic?.policy||null,policyVersion=atomic?.policy_version||null;
+ if(!after||!policyVersion)throw Object.assign(new Error('تعذر حفظ سياسة الحضور ونسختها التاريخية كعملية واحدة.'),{status:500});
+ await audit(env,me,before?'attendance_policy_update':'attendance_policy_create','attendance_branch_policy',after.id,branchId,before,{...after,policy_version_id:policyVersion.id,scheduled_for_future:atomic?.scheduled_for_future===true,activates_on:atomic?.activates_on||null},reason);
+ return {ok:true,policy:after,policy_version:policyVersion,scheduled_for_future:atomic?.scheduled_for_future===true,activates_on:atomic?.activates_on||null};
 }
 
 async function saveAttendanceViolationDecision(env,me,body){
