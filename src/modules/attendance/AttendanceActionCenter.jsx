@@ -10,13 +10,22 @@ function addDays(key,n){const d=new Date(key+'T00:00:00Z');d.setUTCDate(d.getUTC
 function modeLabel(v){return v==='mobile'?'جوال':v==='hybrid'?'مختلط':'بصمة'}
 
 export function attendanceActionItems(state){
- const branches=state?.branches||[],employees=state?.employees||[],policies=state?.policies||[],rules=state?.calendarRules||[],links=state?.links||[],periods=state?.shiftPeriods||[],mobileDevices=state?.mobileDevices||[],mobileAttempts=state?.mobileAttempts||[];
+ const branches=state?.branches||[],employees=state?.employees||[],policies=state?.policies||[],rules=state?.calendarRules||[],links=state?.links||[],periods=state?.shiftPeriods||[],mobileDevices=state?.mobileDevices||[],mobileAttempts=state?.mobileAttempts||[],correctionRequests=state?.correctionRequests||[],selfServiceRequests=state?.selfServiceBiometricRequests||[];
  const day=today(),soon=addDays(day,7),branchMap=new Map(branches.map(x=>[String(x.id),x])),policyMap=new Map(policies.map(x=>[String(x.branch_id),x]));
  const linkSet=new Set(links.filter(x=>x.active!==false&&x.attendance_employee_id).map(x=>String(x.attendance_employee_id)));
  const periodSet=new Set(periods.filter(x=>x.active!==false&&x.attendance_employee_id).map(x=>String(x.attendance_employee_id)));
  const rulesByEmployee=new Map();
  for(const r of rules){const k=String(r.attendance_employee_id||''),a=rulesByEmployee.get(k)||[];a.push(r);rulesByEmployee.set(k,a)}
  const items=[];
+
+ for(const r of correctionRequests.filter(x=>x.status==='pending')){
+  const e=employees.find(x=>String(x.id)===String(r.attendance_employee_id));
+  items.push({id:'correction:'+r.id,severity:'warning',type:'correction_request',title:'طلب تصحيح حضور ينتظر المراجعة',detail:(e?.name||'موظف')+' · '+r.work_date+' · '+(r.requested_reason||'بدون سبب'),employee_id:r.attendance_employee_id,branch_id:r.branch_id,created_at:r.requested_at});
+ }
+ for(const r of selfServiceRequests.filter(x=>x.status==='pending')){
+  const e=employees.find(x=>String(x.id)===String(r.attendance_employee_id));
+  items.push({id:'self-service:'+r.id,severity:'warning',type:'self_service_request',title:'طلب خدمة ذاتية ينتظر المراجعة',detail:(e?.name||r.evidence?.employee_name||'موظف')+' · '+(r.requested_reason||'طلب ربط/تصحيح'),employee_id:r.attendance_employee_id,branch_id:r.branch_id,created_at:r.requested_at});
+ }
 
  for(const d of mobileDevices.filter(x=>x.status==='pending')){
   const e=employees.find(x=>String(x.id)===String(d.attendance_employee_id));
@@ -54,10 +63,11 @@ export function attendanceActionItems(state){
  return items.sort((a,b)=>(rank[a.severity]??9)-(rank[b.severity]??9)||String(b.created_at||'').localeCompare(String(a.created_at||'')));
 }
 
-export default function AttendanceActionCenter({state,onOpenMobile,onOpenEmployees,onOpenPolicies,onOpenLinks}){
+export default function AttendanceActionCenter({state,onOpenMobile,onOpenEmployees,onOpenPolicies,onOpenLinks,onOpenApprovals}){
  const items=useMemo(()=>attendanceActionItems(state),[state]);
  const critical=items.filter(x=>x.severity==='critical').length,warning=items.filter(x=>x.severity==='warning').length,info=items.filter(x=>x.severity==='info').length;
  function actionFor(r){
+  if(['correction_request','self_service_request'].includes(r.type))return onOpenApprovals;
   if(['mobile_device','mobile_attempt'].includes(r.type))return onOpenMobile;
   if(r.type==='branch_location')return onOpenPolicies;
   if(['schedule','exception_expiry'].includes(r.type))return onOpenEmployees;
