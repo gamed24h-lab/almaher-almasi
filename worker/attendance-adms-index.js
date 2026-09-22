@@ -342,24 +342,34 @@ async function retryAttendanceDelivery(env,me,body){
 
 async function runDeviceClockSyncWatchdog(env){
  const mode=await runtimeMode(env),systemActor={id:'system:clock-watchdog',name:'Clock Sync Watchdog',role:'developer',permissions:{all:true,allBranches:true,_accountMode:mode}},devices=await rest(env,'attendance_devices?status=eq.active&select=*&order=created_at.asc').catch(()=>[]);
- let queued=0,skipped=0,errors=0,eligible=0;const errorDevices=[];
+ let queued=0,skipped=0,pendingVerification=0,errors=0,eligible=0;const errorDevices=[];
  for(const device of devices||[]){
   const clock=device?.metadata?.clock_drift||{},drift=Number(clock.drift_seconds),fresh=ageSeconds(clock.checked_at),seenAge=ageSeconds(device.last_command_poll_at||device.last_seen_at);
   if(clock.confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||fresh==null||fresh>6*3600||seenAge==null||seenAge>1800)continue;
   eligible+=1;
-  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
+  try{
+   const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});
+   if(out?.queued)queued+=1;
+   else if(out?.pending_verification)pendingVerification+=1;
+   else skipped+=1;
+  }catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
  }
- return {ok:true,devices:(devices||[]).length,eligible,queued,skipped,errors,error_devices:errorDevices,checked_at:new Date().toISOString()};
+ return {ok:true,devices:(devices||[]).length,eligible,queued,skipped,pending_verification:pendingVerification,errors,error_devices:errorDevices,checked_at:new Date().toISOString()};
 }
 async function autoSyncDriftedDeviceClocks(env,state,systemActor){
- const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,errors=0;const errorDevices=[];
+ const devices=state?.devices||[],health=state?.deviceHealth||[],map=new Map(devices.map(x=>[String(x.id),x]));let queued=0,skipped=0,pendingVerification=0,errors=0;const errorDevices=[];
  for(const h of health){
   const drift=Number(h?.clock_drift_seconds),fresh=ageSeconds(h?.clock_checked_at);
   if(h?.clock_confirmed!==true||!Number.isFinite(drift)||Math.abs(drift)<=120||h.connection==='offline'||fresh==null||fresh>6*3600)continue;
   const device=map.get(String(h.device_id));if(!device||device.status!=='active')continue;
-  try{const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});if(out?.queued)queued+=1;else skipped+=1}catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
+  try{
+   const out=await queueClockSync(env,device,systemActor,{source:'auto',force:false});
+   if(out?.queued)queued+=1;
+   else if(out?.pending_verification)pendingVerification+=1;
+   else skipped+=1;
+  }catch(e){if(Number(e?.status)===409)skipped+=1;else{errors+=1;errorDevices.push({device_id:device.id,name:device.name||device.serial_number||device.id,error:txt(e?.message)||'clock_sync_failed'})}}
  }
- return {queued,skipped,errors,error_devices:errorDevices};
+ return {queued,skipped,pending_verification:pendingVerification,errors,error_devices:errorDevices};
 }
 function promiseTimeout(promise,ms,message){
  let timer;
@@ -427,10 +437,10 @@ async function runAttendanceQuickWatchdog(env,clockSyncResult=null){
  ]);
  const notifications=await applyAttendanceEscalation(env,reconciled,rules||[]);
  await reconcileAttendanceIncidents(env,notifications,policies||[]);
- const clockSync=clockSyncResult||{queued:0,skipped:0,errors:0,error_devices:[]};
+ const clockSync=clockSyncResult||{queued:0,skipped:0,pending_verification:0,errors:0,error_devices:[]};
  const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),active=(notifications||[]).filter(x=>x.active&&x.status!=='resolved'),critical=active.filter(x=>x.severity==='critical'),escalated=active.filter(x=>Number(x.escalation_level)>0);
- const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),clock_sync_error_devices:Array.isArray(clockSync?.error_devices)?clockSync.error_devices:[],completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
- await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors,clock_sync_error_devices:summary.clock_sync_error_devices},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
+ const summary={ok:true,source:'scheduled_quick',runtime_mode:mode,devices_count:devices.length,active_notifications:active.length,critical_notifications:critical.length,escalations_count:escalated.length,clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_pending_verification:Number(clockSync?.pending_verification||0),clock_sync_errors:Number(clockSync?.errors||0),clock_sync_error_devices:Array.isArray(clockSync?.error_devices)?clockSync.error_devices:[],completed_at:completedAt.toISOString(),duration_ms:durationMs,preflight};
+ await rest(env,'attendance_watchdog_runs',{method:'POST',body:{source:'scheduled',status:'success',runtime_mode:mode,started_at:startedIso,completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:summary.active_notifications,critical_notifications:summary.critical_notifications,escalations_count:summary.escalations_count,deliveries_queued:0,deliveries_failed:0,metadata:{quick:true,preflight,clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_pending_verification:summary.clock_sync_pending_verification,clock_sync_errors:summary.clock_sync_errors,clock_sync_error_devices:summary.clock_sync_error_devices},created_at:startedIso},prefer:'return=minimal'}).catch(()=>{});
  return summary;
 }
 async function runAttendanceWatchdog(env,source='scheduled'){
@@ -443,8 +453,8 @@ async function runAttendanceWatchdog(env,source='scheduled'){
   const state=await promiseTimeout(attendanceState(env,systemActor,new URL('https://attendance-watchdog.internal/api/attendance')),210000,'تجاوز مراقب الحضور مهلة 210 ثوانٍ وتم إيقاف هذه الدورة لتجنب تداخل الدورات.');
   const clockSync=await autoSyncDriftedDeviceClocks(env,state,systemActor);
   const completedAt=new Date(),durationMs=Math.max(0,completedAt.getTime()-startedAt.getTime()),activeNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved').length,criticalNotifications=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&x.severity==='critical').length,activeEscalations=(state.notifications||[]).filter(x=>x.active&&x.status!=='resolved'&&Number(x.escalation_level)>0).length;
-  const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
-  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{preflight,notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0),clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_errors:summary.clock_sync_errors}},prefer:'return=minimal'}).catch(()=>{});
+  const summary={ok:true,run_id:run?.id||null,source,runtime_mode:mode,devices_count:(state.devices||[]).length,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:Number(state.deliveryCounts?.queued||0)+Number(state.deliveryCounts?.sending||0),deliveries_failed:Number(state.deliveryCounts?.failed||0),clock_sync_queued:Number(clockSync?.queued||0),clock_sync_skipped:Number(clockSync?.skipped||0),clock_sync_pending_verification:Number(clockSync?.pending_verification||0),clock_sync_errors:Number(clockSync?.errors||0),completed_at:completedAt.toISOString(),duration_ms:durationMs};
+  if(run?.id)await rest(env,'attendance_watchdog_runs?id=eq.'+enc(run.id),{method:'PATCH',body:{status:'success',completed_at:summary.completed_at,duration_ms:durationMs,devices_count:summary.devices_count,active_notifications:activeNotifications,critical_notifications:criticalNotifications,escalations_count:activeEscalations,deliveries_queued:summary.deliveries_queued,deliveries_failed:summary.deliveries_failed,metadata:{preflight,notification_new:Number(state.notificationCounts?.new||0),notification_level2:Number(state.notificationCounts?.level2||0),notification_level3:Number(state.notificationCounts?.level3||0),delivery_blocked:Number(state.deliveryCounts?.blocked||0),delivery_delivered:Number(state.deliveryCounts?.delivered||0)+Number(state.deliveryCounts?.read||0),incident_open:Number(state.incidentCounts?.open||0)+Number(state.incidentCounts?.acknowledged||0)+Number(state.incidentCounts?.investigating||0),incident_breached:Number(state.incidentCounts?.breached||0),clock_sync_queued:summary.clock_sync_queued,clock_sync_skipped:summary.clock_sync_skipped,clock_sync_pending_verification:summary.clock_sync_pending_verification,clock_sync_errors:summary.clock_sync_errors}},prefer:'return=minimal'}).catch(()=>{});
   if(source==='scheduled'&&startedAt.getUTCMinutes()<5){const cutoff=new Date(startedAt.getTime()-30*86400000).toISOString();await rest(env,'attendance_watchdog_runs?started_at=lt.'+enc(cutoff),{method:'DELETE',prefer:'return=minimal'}).catch(()=>{})}
   return summary;
  }catch(e){
@@ -801,6 +811,7 @@ async function queueClockSync(env,device,me,{source='manual',force=false}={}){
  if(pending?.length)return {ok:true,queued:false,command_id:pending[0].id,message:'يوجد تحديث لساعة الجهاز قيد التنفيذ بالفعل.'};
  if(await hasAttendanceHistoryTransfer(env,device))throw Object.assign(new Error('يوجد نقل سجل حضور تاريخي قيد التنفيذ. انتظر اكتماله قبل تعديل ساعة الجهاز.'),{status:409});
  const previous=device?.metadata?.last_clock_sync||{},lastMs=new Date(previous.requested_at||previous.accepted_at||0).getTime();
+ if(!force&&previous.awaiting_verification===true&&['queued','accepted','accepted_unverified'].includes(txt(previous.status)))return {ok:true,queued:false,pending_verification:true,command_id:previous.command_id||null,message:'تم تنفيذ مزامنة الساعة والجهاز متصل؛ بانتظار أول حركة Live للتحقق من الوقت الفعلي.'};
  if(!force&&Number.isFinite(lastMs)&&Date.now()-lastMs<6*3600000)return {ok:true,queued:false,cooldown:true,command_id:previous.command_id||null,message:'تمت محاولة مزامنة الساعة خلال آخر 6 ساعات؛ لن يكررها النظام تلقائيًا الآن.'};
  const now=new Date(),requestedAt=now.toISOString(),spec=zktecoClockCommand(now),group=crypto.randomUUID(),machineTz='+0300',created=await queueCommands(env,device,me,[
   {type:'clock_timezone_sync',command:'SET OPTIONS MachineTZ='+machineTz,operation_group_id:group,metadata:{clock_timezone_sync:true,source,requested_at:requestedAt,timezone:'Asia/Riyadh',machine_tz:machineTz,offset_hours:3}},
@@ -2779,7 +2790,7 @@ async function attendanceApi(request,env,ctx){
 export default {
  async fetch(request,env,ctx){const url=new URL(request.url);if(url.pathname.startsWith('/iclock/'))return admsRequest(request,env);if(url.pathname==='/api/attendance/self-service')return attendanceSelfServiceApi(request,env,ctx);if(url.pathname==='/api/attendance')return attendanceApi(request,env,ctx);return appWorker.fetch(request,env,ctx)},
  async scheduled(controller,env,ctx){
-  const clockSync=await runDeviceClockSyncWatchdog(env).catch(e=>({ok:false,queued:0,skipped:0,errors:1,error_devices:[{device_id:null,name:'scheduled_clock_sync',error:txt(e?.message)||'clock_sync_watchdog_failed'}]}));
+  const clockSync=await runDeviceClockSyncWatchdog(env).catch(e=>({ok:false,queued:0,skipped:0,pending_verification:0,errors:1,error_devices:[{device_id:null,name:'scheduled_clock_sync',error:txt(e?.message)||'clock_sync_watchdog_failed'}]}));
   const mode=await runtimeMode(env),inherited=typeof appWorker?.scheduled==='function'?Promise.resolve(appWorker.scheduled(controller,env,ctx)):Promise.resolve();
   await Promise.all([inherited,activateDueEmployeeSchedules(env,mode,'scheduled').catch(()=>({ok:false})),runAttendanceQuickWatchdog(env,clockSync)]);
  }
