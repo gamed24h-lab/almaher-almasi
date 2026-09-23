@@ -202,7 +202,7 @@ export default async function formsApi(request,env,actor){
    const canManageTemplates=elevated(actor)||actor.permissions?.forms_manage_templates===true;
    const templateAdmin=canManageTemplates?await db(env,'company_form_templates?data_environment=eq.'+enc(mode)+'&select=*&order=is_system.desc,active.desc,name.asc'):[];
    const staffRolesRows=canManageTemplates?await db(env,'staff_users?select=role&status=neq.'+enc('موقوف')+'&limit=5000').catch(()=>[]):[];
-   const roles=[...new Set(['الموارد البشرية','مدير فرع','مدير عام',...(staffRolesRows||[]).map(x=>txt(x.role)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar'));
+   const roles=[...new Set(['الموارد البشرية','مدير فرع','مدير عام',...(staffRolesRows||[]).map(x=>txt(x.role)).filter(Boolean)])].sort((a,b)=>a.localeCompare(b,'ar'));
    let subQ='company_form_submissions?data_environment=eq.'+enc(mode)+'&select=*&order=created_at.desc&limit=1000';
    if(!allBranches(actor))subQ+='&branch_id=eq.'+enc(actor.branch_id||'');
    if(!elevated(actor)&&actor.permissions?.forms_approve!==true&&actor.permissions?.forms_manage_templates!==true)subQ+='&requester_id=eq.'+enc(actor.id);
