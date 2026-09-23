@@ -1,8 +1,9 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {ArrowDown,ArrowUp,CheckCircle2,ClipboardCheck,ExternalLink,Eye,FilePlus2,FileText,GripVertical,LockKeyhole,Paperclip,Plus,Printer,RefreshCw,Send,Settings2,ShieldCheck,Trash2,XCircle} from 'lucide-react';
+import {CheckCircle2,ClipboardCheck,ExternalLink,Eye,FilePlus2,FileText,Paperclip,Printer,RefreshCw,Send,Settings2,ShieldCheck,Trash2,XCircle} from 'lucide-react';
 import QRCode from 'qrcode';
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
+import {TemplateBuilderEditor,TemplateBuilderHome} from './FormTemplateBuilder.jsx';
 
 const statusLabel={draft:'مسودة',pending:'بانتظار الاعتماد',approved:'معتمد',rejected:'مرفوض',cancelled:'ملغي'};
 const integrationLabel={not_applicable:'—',pending:'بانتظار التطبيق',applied:'مطبق على الحضور',needs_review:'يحتاج مراجعة حضور',failed:'فشل التطبيق'};
@@ -199,61 +200,6 @@ export default function FormsCenter(){
   {templateEditor&&<TemplateBuilderEditor value={templateEditor} onChange={setTemplateEditor} roles={state?.roles||[]} busy={actionBusy==='template-save'} onSave={saveTemplate} onCancel={()=>setTemplateEditor(null)}/>}
  </Modal>
  </>;
-}
-
-function TemplateBuilderHome({templates,busy,onNew,onEdit,onToggle}){
- return <Card><div className="card-title"><div><h3>منشئ النماذج</h3><small>أنشئ قوالب مخصصة، رتّب الحقول، وحدد مسار الاعتماد. قوالب النظام الأساسية محمية من التعديل.</small></div><Button variant="primary" onClick={onNew}><Plus size={15}/> قالب جديد</Button></div>
-  <div className="dashboard-grid">{templates.map(t=><Card key={t.id}><div className="card-title"><div><h3>{t.name}</h3><small>{t.description||'بدون وصف'}</small></div>{t.is_system?<Badge tone="blue"><LockKeyhole size={12}/> قالب نظام</Badge>:<Badge tone="green">مخصص · V{t.version}</Badge>}</div>
-   <div className="muted-small">الفئة: {templateCategoryLabel(t.category)} · رقم المستند: {t.document_prefix}-…</div>
-   <div className="muted-small">الحقول: {(t.form_schema||[]).length} · خطوات الاعتماد: {(t.approval_flow||[]).length}</div>
-   <div className="finance-actions" style={{marginTop:10}}><Badge tone={t.active?'green':'red'}>{t.active?'فعال':'موقوف'}</Badge>{t.is_system?<span className="muted-small">محمي للحفاظ على التكامل</span>:<><Button onClick={()=>onEdit(t)}>تعديل</Button><Button disabled={busy==='template-'+t.id} onClick={()=>onToggle(t)}>{t.active?'إيقاف':'تشغيل'}</Button></>}</div>
-  </Card>)}</div>
- </Card>;
-}
-function templateCategoryLabel(v){return ({general:'عام',hr:'موارد بشرية',admin:'إداري',operations:'تشغيل',finance:'مالي'})[v]||v||'عام'}
-function newBuilderField(){
- const id=(globalThis.crypto?.randomUUID?.()||String(Date.now())+Math.random()).replace(/[^A-Za-z0-9]/g,'').slice(0,12);
- return {key:'field_'+id,label:'',type:'text',required:false,options:[]};
-}
-function moveItem(rows,from,to){
- const a=[...(rows||[])];if(from<0||to<0||from>=a.length||to>=a.length||from===to)return a;
- const [x]=a.splice(from,1);a.splice(to,0,x);return a;
-}
-function TemplateBuilderEditor({value,onChange,roles,busy,onSave,onCancel}){
- const [dragIndex,setDragIndex]=useState(null);
- const fields=value.form_schema||[],flow=value.approval_flow||[];
- const set=(k,v)=>onChange(x=>({...x,[k]:v}));
- const updateField=(i,patch)=>set('form_schema',fields.map((x,j)=>j===i?{...x,...patch}:x));
- const updateFlow=(i,patch)=>set('approval_flow',flow.map((x,j)=>j===i?{...x,...patch}:x).map((x,j)=>({...x,step:j+1})));
- const reorderFields=(from,to)=>set('form_schema',moveItem(fields,from,to));
- const reorderFlow=(from,to)=>set('approval_flow',moveItem(flow,from,to).map((x,j)=>({...x,step:j+1})));
- return <div className="form-grid">
-  <Field label="اسم النموذج"><Input value={value.name||''} onChange={e=>set('name',e.target.value)} placeholder="مثال: طلب صيانة فرع"/></Field>
-  <Field label="اختصار رقم المستند" hint="2–14 حرف/رقم إنجليزي"><Input dir="ltr" value={value.document_prefix||''} onChange={e=>set('document_prefix',e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,14))} placeholder="MAINT"/></Field>
-  <Field label="الفئة"><Select value={value.category||'general'} onChange={e=>set('category',e.target.value)}><option value="general">عام</option><option value="hr">موارد بشرية</option><option value="admin">إداري</option><option value="operations">تشغيل</option><option value="finance">مالي</option></Select></Field>
-  <Field label="وصف النموذج"><Input value={value.description||''} onChange={e=>set('description',e.target.value)} placeholder="وصف مختصر يظهر للموظف"/></Field>
-  <div style={{gridColumn:'1/-1'}} className="finance-actions">
-   <label><input type="checkbox" checked={!!value.requires_employee} onChange={e=>set('requires_employee',e.target.checked)}/> مرتبط بموظف</label>
-   <label><input type="checkbox" checked={value.requires_approval!==false} onChange={e=>set('requires_approval',e.target.checked)}/> يحتاج اعتماد</label>
-   <label><input type="checkbox" checked={value.active!==false} onChange={e=>set('active',e.target.checked)}/> فعال</label>
-  </div>
-
-  <div style={{gridColumn:'1/-1'}}><div className="card-title"><div><h3>حقول النموذج</h3><small>اسحب الحقل لترتيبه أو استخدم الأسهم — تعمل أيضًا على الجوال.</small></div><Button onClick={()=>set('form_schema',[...fields,newBuilderField()])}><Plus size={14}/> إضافة حقل</Button></div>
-   <div style={{display:'grid',gap:10}}>{fields.map((f,i)=><div key={f.key} draggable onDragStart={()=>setDragIndex(i)} onDragOver={e=>e.preventDefault()} onDrop={()=>{if(dragIndex!==null)reorderFields(dragIndex,i);setDragIndex(null)}} style={{border:'1px solid var(--border,#dce2e8)',borderRadius:12,padding:12}}>
-    <div className="finance-actions" style={{justifyContent:'space-between'}}><span className="muted-small"><GripVertical size={15}/> الحقل {i+1}</span><span className="finance-actions"><Button disabled={i===0} onClick={()=>reorderFields(i,i-1)}><ArrowUp size={13}/></Button><Button disabled={i===fields.length-1} onClick={()=>reorderFields(i,i+1)}><ArrowDown size={13}/></Button><Button onClick={()=>set('form_schema',fields.filter((_,j)=>j!==i))}><Trash2 size={13}/> حذف</Button></span></div>
-    <div className="form-grid" style={{marginTop:8}}><Field label="عنوان الحقل"><Input value={f.label||''} onChange={e=>updateField(i,{label:e.target.value})} placeholder="مثال: سبب الطلب"/></Field><Field label="نوع الحقل"><Select value={f.type||'text'} onChange={e=>updateField(i,{type:e.target.value,options:e.target.value==='select'?(f.options||[]):[]})}><option value="text">نص قصير</option><option value="textarea">نص طويل</option><option value="date">تاريخ</option><option value="time">وقت</option><option value="number">رقم</option><option value="select">قائمة اختيارات</option></Select></Field>
-    <label style={{alignSelf:'end'}}><input type="checkbox" checked={!!f.required} onChange={e=>updateField(i,{required:e.target.checked})}/> حقل إلزامي</label>
-    {f.type==='select'&&<Field label="الاختيارات" hint="كل اختيار في سطر"><Textarea value={(f.options||[]).join('\n')} onChange={e=>updateField(i,{options:e.target.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})}/></Field>}</div>
-   </div>)}</div>
-  </div>
-
-  {value.requires_approval!==false&&<div style={{gridColumn:'1/-1'}}><div className="card-title"><div><h3>مسار الاعتماد</h3><small>الطلب ينتقل من خطوة إلى التي بعدها بالترتيب.</small></div><Button onClick={()=>set('approval_flow',[...flow,{step:flow.length+1,label:'اعتماد جديد',role:roles?.[0]||'الموارد البشرية'}])}><Plus size={14}/> خطوة اعتماد</Button></div>
-   <div style={{display:'grid',gap:10}}>{flow.map((x,i)=><div key={'step-'+i} style={{border:'1px solid var(--border,#dce2e8)',borderRadius:12,padding:12}}><div className="finance-actions" style={{justifyContent:'space-between'}}><Badge tone="orange">الخطوة {i+1}</Badge><span className="finance-actions"><Button disabled={i===0} onClick={()=>reorderFlow(i,i-1)}><ArrowUp size={13}/></Button><Button disabled={i===flow.length-1} onClick={()=>reorderFlow(i,i+1)}><ArrowDown size={13}/></Button><Button onClick={()=>set('approval_flow',flow.filter((_,j)=>j!==i).map((z,j)=>({...z,step:j+1})))}><Trash2 size={13}/> حذف</Button></span></div><div className="form-grid" style={{marginTop:8}}><Field label="اسم الخطوة"><Input value={x.label||''} onChange={e=>updateFlow(i,{label:e.target.value})}/></Field><Field label="دور المعتمد"><Select value={x.role||''} onChange={e=>updateFlow(i,{role:e.target.value})}><option value="">اختر الدور</option>{(roles||[]).map(r=><option key={r} value={r}>{r}</option>)}</Select></Field></div></div>)}</div>
-  </div>}
-
-  <div style={{gridColumn:'1/-1'}}><h3>معاينة سريعة</h3><Card><strong>{value.name||'اسم النموذج'}</strong><div className="muted-small">{value.description||'سيظهر وصف النموذج هنا.'}</div><div className="form-grid" style={{marginTop:10}}>{fields.length?fields.map(f=><Field key={f.key} label={(f.label||'حقل بدون عنوان')+(f.required?' *':'')}>{f.type==='textarea'?<Textarea disabled placeholder="معاينة"/>:f.type==='select'?<Select disabled><option>{(f.options||[])[0]||'اختيار...'}</option></Select>:<Input disabled type={['date','time','number'].includes(f.type)?f.type:'text'} placeholder="معاينة"/></Field>):<div className="muted-small">أضف أول حقل للنموذج.</div>}</div></Card></div>
-  <div className="modal-actions"><Button onClick={onCancel}>إلغاء</Button><Button variant="primary" disabled={busy} onClick={onSave}><ShieldCheck size={14}/>{busy?'جاري الحفظ...':'حفظ القالب'}</Button></div>
- </div>;
 }
 
 function groupBy(rows,key){
