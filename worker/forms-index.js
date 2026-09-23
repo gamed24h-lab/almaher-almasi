@@ -10,6 +10,66 @@ function json(data,status=200){return new Response(JSON.stringify(data),{status,
 function cleanObj(v){return v&&typeof v==='object'&&!Array.isArray(v)?v:{}}
 function flowOf(template){return Array.isArray(template?.approval_flow)?template.approval_flow:[]}
 function schemaOf(template){return Array.isArray(template?.form_schema)?template.form_schema:[]}
+function bytesFromBase64(base64){
+ const clean=String(base64||'').replace(/^data:[^,]+,/,'');
+ const bin=atob(clean),out=new Uint8Array(bin.length);
+ for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+ return out;
+}
+async function sha256Hex(bytes){
+ const hash=await globalThis.crypto.subtle.digest('SHA-256',bytes);
+ return [...new Uint8Array(hash)].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+function safeFileName(v){
+ const x=txt(v)||'attachment';
+ return x.replace(/[^A-Za-z0-9._-]/g,'_').slice(-140)||'attachment';
+}
+async function ensureFormsBucket(env){
+ const base=String(env.SUPABASE_URL||'').replace(/\/$/,'');
+ const key=env.SUPABASE_SERVICE_ROLE_KEY||'';
+ const headers={apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'};
+ const id='almaher-form-attachments';
+ const check=await fetch(base+'/storage/v1/bucket/'+encodeURIComponent(id),{headers});
+ if(check.ok)return id;
+ const create=await fetch(base+'/storage/v1/bucket',{method:'POST',headers,body:JSON.stringify({id,name:id,public:false,file_size_limit:8388608})});
+ if(!create.ok&&create.status!==409){const b=await create.json().catch(()=>({}));throw Object.assign(new Error(b?.message||'تعذر تجهيز مساحة مرفقات النماذج.'),{status:500})}
+ return id;
+}
+async function storageUpload(env,bucket,path,bytes,mime){
+ await ensureFormsBucket(env);
+ const base=String(env.SUPABASE_URL||'').replace(/\/$/,'');
+ const key=env.SUPABASE_SERVICE_ROLE_KEY||'';
+ const r=await fetch(base+'/storage/v1/object/'+bucket+'/'+path.split('/').map(enc).join('/'),{
+  method:'POST',
+  headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':mime||'application/octet-stream','x-upsert':'false'},
+  body:bytes
+ });
+ if(!r.ok){const b=await r.json().catch(()=>({}));throw Object.assign(new Error(b?.message||'تعذر رفع المرفق.'),{status:r.status>=500?500:400})}
+}
+async function storageSigned(env,bucket,path,expiresIn=600){
+ const base=String(env.SUPABASE_URL||'').replace(/\/$/,'');
+ const key=env.SUPABASE_SERVICE_ROLE_KEY||'';
+ const r=await fetch(base+'/storage/v1/object/sign/'+bucket+'/'+path.split('/').map(enc).join('/'),{
+  method:'POST',headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},
+  body:JSON.stringify({expiresIn:Math.max(60,Math.min(3600,Number(expiresIn)||600))})
+ });
+ const b=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(b?.message||'تعذر إنشاء رابط المرفق.'),{status:400});
+ const s=b.signedURL||b.signedUrl||b.signed_url||'';
+ return s?(s.startsWith('http')?s:base+'/storage/v1'+s):'';
+}
+async function storageDelete(env,bucket,path){
+ const base=String(env.SUPABASE_URL||'').replace(/\/$/,'');
+ const key=env.SUPABASE_SERVICE_ROLE_KEY||'';
+ const r=await fetch(base+'/storage/v1/object/'+bucket+'/'+path.split('/').map(enc).join('/'),{
+  method:'DELETE',headers:{apikey:key,Authorization:'Bearer '+key}
+ });
+ if(!r.ok&&r.status!==404){const b=await r.json().catch(()=>({}));throw Object.assign(new Error(b?.message||'تعذر حذف المرفق.'),{status:400})}
+}
+function canReadSubmission(actor,row){
+ if(!scoped(actor,row))return false;
+ if(elevated(actor)||actor?.permissions?.forms_approve===true||actor?.permissions?.forms_manage_templates===true)return true;
+ return String(row?.requester_id||'')===String(actor?.id||'');
+}
 function roleCanApprove(actor,req){
  if(elevated(actor))return true;
  if(actor?.permissions?.forms_approve!==true)return false;
@@ -118,11 +178,19 @@ export default async function formsApi(request,env,actor){
    if(!allBranches(actor))empQ+='&branch_id=eq.'+enc(actor.branch_id||'');
    const employees=await db(env,empQ).catch(()=>[]);
 
+   const visibleIds=new Set((submissions||[]).map(x=>String(x.id)));
+   const allAttachments=await db(env,'company_form_attachments?data_environment=eq.'+enc(mode)+'&select=*&order=created_at.asc&limit=5000').catch(()=>[]);
+   const attachments=(allAttachments||[]).filter(x=>visibleIds.has(String(x.submission_id)));
+   const allSignatures=await db(env,'company_form_signatures?data_environment=eq.'+enc(mode)+'&select=*&order=step_no.asc,signed_at.asc&limit=5000').catch(()=>[]);
+   const signatures=(allSignatures||[]).filter(x=>visibleIds.has(String(x.submission_id)));
+   const allEffects=await db(env,'company_form_effects?data_environment=eq.'+enc(mode)+'&select=*&order=created_at.asc&limit=5000').catch(()=>[]);
+   const effects=(allEffects||[]).filter(x=>visibleIds.has(String(x.submission_id)));
+
    let branchQ='branches?select=id,name,status&status=eq.active&order=name.asc';
    if(!allBranches(actor)&&actor.branch_id)branchQ+='&id=eq.'+enc(actor.branch_id);
    const branches=await db(env,branchQ).catch(()=>[]);
 
-   return json({ok:true,mode,templates,submissions,approvals,approval_history:approvalHistory,employees,branches,
+   return json({ok:true,mode,templates,submissions,approvals,approval_history:approvalHistory,employees,branches,attachments,signatures,effects,
     scope:{all_branches:allBranches(actor),branch_id:actor.branch_id||null},
     permissions:{view:true,submit:elevated(actor)||actor.permissions?.forms_submit===true,approve:elevated(actor)||actor.permissions?.forms_approve===true,manage_templates:elevated(actor)||actor.permissions?.forms_manage_templates===true}
    });
@@ -130,6 +198,73 @@ export default async function formsApi(request,env,actor){
 
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   const body=await request.json().catch(()=>({})),action=txt(body.action);
+
+  if(action==='upload_attachment'){
+   if(!(elevated(actor)||actor.permissions?.forms_submit===true))return json({error:'لا توجد صلاحية رفع مرفقات للنماذج.'},403);
+   const sub=await getSubmission(env,body.submission_id);if(!sub)return json({error:'المستند غير موجود.'},404);
+   if(!canReadSubmission(actor,sub)||(!elevated(actor)&&String(sub.requester_id)!==String(actor.id)))return json({error:'لا يمكنك تعديل مرفقات هذا المستند.'},403);
+   if(!['draft','rejected'].includes(sub.status))return json({error:'المرفقات تُثبت عند الإرسال للاعتماد ولا يمكن تعديلها بعد ذلك.'},409);
+   const countRows=await db(env,'company_form_attachments?submission_id=eq.'+enc(sub.id)+'&select=id');
+   if((countRows||[]).length>=5)return json({error:'الحد الأقصى 5 مرفقات لكل نموذج.'},409);
+   const mime=txt(body.mime_type)||'application/octet-stream';
+   if(!(mime==='application/pdf'||mime.startsWith('image/')))return json({error:'المسموح PDF أو صور فقط.'},400);
+   if(!body.base64)return json({error:'الملف مطلوب.'},400);
+   const bytes=bytesFromBase64(body.base64);
+   if(!bytes.length||bytes.length>8*1024*1024)return json({error:'حجم المرفق يجب ألا يتجاوز 8MB.'},413);
+   const bucket='almaher-form-attachments',name=safeFileName(body.file_name),hash=await sha256Hex(bytes);
+   const path='forms/'+sub.data_environment+'/'+sub.id+'/'+Date.now()+'-'+globalThis.crypto.randomUUID()+'-'+name;
+   await storageUpload(env,bucket,path,bytes,mime);
+   let row=null;
+   try{
+    const rows=await db(env,'company_form_attachments',{method:'POST',body:{
+     submission_id:sub.id,bucket,storage_path:path,original_name:txt(body.file_name)||name,mime_type:mime,size_bytes:bytes.length,
+     sha256:hash,uploaded_by:String(actor.id),uploaded_name:actor.name||null,data_environment:sub.data_environment
+    },prefer:'return=representation'});row=rows?.[0]||null;
+   }catch(e){await storageDelete(env,bucket,path).catch(()=>{});throw e}
+   await audit(env,actor,'company_form_attachment_upload',sub,null,{attachment_id:row?.id,original_name:row?.original_name,size_bytes:row?.size_bytes,sha256:row?.sha256},'رفع مرفق للنموذج');
+   return json({ok:true,attachment:row,message:'تم رفع المرفق.'});
+  }
+
+  if(action==='attachment_url'){
+   const rows=await db(env,'company_form_attachments?id=eq.'+enc(body.attachment_id)+'&select=*&limit=1'),att=rows?.[0]||null;
+   if(!att)return json({error:'المرفق غير موجود.'},404);
+   const sub=await getSubmission(env,att.submission_id);if(!sub||!canReadSubmission(actor,sub))return json({error:'المرفق خارج نطاق صلاحيتك.'},403);
+   const signed_url=await storageSigned(env,att.bucket,att.storage_path,body.expires_in||600);
+   return json({ok:true,signed_url});
+  }
+
+  if(action==='delete_attachment'){
+   if(!(elevated(actor)||actor.permissions?.forms_submit===true))return json({error:'لا توجد صلاحية حذف المرفقات.'},403);
+   const rows=await db(env,'company_form_attachments?id=eq.'+enc(body.attachment_id)+'&select=*&limit=1'),att=rows?.[0]||null;
+   if(!att)return json({error:'المرفق غير موجود.'},404);
+   const sub=await getSubmission(env,att.submission_id);if(!sub)return json({error:'المستند غير موجود.'},404);
+   if(!canReadSubmission(actor,sub)||(!elevated(actor)&&String(sub.requester_id)!==String(actor.id)))return json({error:'لا يمكنك حذف مرفقات هذا المستند.'},403);
+   if(!['draft','rejected'].includes(sub.status))return json({error:'لا يمكن حذف المرفقات بعد إرسال النموذج للاعتماد.'},409);
+   await storageDelete(env,att.bucket,att.storage_path);
+   await db(env,'company_form_attachments?id=eq.'+enc(att.id),{method:'DELETE',prefer:'return=minimal'});
+   await audit(env,actor,'company_form_attachment_delete',sub,{attachment_id:att.id,original_name:att.original_name,sha256:att.sha256},null,'حذف مرفق من النموذج');
+   return json({ok:true,message:'تم حذف المرفق.'});
+  }
+
+  if(action==='submit_existing'){
+   if(!(elevated(actor)||actor.permissions?.forms_submit===true))return json({error:'لا توجد صلاحية إرسال النماذج.'},403);
+   const row=await getSubmission(env,body.id);if(!row)return json({error:'المستند غير موجود.'},404);
+   if(!canReadSubmission(actor,row)||(!elevated(actor)&&String(row.requester_id)!==String(actor.id)))return json({error:'لا يمكنك إرسال هذا المستند.'},403);
+   if(!['draft','rejected'].includes(row.status))return json({error:'هذا المستند دخل مسار الاعتماد بالفعل.'},409);
+   const template=await getTemplate(env,row.template_id,mode);if(!template)return json({error:'قالب النموذج غير موجود أو غير فعال.'},404);
+   assertRequired(template,cleanObj(row.form_data));
+   const flow=flowOf(template);
+   if(template.requires_approval===false||flow.length===0){
+    const rows=await db(env,'company_form_submissions?id=eq.'+enc(row.id),{method:'PATCH',body:{status:'approved',submitted_at:now(),approved_at:now(),approved_by:String(actor.id),approval_step:0,updated_at:now()},prefer:'return=representation'});
+    const after=rows?.[0]||row;await audit(env,actor,'company_form_auto_approved',after,row,after,'قالب بدون مسار اعتماد');
+    return json({ok:true,submission:after,message:'تم اعتماد النموذج مباشرة.'});
+   }
+   const stamp=now(),rows=await db(env,'company_form_submissions?id=eq.'+enc(row.id),{method:'PATCH',body:{status:'pending',submitted_at:stamp,approval_step:1,approval_total_steps:flow.length,rejected_at:null,rejected_by:null,updated_at:stamp},prefer:'return=representation'});
+   const after=rows?.[0]||row;
+   await createApproval(env,actor,after,template,0);
+   await audit(env,actor,'company_form_submit',after,row,after,'إرسال النموذج للاعتماد');
+   return json({ok:true,submission:after,message:'تم إرسال النموذج للاعتماد.'});
+  }
 
   if(action==='save'||action==='submit'){
    if(!(elevated(actor)||actor.permissions?.forms_submit===true))return json({error:'لا توجد صلاحية إنشاء النماذج.'},403);
@@ -179,23 +314,28 @@ export default async function formsApi(request,env,actor){
    if(String(req.requested_by||'')===String(actor.id||'')&&!elevated(actor))return json({error:'لا يمكن اعتماد طلبك بنفسك.'},403);
    const sub=await getSubmission(env,req.reference_id);if(!sub)return json({error:'المستند المرتبط غير موجود.'},404);
    if(!scoped(actor,sub))return json({error:'المستند خارج نطاق فرعك.'},403);
-   const decision=body.decision==='reject'?'reject':'approve',stamp=now(),note=txt(body.note)||null;
-   if(decision==='reject'){
-    await db(env,'approval_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'rejected',rejected_by:String(actor.id),rejected_at:stamp,decided_at:stamp,decision_notes:note,updated_at:stamp},prefer:'return=minimal'});
-    const rows=await db(env,'company_form_submissions?id=eq.'+enc(sub.id),{method:'PATCH',body:{status:'rejected',rejected_at:stamp,rejected_by:String(actor.id),updated_at:stamp},prefer:'return=representation'});
-    const after=rows?.[0]||sub;await audit(env,actor,'company_form_reject',after,sub,after,note||'رفض النموذج');
-    return json({ok:true,submission:after,message:'تم رفض النموذج.'});
+   const decision=body.decision==='reject'?'reject':'approve',note=txt(body.note)||null;
+   let result;
+   try{
+    result=await db(env,'rpc/company_form_decide_approval',{method:'POST',body:{
+     p_submission_id:sub.id,p_approval_request_id:req.id,p_decision:decision,
+     p_actor_id:String(actor.id),p_actor_name:actor.name||null,p_actor_role:actor.role||null,p_note:note,
+     p_metadata:{source:'forms_center',user_agent:request.headers.get('user-agent')||null,ip:request.headers.get('cf-connecting-ip')||null}
+    }});
+   }catch(e){
+    const m=String(e?.message||'');
+    if(m.includes('attendance_month_closed'))throw Object.assign(new Error('لا يمكن اعتماد هذا النموذج لأن شهر الحضور المرتبط به مغلق. افتح الشهر أولًا أو راجع الموارد البشرية.'),{status:409});
+    if(m.includes('company_form_permission_time_invalid'))throw Object.assign(new Error('وقت نهاية الاستئذان يجب أن يكون بعد وقت البداية.'),{status:400});
+    throw e;
    }
-   await db(env,'approval_requests?id=eq.'+enc(req.id),{method:'PATCH',body:{status:'approved',approved_by:String(actor.id),approved_at:stamp,decided_at:stamp,decision_notes:note,updated_at:stamp},prefer:'return=minimal'});
-   const templateSnapshot=cleanObj(sub.template_snapshot),flow=flowOf(templateSnapshot),currentStep=Number(req?.metadata?.step_no||req?.request_payload?.step_no||sub.approval_step||1),nextIndex=currentStep;
-   if(nextIndex<flow.length){
-    const rows=await db(env,'company_form_submissions?id=eq.'+enc(sub.id),{method:'PATCH',body:{status:'pending',approval_step:nextIndex+1,updated_at:stamp},prefer:'return=representation'});
-    const after=rows?.[0]||sub;await createApproval(env,actor,after,templateSnapshot,nextIndex);await audit(env,actor,'company_form_step_approved',after,sub,after,note||'اعتماد خطوة');
-    return json({ok:true,submission:after,message:'تم اعتماد الخطوة وانتقل الطلب للمعتمد التالي.'});
-   }
-   const rows=await db(env,'company_form_submissions?id=eq.'+enc(sub.id),{method:'PATCH',body:{status:'approved',approval_step:flow.length,approved_at:stamp,approved_by:String(actor.id),updated_at:stamp},prefer:'return=representation'});
-   const after=rows?.[0]||sub;await audit(env,actor,'company_form_approve',after,sub,after,note||'اعتماد نهائي');
-   return json({ok:true,submission:after,message:'تم اعتماد النموذج نهائيًا.'});
+   const after=result?.submission||await getSubmission(env,sub.id);
+   const event=decision==='reject'?'company_form_reject':result?.status==='approved'?'company_form_approve':'company_form_step_approved';
+   await audit(env,actor,event,after,sub,after,note||(decision==='reject'?'رفض النموذج':result?.status==='approved'?'اعتماد نهائي':'اعتماد خطوة'));
+   const integration=result?.integration_status;
+   let message=decision==='reject'?'تم رفض النموذج وتسجيل التوقيع الإلكتروني.':result?.status==='approved'?'تم اعتماد النموذج نهائيًا وتسجيل التوقيع الإلكتروني.':'تم اعتماد الخطوة وانتقل الطلب للمعتمد التالي.';
+   if(result?.status==='approved'&&integration==='applied')message+=' وتم تطبيقه تلقائيًا على الحضور.';
+   if(result?.status==='approved'&&integration==='needs_review')message+=' وربط الحضور يحتاج مراجعة إضافية قبل التطبيق.';
+   return json({ok:true,...result,submission:after,message});
   }
 
   if(action==='cancel'){
@@ -211,5 +351,9 @@ export default async function formsApi(request,env,actor){
   }
 
   return json({error:'إجراء غير معروف.'},400);
- }catch(e){return json({error:e?.message||'تعذر تنفيذ طلب النماذج.'},Number(e?.status)||500)}
+ }catch(e){
+  const message=String(e?.message||'تعذر تنفيذ طلب النماذج.');
+  if(message.includes('attendance_month_closed'))return json({error:'شهر الحضور المرتبط بهذا النموذج مغلق ولا يمكن تطبيقه تلقائيًا.'},409);
+  return json({error:message},Number(e?.status)||500);
+ }
 }
