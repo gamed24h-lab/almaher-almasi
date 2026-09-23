@@ -1,8 +1,9 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {CheckCircle2,ClipboardCheck,ExternalLink,Eye,FilePlus2,FileText,Paperclip,Printer,RefreshCw,Send,ShieldCheck,Trash2,XCircle} from 'lucide-react';
+import {CheckCircle2,ClipboardCheck,ExternalLink,Eye,FilePlus2,FileText,Paperclip,Printer,RefreshCw,Send,Settings2,ShieldCheck,Trash2,XCircle} from 'lucide-react';
 import QRCode from 'qrcode';
 import {Badge,Button,Card,ErrorBox,Field,Input,Loading,Modal,Select,Table,Textarea} from '../../components/UI.jsx';
 import ModuleShell,{useModuleTab} from '../../components/ModuleShell.jsx';
+import {TemplateBuilderEditor,TemplateBuilderHome} from './FormTemplateBuilder.jsx';
 
 const statusLabel={draft:'مسودة',pending:'بانتظار الاعتماد',approved:'معتمد',rejected:'مرفوض',cancelled:'ملغي'};
 const integrationLabel={not_applicable:'—',pending:'بانتظار التطبيق',applied:'مطبق على الحضور',needs_review:'يحتاج مراجعة حضور',failed:'فشل التطبيق'};
@@ -16,11 +17,12 @@ const mb=n=>(Number(n||0)/1024/1024).toFixed(2)+' MB';
 
 export default function FormsCenter(){
  const [state,setState]=useState(null),[busy,setBusy]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
- const [editor,setEditor]=useState(null),[decision,setDecision]=useState(null),[detail,setDetail]=useState(null),[actionBusy,setActionBusy]=useState('');
+ const [editor,setEditor]=useState(null),[decision,setDecision]=useState(null),[detail,setDetail]=useState(null),[templateEditor,setTemplateEditor]=useState(null),[actionBusy,setActionBusy]=useState('');
  const tabs=useMemo(()=>[
   {id:'templates',label:'النماذج الجاهزة',icon:FilePlus2,badge:state?.templates?.length||null},
   {id:'documents',label:'المستندات والطلبات',icon:FileText,badge:state?.submissions?.length||null},
-  ...(state?.permissions?.approve?[{id:'approvals',label:'بانتظار اعتمادي',icon:ClipboardCheck,badge:state?.approvals?.length||null}]:[])
+  ...(state?.permissions?.approve?[{id:'approvals',label:'بانتظار اعتمادي',icon:ClipboardCheck,badge:state?.approvals?.length||null}]:[]),
+  ...(state?.permissions?.manage_templates?[{id:'builder',label:'منشئ النماذج',icon:Settings2,badge:(state?.template_admin||[]).filter(x=>!x.is_system).length||null}]:[])
  ],[state]);
  const [activeTab,setActiveTab]=useModuleTab('almaher:module:forms',tabs,'templates');
 
@@ -61,6 +63,36 @@ export default function FormsCenter(){
   for(const file of files||[]){
    await post({action:'upload_attachment',submission_id:submissionId,file_name:file.name,mime_type:file.type||'application/octet-stream',base64:await asBase64(file)});
   }
+ }
+ function newTemplateDraft(){
+  return {id:'',name:'',category:'general',description:'',document_prefix:'FORM',requires_employee:false,requires_approval:true,active:true,form_schema:[],approval_flow:[{step:1,label:'اعتماد الموارد البشرية',role:'الموارد البشرية'}]};
+ }
+ function openTemplateBuilder(t=null){
+  if(!state?.permissions?.manage_templates)return;
+  if(t?.is_system){setError('قالب النظام محمي. أنشئ قالبًا مخصصًا جديدًا بدل تعديل القالب الأساسي.');return}
+  setTemplateEditor(t?{
+   id:t.id,name:t.name||'',category:t.category||'general',description:t.description||'',document_prefix:t.document_prefix||'FORM',
+   requires_employee:!!t.requires_employee,requires_approval:t.requires_approval!==false,active:t.active!==false,
+   form_schema:(Array.isArray(t.form_schema)?t.form_schema:[]).map(x=>({...x,options:Array.isArray(x.options)?x.options:[]})),
+   approval_flow:(Array.isArray(t.approval_flow)?t.approval_flow:[]).map((x,i)=>({...x,step:i+1}))
+  }:newTemplateDraft());
+  setError('');setNotice('');
+ }
+ async function saveTemplate(){
+  if(!templateEditor)return;setActionBusy('template-save');setError('');
+  try{
+   const result=await post({action:'save_template',...templateEditor});
+   setNotice(result.message||'تم حفظ قالب النموذج.');setTemplateEditor(null);await load();setActiveTab('builder');
+  }catch(e){setError(e.message)}finally{setActionBusy('')}
+ }
+ async function toggleTemplateActive(t){
+  if(t.is_system){setError('قالب النظام محمي ولا يمكن إيقافه من المنشئ.');return}
+  setActionBusy('template-'+t.id);setError('');
+  try{
+   const result=await post({action:'save_template',id:t.id,name:t.name,category:t.category,description:t.description||'',document_prefix:t.document_prefix,
+    form_schema:t.form_schema||[],approval_flow:t.approval_flow||[],requires_employee:!!t.requires_employee,requires_approval:t.requires_approval!==false,active:!t.active});
+   setNotice(result.message||'تم تحديث القالب.');await load();
+  }catch(e){setError(e.message)}finally{setActionBusy('')}
  }
  async function save(submit=false){
   if(!editor)return;setActionBusy(submit?'submit':'save');setError('');
@@ -141,12 +173,13 @@ export default function FormsCenter(){
  {activeTab==='templates'&&<div className="dashboard-grid">{(state?.templates||[]).map(t=><Card key={t.id}><div className="card-title"><div><h3>{t.name}</h3><small>{t.description||'نموذج رسمي'}</small></div><Badge>{t.document_prefix}</Badge></div><div className="muted-small">مسار الاعتماد: {(t.approval_flow||[]).map(x=>x.label||x.role).join(' ← ')||'بدون اعتماد'}</div><div className="finance-actions" style={{marginTop:12}}>{state?.permissions?.submit?<Button variant="primary" onClick={()=>openTemplate(t)}><FilePlus2 size={15}/> إنشاء النموذج</Button>:<Badge tone="orange">عرض فقط</Badge>}</div></Card>)}</div>}
  {activeTab==='documents'&&<Card><div className="card-title"><div><h3>المستندات والطلبات</h3><small>المسودات، الطلبات المعلقة، المعتمدة والمرفوضة.</small></div><Badge>{state?.submissions?.length||0}</Badge></div><Table preferenceKey="company-forms-documents" defaultPageSize={25} rows={state?.submissions||[]} columns={documentCols}/></Card>}
  {activeTab==='approvals'&&state?.permissions?.approve&&<Card><div className="card-title"><div><h3>بانتظار اعتمادي</h3><small>راجع البيانات والمرفقات قبل الاعتماد؛ الاعتماد يُسجّل كتوقيع إلكتروني باسمك ووقته.</small></div><Badge tone="orange">{state?.approvals?.length||0}</Badge></div><Table preferenceKey="company-forms-approvals" defaultPageSize={25} rows={state?.approvals||[]} columns={approvalCols}/></Card>}
+ {activeTab==='builder'&&state?.permissions?.manage_templates&&<TemplateBuilderHome templates={state?.template_admin||[]} busy={actionBusy} onNew={()=>openTemplateBuilder()} onEdit={openTemplateBuilder} onToggle={toggleTemplateActive}/>}
 
  <Modal open={!!editor} onClose={()=>setEditor(null)} title={editor?.template?.name||'نموذج'} wide>
   {editor&&<div className="form-grid">
    {state?.scope?.all_branches&&<Field label="الفرع"><Select value={editor.branch_id} onChange={e=>setEditor(x=>({...x,branch_id:e.target.value,attendance_employee_id:''}))}><option value="">اختر الفرع</option>{(state.branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>}
    {editor.template.requires_employee&&<Field label="الموظف"><Select value={editor.attendance_employee_id} onChange={e=>setEditor(x=>({...x,attendance_employee_id:e.target.value}))}><option value="">اختر الموظف</option>{(state.employees||[]).filter(e=>!editor.branch_id||String(e.branch_id)===String(editor.branch_id)).map(e=><option key={e.id} value={e.id}>{e.employee_code?e.employee_code+' — ':''}{e.name}</option>)}</Select></Field>}
-   {(editor.template.form_schema||[]).map(f=><Field key={f.key} label={f.label}>{f.type==='textarea'?<Textarea value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}/>:f.type==='select'?<Select value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}><option value="">اختر</option>{(f.options||[]).map(o=><option key={o} value={o}>{o}</option>)}</Select>:<Input type={f.type==='date'||f.type==='time'?f.type:'text'} value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}/>}</Field>)}
+   {(editor.template.form_schema||[]).map(f=><Field key={f.key} label={f.label}>{f.type==='textarea'?<Textarea value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}/>:f.type==='select'?<Select value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}><option value="">اختر</option>{(f.options||[]).map(o=><option key={o} value={o}>{o}</option>)}</Select>:<Input type={['date','time','number'].includes(f.type)?f.type:'text'} value={editor.form_data?.[f.key]||''} onChange={e=>setField(f.key,e.target.value)}/>}</Field>)}
    <Field label="ملاحظات عامة"><Textarea value={editor.notes||''} onChange={e=>setEditor(x=>({...x,notes:e.target.value}))}/></Field>
    <Field label="المرفقات" hint="PDF أو صور فقط · حتى 8MB للملف · 5 مرفقات للنموذج"><Input type="file" multiple accept="image/*,.pdf,application/pdf" onChange={e=>chooseFiles(e.target.files)}/></Field>
    {editor.id&&(attachmentsBySubmission.get(String(editor.id))||[]).length>0&&<div style={{gridColumn:'1/-1'}}><strong>المرفقات المحفوظة</strong><AttachmentList rows={attachmentsBySubmission.get(String(editor.id))||[]} editable onOpen={openAttachment} onDelete={deleteAttachment} busy={actionBusy}/></div>}
@@ -161,6 +194,10 @@ export default function FormsCenter(){
 
  <Modal open={!!decision} onClose={()=>setDecision(null)} title="مراجعة واعتماد النموذج" wide>
   {decision&&<DecisionForm request={decision} submission={submissionMap.get(String(decision.reference_id))} attachments={attachmentsBySubmission.get(String(decision.reference_id))||[]} signatures={signaturesBySubmission.get(String(decision.reference_id))||[]} employeeMap={employeeMap} branchMap={branchMap} busy={actionBusy===decision.id} onOpenAttachment={openAttachment} onDecide={decide}/>}
+ </Modal>
+
+ <Modal open={!!templateEditor} onClose={()=>setTemplateEditor(null)} title={templateEditor?.id?'تعديل قالب مخصص':'إنشاء قالب نموذج جديد'} wide>
+  {templateEditor&&<TemplateBuilderEditor value={templateEditor} onChange={setTemplateEditor} roles={state?.roles||[]} busy={actionBusy==='template-save'} onSave={saveTemplate} onCancel={()=>setTemplateEditor(null)}/>}
  </Modal>
  </>;
 }

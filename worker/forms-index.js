@@ -84,6 +84,32 @@ function assertRequired(template,data){
   if(v===null||v===undefined||String(v).trim()==='')throw Object.assign(new Error('الحقل مطلوب: '+String(f.label||f.key)),{status:400});
  }
 }
+function normalizeTemplateSchema(input){
+ const allowed=new Set(['text','textarea','date','time','number','select']);
+ const rows=Array.isArray(input)?input:[];
+ if(rows.length>40)throw Object.assign(new Error('الحد الأقصى 40 حقلًا في النموذج.'),{status:400});
+ const keys=new Set();
+ return rows.map((f,i)=>{
+  const key=txt(f?.key).replace(/[^A-Za-z0-9_]/g,'_').slice(0,64);
+  const label=txt(f?.label).slice(0,120),type=allowed.has(txt(f?.type))?txt(f.type):'text';
+  if(!key||!label)throw Object.assign(new Error('كل حقل يحتاج اسمًا وعنوانًا.'),{status:400});
+  if(keys.has(key))throw Object.assign(new Error('مفتاح الحقل مكرر: '+key),{status:400});keys.add(key);
+  const options=type==='select'?[...new Set((Array.isArray(f?.options)?f.options:[]).map(txt).filter(Boolean))].slice(0,100):[];
+  if(type==='select'&&!options.length)throw Object.assign(new Error('أضف اختيارًا واحدًا على الأقل للحقل «'+label+'».'),{status:400});
+  return {key,label,type,required:!!f?.required,...(type==='select'?{options}:{})};
+ });
+}
+function normalizeApprovalFlow(input,requiresApproval){
+ if(!requiresApproval)return [];
+ const rows=Array.isArray(input)?input:[];
+ if(!rows.length)throw Object.assign(new Error('أضف خطوة اعتماد واحدة على الأقل.'),{status:400});
+ if(rows.length>10)throw Object.assign(new Error('الحد الأقصى 10 خطوات اعتماد.'),{status:400});
+ return rows.map((x,i)=>{
+  const role=txt(x?.role).slice(0,100),label=txt(x?.label).slice(0,140)||('الاعتماد '+(i+1));
+  if(!role)throw Object.assign(new Error('حدد دور المعتمد في الخطوة '+(i+1)+'.'),{status:400});
+  return {step:i+1,label,role};
+ });
+}
 async function db(env,path,{method='GET',body,prefer}={}){
  const base=String(env.SUPABASE_URL||'').replace(/\/$/,'');
  const key=env.SUPABASE_SERVICE_ROLE_KEY||'';
@@ -101,6 +127,15 @@ async function audit(env,actor,action,submission,beforeData=null,afterData=null,
    actor_id:txt(actor?.id)||null,actor_name:txt(actor?.name)||null,actor_role:txt(actor?.role)||null,
    action,entity_type:'company_form_submission',entity_id:txt(submission?.id)||null,branch_id:submission?.branch_id||null,
    before_data:beforeData,after_data:afterData,reason:txt(reason)||null
+  }});
+ }catch{}
+}
+async function auditTemplate(env,actor,action,row,beforeData=null,reason=''){
+ try{
+  await db(env,'audit_events',{method:'POST',prefer:'return=minimal',body:{
+   actor_id:txt(actor?.id)||null,actor_name:txt(actor?.name)||null,actor_role:txt(actor?.role)||null,
+   action,entity_type:'company_form_template',entity_id:txt(row?.id)||null,branch_id:null,
+   before_data:beforeData,after_data:row,reason:txt(reason)||null
   }});
  }catch{}
 }
@@ -164,6 +199,10 @@ export default async function formsApi(request,env,actor){
 
   if(request.method==='GET'){
    const templates=await db(env,'company_form_templates?data_environment=eq.'+enc(mode)+'&active=eq.true&select=*&order=category.asc,name.asc');
+   const canManageTemplates=elevated(actor)||actor.permissions?.forms_manage_templates===true;
+   const templateAdmin=canManageTemplates?await db(env,'company_form_templates?data_environment=eq.'+enc(mode)+'&select=*&order=is_system.desc,active.desc,name.asc'):[];
+   const staffRolesRows=canManageTemplates?await db(env,'staff_users?select=role&status=neq.'+enc('موقوف')+'&limit=5000').catch(()=>[]):[];
+   const roles=[...new Set(['الموارد البشرية','مدير فرع','مدير عام',...(staffRolesRows||[]).map(x=>txt(x.role)).filter(Boolean)])].sort((a,b)=>a.localeCompare(b,'ar'));
    let subQ='company_form_submissions?data_environment=eq.'+enc(mode)+'&select=*&order=created_at.desc&limit=1000';
    if(!allBranches(actor))subQ+='&branch_id=eq.'+enc(actor.branch_id||'');
    if(!elevated(actor)&&actor.permissions?.forms_approve!==true&&actor.permissions?.forms_manage_templates!==true)subQ+='&requester_id=eq.'+enc(actor.id);
@@ -190,7 +229,7 @@ export default async function formsApi(request,env,actor){
    if(!allBranches(actor)&&actor.branch_id)branchQ+='&id=eq.'+enc(actor.branch_id);
    const branches=await db(env,branchQ).catch(()=>[]);
 
-   return json({ok:true,mode,templates,submissions,approvals,approval_history:approvalHistory,employees,branches,attachments,signatures,effects,
+   return json({ok:true,mode,templates,template_admin:templateAdmin,roles,submissions,approvals,approval_history:approvalHistory,employees,branches,attachments,signatures,effects,
     scope:{all_branches:allBranches(actor),branch_id:actor.branch_id||null},
     permissions:{view:true,submit:elevated(actor)||actor.permissions?.forms_submit===true,approve:elevated(actor)||actor.permissions?.forms_approve===true,manage_templates:elevated(actor)||actor.permissions?.forms_manage_templates===true}
    });
@@ -198,6 +237,34 @@ export default async function formsApi(request,env,actor){
 
   if(request.method!=='POST')return json({error:'Method not allowed'},405);
   const body=await request.json().catch(()=>({})),action=txt(body.action);
+
+  if(action==='save_template'){
+   if(!(elevated(actor)||actor.permissions?.forms_manage_templates===true))return json({error:'لا توجد صلاحية إدارة قوالب النماذج.'},403);
+   const before=body.id?(await db(env,'company_form_templates?id=eq.'+enc(body.id)+'&data_environment=eq.'+enc(mode)+'&select=*&limit=1'))?.[0]||null:null;
+   if(before?.is_system)return json({error:'قالب النظام محمي. أنشئ قالبًا مخصصًا جديدًا بدل تعديل التكامل الأساسي.'},409);
+   const requiresApproval=body.requires_approval!==false;
+   const formSchema=normalizeTemplateSchema(body.form_schema);
+   const approvalFlow=normalizeApprovalFlow(body.approval_flow,requiresApproval);
+   const code=body.id?null:('custom_'+globalThis.crypto.randomUUID().replace(/-/g,'').slice(0,12));
+   let result;
+   try{
+    result=await db(env,'rpc/company_form_save_template',{method:'POST',body:{
+     p_id:body.id||null,p_code:code,p_name:txt(body.name),p_category:txt(body.category)||'general',
+     p_description:txt(body.description)||null,p_document_prefix:txt(body.document_prefix),
+     p_form_schema:formSchema,p_approval_flow:approvalFlow,p_requires_employee:!!body.requires_employee,
+     p_requires_approval:requiresApproval,p_active:body.active!==false,p_actor:String(actor.id),p_environment:mode
+    }});
+   }catch(e){
+    const m=String(e?.message||'');
+    if(m.includes('company_form_template_prefix_invalid'))throw Object.assign(new Error('اختصار رقم المستند يجب أن يكون من 2 إلى 14 حرفًا/رقمًا إنجليزيًا.'),{status:400});
+    if(m.includes('company_form_template_name_invalid'))throw Object.assign(new Error('اسم النموذج غير صحيح.'),{status:400});
+    if(m.includes('company_form_system_template_readonly'))throw Object.assign(new Error('قالب النظام محمي ولا يمكن تعديله من المنشئ.'),{status:409});
+    throw e;
+   }
+   const row=result?.template||null;if(!row)return json({error:'تعذر حفظ قالب النموذج.'},500);
+   await auditTemplate(env,actor,before?'company_form_template_update':'company_form_template_create',row,before,before?'تعديل قالب نموذج مخصص':'إنشاء قالب نموذج مخصص');
+   return json({ok:true,template:row,message:before?'تم حفظ إصدار جديد من القالب.':'تم إنشاء القالب وأصبح جاهزًا للاستخدام.'});
+  }
 
   if(action==='upload_attachment'){
    if(!(elevated(actor)||actor.permissions?.forms_submit===true))return json({error:'لا توجد صلاحية رفع مرفقات للنماذج.'},403);
