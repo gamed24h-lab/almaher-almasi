@@ -1,5 +1,6 @@
 const process = { env: {} };
 import * as crypto from 'node:crypto';
+import formsApi from './forms-index.js';
 // AL-MAHER V10.1.6 — CENTRAL BRANCH SCOPE / LIVE STAFF SESSION HARDENING
 const __mods = Object.create(null);
 function __localRequire(spec){
@@ -1876,6 +1877,8 @@ async function nextApi(request,env){
   }
   if(path==='/api/auth/logout'&&request.method==='POST') return nextJson({ok:true},200,{'set-cookie':nextClearCookie()});
   if(path==='/api/auth/me'&&request.method==='GET') return nextMe(request,env);
+  if(path==='/api/forms/verify'&&request.method==='GET') return formsApi(request,env,null);
+  if(path==='/api/forms') { const actor=await nextActor(request,env); return formsApi(request,env,actor); }
   if(path==='/api/bootstrap'&&request.method==='GET') return nextResult(await nextCall('staff-admin',request,{method:'GET'}));
   if(path==='/api/admin') return nextResult(await nextCall('staff-admin',request));
   if(path==='/api/platform') return nextResult(await nextCall('platform-data',request));
