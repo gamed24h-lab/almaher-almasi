@@ -10,6 +10,7 @@ const enc=v=>encodeURIComponent(String(v??''));
 const lower=v=>txt(v).toLowerCase();
 const isDeveloper=u=>lower(u?.role)==='developer';
 const elevated=u=>!!u&&(isDeveloper(u)||u.role==='مدير عام'||u.permissions?.all===true||u.permissions?.allBranches===true);
+const attendanceAllBranches=u=>!!u&&(elevated(u)||u.permissions?.attendance_all_branches===true);
 const canView=u=>!!u&&(elevated(u)||u.permissions?.attendance_view===true||u.permissions?.attendance_manage_devices===true||u.permissions?.attendance_manage_links===true||u.permissions?.attendance_manage_employees===true||u.permissions?.attendance_manage_biometrics===true||u.permissions?.attendance_manage_schedules===true||u.permissions?.attendance_manage_policies===true||u.permissions?.attendance_review_violations===true||u.permissions?.attendance_close_month===true||u.permissions?.attendance_reopen_month===true||u.permissions?.attendance_delete_employees===true||u.permissions?.attendance_reports===true);
 const canManageDevices=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_devices===true);
 const canManageLinks=u=>!!u&&(elevated(u)||u.permissions?.attendance_manage_links===true);
@@ -129,7 +130,7 @@ async function reconcileAttendanceNotifications(env,devices,deviceHealth,deviceP
 async function updateAttendanceNotification(env,me,body){
  const id=txt(body.id),op=txt(body.notification_action);if(!id)throw Object.assign(new Error('التنبيه غير محدد.'),{status:400});
  const rows=await rest(env,'attendance_notifications?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('التنبيه غير موجود.'),{status:404});
- if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('التنبيه خارج نطاق الفرع.'),{status:403});
+ if(!attendanceAllBranches(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('التنبيه خارج نطاق الفرع.'),{status:403});
  const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;let patch;
  if(op==='seen')patch={status:before.status==='resolved'?'resolved':'seen',seen_at:before.seen_at||now,seen_by:before.seen_by||who,updated_at:now};
  else if(op==='resolved'){
@@ -514,7 +515,7 @@ async function reconcileAttendanceIncidents(env,notifications,policies){
 async function updateAttendanceIncident(env,me,body){
  const id=txt(body.id),op=txt(body.incident_action);if(!id)throw Object.assign(new Error('الحادثة غير محددة.'),{status:400});
  const rows=await rest(env,'attendance_incidents?id=eq.'+enc(id)+'&select=*&limit=1'),before=rows?.[0]||null;if(!before)throw Object.assign(new Error('الحادثة غير موجودة.'),{status:404});
- if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الحادثة خارج نطاق الفرع.'),{status:403});
+ if(!attendanceAllBranches(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('الحادثة خارج نطاق الفرع.'),{status:403});
  if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة الحادثة.'),{status:403});
  const now=new Date(),nowIso=now.toISOString(),who=actorId(me)||actorName(me)||null,name=actorName(me)||who,startedMs=new Date(before.started_at).getTime(),patch={updated_at:nowIso},note=txt(body.note);
  let eventType=op;
@@ -525,7 +526,7 @@ async function updateAttendanceIncident(env,me,body){
  }else if(op==='assign'){
   const staffId=txt(body.owner_staff_id);if(!staffId)throw Object.assign(new Error('حدد المسؤول عن الحادثة.'),{status:400});
   const staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,role,branch_id,status&limit=1'))?.[0]||null;if(!staff||staff.status==='موقوف')throw Object.assign(new Error('المسؤول المحدد غير متاح.'),{status:400});
-  if(!elevated(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(before.branch_id))throw Object.assign(new Error('المسؤول خارج نطاق الفرع.'),{status:403});
+  if(!attendanceAllBranches(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(before.branch_id))throw Object.assign(new Error('المسؤول خارج نطاق الفرع.'),{status:403});
   patch.owner_staff_id=staff.id;patch.owner_name=staff.name||staff.id;if(!['resolved','closed'].includes(before.status))patch.status='investigating';eventType='assigned';patch.metadata={...(before.metadata||{}),owner_role:staff.role||null};
  }else if(op==='resolve'){
   if(before.source_active)throw Object.assign(new Error('لا يمكن حل الحادثة بينما المشكلة الأصلية ما زالت نشطة. عالج السبب أولًا ثم سيغلقها المراقب تلقائيًا.'),{status:409});
@@ -544,13 +545,13 @@ async function updateAttendanceIncident(env,me,body){
 }
 async function saveAttendanceIncidentSlaPolicy(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات SLA.'),{status:403});
- const id=txt(body.id),category=['*','device_health','predictive','linking','maintenance'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*',branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
+ const id=txt(body.id),category=['*','device_health','predictive','linking','maintenance'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*',branchId=attendanceAllBranches(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
  const clamp=v=>Math.max(1,Math.min(10080,Math.round(Number(v)||1))),responseMinutes=clamp(body.response_minutes),resolutionMinutes=clamp(body.resolution_minutes);
  if(resolutionMinutes<responseMinutes)throw Object.assign(new Error('مدة الحل يجب أن تكون مساوية أو أكبر من مدة الاستجابة.'),{status:400});
  const payload={branch_id:branchId,category,severity,active:body.active!==false,response_minutes:responseMinutes,resolution_minutes:resolutionMinutes,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
  let before=null,after=null;
  if(id){
-  before=(await rest(env,'attendance_incident_sla_policies?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('سياسة SLA غير موجودة.'),{status:404});if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('سياسة SLA خارج نطاق الفرع.'),{status:403});
+  before=(await rest(env,'attendance_incident_sla_policies?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('سياسة SLA غير موجودة.'),{status:404});if(!attendanceAllBranches(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('سياسة SLA خارج نطاق الفرع.'),{status:403});
   after=(await rest(env,'attendance_incident_sla_policies?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
  }else{
   const key='custom-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
@@ -567,7 +568,7 @@ function maintenanceType(v){const allowed=new Set(['remote','onsite','replacemen
 function maintenanceRisk(v){return ['low','medium','high'].includes(txt(v))?txt(v):'medium'}
 async function scopedIncident(env,me,id){
  const rows=await rest(env,'attendance_incidents?id=eq.'+enc(id)+'&select=*&limit=1'),incident=rows?.[0]||null;if(!incident)return null;
- if(!elevated(me)&&txt(incident.branch_id)!==actorBranch(me))return null;return incident;
+ if(!attendanceAllBranches(me)&&txt(incident.branch_id)!==actorBranch(me))return null;return incident;
 }
 async function recalcIncidentMaintenanceCosts(env,maintenance){
  if(!maintenance?.id)return maintenance;
@@ -581,7 +582,7 @@ async function saveAttendanceIncidentMaintenance(env,me,body){
  const incidentId=txt(body.incident_id),incident=await scopedIncident(env,me,incidentId);if(!incident)throw Object.assign(new Error('الحادثة غير موجودة أو خارج نطاق الفرع.'),{status:404});
  const existing=(await rest(env,'attendance_incident_maintenance?incident_id=eq.'+enc(incidentId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;
  let technician=null;const technicianId=txt(body.technician_staff_id);
- if(technicianId){technician=(await rest(env,'staff_users?id=eq.'+enc(technicianId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!technician||technician.status==='موقوف')throw Object.assign(new Error('الفني المحدد غير متاح.'),{status:400});if(!elevated(me)&&txt(technician.branch_id)&&txt(technician.branch_id)!==txt(incident.branch_id))throw Object.assign(new Error('الفني خارج نطاق الفرع.'),{status:403})}
+ if(technicianId){technician=(await rest(env,'staff_users?id=eq.'+enc(technicianId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!technician||technician.status==='موقوف')throw Object.assign(new Error('الفني المحدد غير متاح.'),{status:400});if(!attendanceAllBranches(me)&&txt(technician.branch_id)&&txt(technician.branch_id)!==txt(incident.branch_id))throw Object.assign(new Error('الفني خارج نطاق الفرع.'),{status:403})}
  const now=new Date().toISOString(),payload={incident_id:incidentId,root_cause_category:maintenanceCategory(body.root_cause_category),root_cause_text:txt(body.root_cause_text)||null,maintenance_type:maintenanceType(body.maintenance_type),action_taken:txt(body.action_taken)||null,preventive_action:txt(body.preventive_action)||null,recurrence_risk:maintenanceRisk(body.recurrence_risk),recurrence_prevented:body.recurrence_prevented===true,technician_staff_id:technician?.id||null,technician_name:technician?.name||txt(body.technician_name)||null,vendor_name:txt(body.vendor_name)||null,maintenance_started_at:body.maintenance_started_at||existing?.maintenance_started_at||now,maintenance_completed_at:body.maintenance_completed_at||null,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
  let after;
  if(existing)after=(await rest(env,'attendance_incident_maintenance?id=eq.'+enc(existing.id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
@@ -668,14 +669,14 @@ async function savePreventiveMaintenancePlan(env,me,body){
  if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة خطط الصيانة الوقائية.'),{status:403});
  const id=txt(body.id),deviceId=txt(body.device_id);if(!deviceId)throw Object.assign(new Error('حدد جهاز البصمة.'),{status:400});
  const device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});
- if(!elevated(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
+ if(!attendanceAllBranches(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
  const frequency=Math.max(1,Math.min(365,Math.round(Number(body.frequency_days)||30))),lead=Math.max(0,Math.min(90,Math.round(Number(body.lead_days)||7))),threshold=Math.max(2,Math.min(10,Math.round(Number(body.recurrence_threshold)||3))),windowDays=Math.max(30,Math.min(365,Math.round(Number(body.recurrence_window_days)||90))),checklist=preventiveChecklist(body.checklist);
  const title=txt(body.title)||('صيانة دورية — '+(device.name||device.serial_number)),nextDue=preventiveDueIso(body.next_due_at,frequency),staffId=txt(body.assigned_staff_id);let staff=null;
- if(staffId){staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!staff||staff.status==='موقوف')throw Object.assign(new Error('الموظف المسؤول غير متاح.'),{status:400});if(!elevated(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(device.branch_id))throw Object.assign(new Error('الموظف المسؤول خارج نطاق الفرع.'),{status:403})}
+ if(staffId){staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;if(!staff||staff.status==='موقوف')throw Object.assign(new Error('الموظف المسؤول غير متاح.'),{status:400});if(!attendanceAllBranches(me)&&txt(staff.branch_id)&&txt(staff.branch_id)!==txt(device.branch_id))throw Object.assign(new Error('الموظف المسؤول خارج نطاق الفرع.'),{status:403})}
  const now=new Date().toISOString(),payload={branch_id:device.branch_id||null,device_id:device.id,title,active:body.active!==false,frequency_days:frequency,lead_days:lead,checklist,assigned_staff_id:staff?.id||null,assigned_staff_name:staff?.name||null,vendor_name:txt(body.vendor_name)||null,next_due_at:nextDue,recurrence_window_days:windowDays,recurrence_threshold:threshold,notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
  let before=null,after=null;
  if(id){
-  before=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('خطة الصيانة خارج نطاق الفرع.'),{status:403});
+  before=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!before)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!attendanceAllBranches(me)&&txt(before.branch_id)!==actorBranch(me))throw Object.assign(new Error('خطة الصيانة خارج نطاق الفرع.'),{status:403});
   after=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
  }else{
   after=(await rest(env,'attendance_preventive_maintenance_plans',{method:'POST',body:{...payload,plan_key:'pm-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),created_by:actorId(me)||actorName(me)||null,created_at:now},prefer:'return=representation'}))?.[0]||null;
@@ -686,7 +687,7 @@ async function savePreventiveMaintenancePlan(env,me,body){
 }
 async function completePreventiveMaintenance(env,me,body){
  if(!canManageDevices(me)&&!canReviewViolations(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لتنفيذ الصيانة الوقائية.'),{status:403});
- const id=txt(body.plan_id),plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
+ const id=txt(body.plan_id),plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!attendanceAllBranches(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
  const checklist=preventiveChecklist(plan.checklist),results=body.checklist_results&&typeof body.checklist_results==='object'&&!Array.isArray(body.checklist_results)?body.checklist_results:{};const missing=checklist.filter(x=>results[x]!==true);
  if(missing.length)throw Object.assign(new Error('أكمل جميع بنود قائمة الفحص قبل اعتماد الصيانة.'),{status:409});
  const now=new Date(),nowIso=now.toISOString(),staffId=txt(body.performed_by_staff_id)||txt(plan.assigned_staff_id);let staff=null;if(staffId)staff=(await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1').catch(()=>[]))?.[0]||null;
@@ -698,7 +699,7 @@ async function completePreventiveMaintenance(env,me,body){
 async function skipPreventiveMaintenance(env,me,body){
  if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لتخطي دورة الصيانة.'),{status:403});
  const id=txt(body.plan_id),reason=txt(body.reason);if(!reason)throw Object.assign(new Error('اكتب سبب تخطي دورة الصيانة.'),{status:400});
- const plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!elevated(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
+ const plan=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(id)+'&select=*&limit=1'))?.[0]||null;if(!plan)throw Object.assign(new Error('خطة الصيانة غير موجودة.'),{status:404});if(!attendanceAllBranches(me)&&txt(plan.branch_id)!==actorBranch(me))throw Object.assign(new Error('الخطة خارج نطاق الفرع.'),{status:403});
  const now=new Date(),nowIso=now.toISOString(),run=(await rest(env,'attendance_preventive_maintenance_runs',{method:'POST',body:{plan_id:plan.id,device_id:plan.device_id,branch_id:plan.branch_id||null,due_at:plan.next_due_at,status:'skipped',skip_reason:reason,performed_by_name:actorName(me)||null,created_by:actorId(me)||actorName(me)||null,created_at:nowIso,updated_at:nowIso},prefer:'return=representation'}))?.[0]||null;
  const nextDue=new Date(now.getTime()+Math.max(1,Number(plan.frequency_days)||30)*86400000).toISOString(),after=(await rest(env,'attendance_preventive_maintenance_plans?id=eq.'+enc(plan.id),{method:'PATCH',body:{next_due_at:nextDue,updated_by:actorId(me)||actorName(me)||null,updated_at:nowIso},prefer:'return=representation'}))?.[0]||plan;
  await audit(env,me,'attendance_preventive_maintenance_skipped','attendance_preventive_maintenance_run',run?.id||plan.id,plan.branch_id,null,run||{reason},reason);
@@ -718,7 +719,7 @@ async function addDeviceAssetEvent(env,asset,eventType,title,details,amount,acto
 async function saveAttendanceDeviceAsset(env,me,body){
  if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة بيانات أصول أجهزة البصمة.'),{status:403});
  const deviceId=txt(body.device_id);if(!deviceId)throw Object.assign(new Error('حدد جهاز البصمة.'),{status:400});
- const device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});if(!elevated(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
+ const device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});if(!attendanceAllBranches(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
  const existing=(await rest(env,'attendance_device_assets?device_id=eq.'+enc(deviceId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null,purchaseDate=assetDate(body.purchase_date),installationDate=assetDate(body.installation_date),warrantyStart=assetDate(body.warranty_start_date),warrantyEnd=assetDate(body.warranty_end_date),contractEnd=assetDate(body.service_contract_end_date);
  if(warrantyStart&&warrantyEnd&&new Date(warrantyEnd)<new Date(warrantyStart))throw Object.assign(new Error('نهاية الضمان يجب أن تكون بعد بدايته.'),{status:400});
  const now=new Date().toISOString(),payload={device_id:device.id,branch_id:device.branch_id||null,asset_tag:txt(body.asset_tag)||null,purchase_date:purchaseDate,installation_date:installationDate,purchase_cost:maintenanceNumber(body.purchase_cost),replacement_cost:maintenanceNumber(body.replacement_cost),expected_life_months:Math.max(1,Math.min(240,Math.round(Number(body.expected_life_months)||60))),warranty_start_date:warrantyStart,warranty_end_date:warrantyEnd,service_contract_end_date:contractEnd,vendor_name:txt(body.vendor_name)||null,vendor_contact:txt(body.vendor_contact)||null,criticality:assetCriticality(body.criticality),asset_status:assetStatus(body.asset_status),notes:txt(body.notes)||null,updated_by:actorId(me)||actorName(me)||null,updated_at:now};
@@ -732,7 +733,7 @@ async function saveAttendanceDeviceAsset(env,me,body){
 }
 async function addAttendanceDeviceAssetEvent(env,me,body){
  if(!canManageDevices(me)&&!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإضافة حدث دورة حياة للجهاز.'),{status:403});
- const deviceId=txt(body.device_id),device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});if(!elevated(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
+ const deviceId=txt(body.device_id),device=(await rest(env,'attendance_devices?id=eq.'+enc(deviceId)+'&select=*&limit=1'))?.[0]||null;if(!device)throw Object.assign(new Error('الجهاز غير موجود.'),{status:404});if(!attendanceAllBranches(me)&&txt(device.branch_id)!==actorBranch(me))throw Object.assign(new Error('الجهاز خارج نطاق الفرع.'),{status:403});
  const asset=(await rest(env,'attendance_device_assets?device_id=eq.'+enc(deviceId)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;if(!asset)throw Object.assign(new Error('سجل الأصل غير موجود. احفظ بيانات الأصل أولًا.'),{status:409});
  const allowed=new Set(['purchase','installation','relocation','warranty_service','contract_service','repair','upgrade','replacement_review','retirement','reactivation','note']),eventType=allowed.has(txt(body.event_type))?txt(body.event_type):'note',title=txt(body.title);if(!title)throw Object.assign(new Error('اكتب عنوان الحدث.'),{status:400});
  const eventDate=body.event_date?new Date(body.event_date).toISOString():new Date().toISOString(),event=await addDeviceAssetEvent(env,asset,eventType,title,body.details,body.amount,actorId(me),actorName(me),eventDate,{source:'manual'});
@@ -764,7 +765,7 @@ function buildDeviceLifecycle(devices,assets,historicalIncidents,historicalMaint
 async function saveAttendanceEscalationRule(env,me,body){
  if(!canManagePolicies(me)&&!elevated(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة قواعد تصعيد التنبيهات.'),{status:403});
  const id=txt(body.id),category=['*','device_health','predictive','linking','maintenance'].includes(txt(body.category))?txt(body.category):'*',severity=['*','critical','warning','info'].includes(txt(body.severity))?txt(body.severity):'*';
- const branchId=elevated(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
+ const branchId=attendanceAllBranches(me)?(txt(body.branch_id)||null):actorBranch(me)||null;
  const minute=v=>{if(v===null||v===undefined||v==='')return null;const n=Number(v);return Number.isFinite(n)?Math.max(0,Math.min(10080,Math.round(n))):null};
  const l1=minute(body.level1_minutes),l2=minute(body.level2_minutes),l3=minute(body.level3_minutes);
  if(l2!=null&&l1!=null&&l2<l1)throw Object.assign(new Error('المستوى الثاني يجب أن يكون بعد المستوى الأول.'),{status:400});
@@ -773,7 +774,7 @@ async function saveAttendanceEscalationRule(env,me,body){
  const payload={branch_id:branchId,category,severity,active:body.active!==false,level1_minutes:l1,level2_minutes:l2,level3_minutes:l3,level1_roles:cleanEscalationRoles(body.level1_roles),level2_roles:cleanEscalationRoles(body.level2_roles),level3_roles:cleanEscalationRoles(body.level3_roles),channels,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
  let before=null,after=null;
  if(id){
-  const rows=await rest(env,'attendance_notification_escalation_rules?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)throw Object.assign(new Error('قاعدة التصعيد غير موجودة.'),{status:404});if(!elevated(me)&&txt(row.branch_id)!==actorBranch(me))throw Object.assign(new Error('قاعدة التصعيد خارج نطاق الفرع.'),{status:403});before=row;
+  const rows=await rest(env,'attendance_notification_escalation_rules?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)throw Object.assign(new Error('قاعدة التصعيد غير موجودة.'),{status:404});if(!attendanceAllBranches(me)&&txt(row.branch_id)!==actorBranch(me))throw Object.assign(new Error('قاعدة التصعيد خارج نطاق الفرع.'),{status:403});before=row;
   after=(await rest(env,'attendance_notification_escalation_rules?id=eq.'+enc(id),{method:'PATCH',body:payload,prefer:'return=representation'}))?.[0]||null;
  }else{
   const ruleKey='custom-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
@@ -1170,9 +1171,9 @@ async function admsRequest(request,env){
 
 async function audit(env,me,action,entityType,entityId,branchId,beforeData,afterData,reason){try{await rest(env,'audit_events',{method:'POST',body:{actor_id:actorId(me)||null,actor_name:actorName(me)||null,actor_role:txt(me?.role)||null,action,entity_type:entityType,entity_id:txt(entityId)||null,branch_id:branchId||null,before_data:beforeData||null,after_data:afterData||null,reason:txt(reason)||null},prefer:'return=minimal'});return true}catch{return false}}
 function actorBranch(me){return txt(me?.branch_id||me?.home_branch_id)}
-function requestedBranch(me,body,url){if(!elevated(me))return actorBranch(me);return txt(body?.branch_id||url?.searchParams?.get('branch_id'))}
-async function scopedDevice(env,me,id){const rows=await rest(env,'attendance_devices?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)return null;if(!elevated(me)&&txt(row.branch_id)!==actorBranch(me))return null;return row}
-async function scopedEmployee(env,me,id){const rows=await rest(env,'attendance_employees?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)return null;if(!elevated(me)&&txt(row.branch_id)!==actorBranch(me))return null;return row}
+function requestedBranch(me,body,url){if(!attendanceAllBranches(me))return actorBranch(me);return txt(body?.branch_id||url?.searchParams?.get('branch_id'))}
+async function scopedDevice(env,me,id){const rows=await rest(env,'attendance_devices?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)return null;if(!attendanceAllBranches(me)&&txt(row.branch_id)!==actorBranch(me))return null;return row}
+async function scopedEmployee(env,me,id){const rows=await rest(env,'attendance_employees?id=eq.'+enc(id)+'&select=*&limit=1'),row=rows?.[0]||null;if(!row)return null;if(!attendanceAllBranches(me)&&txt(row.branch_id)!==actorBranch(me))return null;return row}
 async function runtimeMode(env){try{const rows=await rest(env,'system_runtime_state?id=eq.main&select=runtime_mode&limit=1');return txt(rows?.[0]?.runtime_mode)||'training'}catch{return 'training'}}
 function dateStart(value){const v=txt(value);if(!/^\d{4}-\d{2}-\d{2}$/.test(v))return null;const d=new Date(v+'T00:00:00+03:00');return Number.isNaN(d.getTime())?null:d}
 function dateEndExclusive(value){const d=dateStart(value);if(!d)return null;d.setUTCDate(d.getUTCDate()+1);return d}
@@ -1734,7 +1735,7 @@ async function reopenAttendanceMonth(env,me,body){
 
 async function saveAttendancePolicy(env,me,body){
  if(!canManagePolicies(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة سياسات الحضور والمخالفات.'),{status:403});
- const branchId=elevated(me)?txt(body.branch_id):actorBranch(me),mode=body.data_environment==='production'?'production':'training';
+ const branchId=attendanceAllBranches(me)?txt(body.branch_id):actorBranch(me),mode=body.data_environment==='production'?'production':'training';
  if(!branchId)throw Object.assign(new Error('اختر الفرع أولًا.'),{status:400});
  const branch=(await rest(env,'branches?id=eq.'+enc(branchId)+'&select=id,name&limit=1'))?.[0]||null;
  if(!branch)throw Object.assign(new Error('الفرع غير موجود.'),{status:404});
@@ -1976,7 +1977,7 @@ async function attendanceState(env,me,url){
  const biometricEnrollmentRequests=await rest(env,'attendance_biometric_enrollment_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=500').catch(()=>[]);
  const linkIdentityReviews=await rest(env,'attendance_link_identity_reviews?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=reviewed_at.desc&limit=2000').catch(()=>[]);
  const selfServiceBiometricRequests=await rest(env,'attendance_self_service_biometric_requests?select=*&data_environment=eq.'+enc(mode)+biometricScope+'&order=requested_at.desc&limit=2000').catch(()=>[]);
- return {ok:true,scheduleActivation,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:elevated(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
+ return {ok:true,scheduleActivation,devices,biometricProfiles,biometricDeviceStates,biometricInventory,biometricSyncStates,biometricEnrollmentRequests,linkIdentityReviews,selfServiceBiometricRequests,deviceHealth,deviceHealthHistory,devicePredictiveAlerts,healthEvents,clockChecks,notifications,notificationCounts,escalationRules,escalationEvents,deliverySettings,deliveries:sanitizedDeliveries,deliveryCounts,incidents,incidentCounts,incidentAnalytics,incidentPolicies,incidentEvents,incidentMaintenance,maintenanceActions,maintenanceAnalytics,preventiveMaintenancePlans,preventiveMaintenanceRuns,preventiveMaintenanceAlerts,preventiveMaintenanceAnalytics,deviceAssets,deviceAssetEvents,deviceLifecycle,deviceLifecycleAlerts,deviceLifecycleAnalytics,watchdog,deviceUsers,commands,deviceShiftTemplates,deleteRequests,calendarRules,policies,links,logs,unlinkedGroups,unlinkedTotal,unlinkedTruncated:(unlinkedRows||[]).length>=5000,employees,shiftPeriods:scopedShiftPeriods,scheduleVersions:scopedScheduleVersions,users,branches,scope:{branch_id:branchId||null,all_branches:attendanceAllBranches(me),environment:mode},permissions:{view:true,manage_devices:canManageDevices(me),manage_links:canManageLinks(me),manage_employees:canManageEmployees(me),manage_biometrics:canManageBiometrics(me),manage_schedules:canManageSchedules(me),manage_policies:canManagePolicies(me),review_violations:canReviewViolations(me),close_month:canCloseMonth(me),reopen_month:canReopenMonth(me),delete_employees:canDeleteEmployees(me),reports:canReports(me)},adms:{host:'system.almaheralmasi.sa',port:443,https:true,domain:true,proxy:false,path:'/iclock'}};
 }
 
 async function attendanceReport(env,me,body){
@@ -2026,7 +2027,7 @@ async function attendanceReport(env,me,body){
 
 async function saveDevice(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة أجهزة البصمة.'),{status:403});
- const id=txt(body.id),serial=txt(body.serial_number).toUpperCase(),name=txt(body.name),model=txt(body.model),branchId=elevated(me)?txt(body.branch_id):actorBranch(me),status=body.status==='disabled'?'disabled':'active',connection=['adms','agent','sdk','api'].includes(body.connection_mode)?body.connection_mode:'adms',requestedEnv=body.data_environment==='production'?'production':'training',systemMode=await runtimeMode(env);
+ const id=txt(body.id),serial=txt(body.serial_number).toUpperCase(),name=txt(body.name),model=txt(body.model),branchId=attendanceAllBranches(me)?txt(body.branch_id):actorBranch(me),status=body.status==='disabled'?'disabled':'active',connection=['adms','agent','sdk','api'].includes(body.connection_mode)?body.connection_mode:'adms',requestedEnv=body.data_environment==='production'?'production':'training',systemMode=await runtimeMode(env);
  if(!serial||!name)throw Object.assign(new Error('اسم الجهاز والرقم التسلسلي مطلوبان.'),{status:400});if(requestedEnv==='production'&&systemMode!=='production')throw Object.assign(new Error('لا يمكن تحويل جهاز البصمة إلى Production بينما النظام في وضع التدريب.'),{status:409});
  let before=null;if(id){before=await scopedDevice(env,me,id);if(!before)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404})}
  const payload={serial_number:serial,name,model:model||null,branch_id:branchId||null,connection_mode:connection,status,data_environment:requestedEnv,timezone:'Asia/Riyadh',updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
@@ -2293,7 +2294,7 @@ async function autoReconcileBiometrics(env,me,body){
 async function biometricProfileForActor(env,me,id){
  const rows=await rest(env,'attendance_biometric_profiles?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]),profile=rows?.[0]||null;
  if(!profile)return null;
- if(!elevated(me)&&txt(profile.branch_id)!==actorBranch(me))return null;
+ if(!attendanceAllBranches(me)&&txt(profile.branch_id)!==actorBranch(me))return null;
  return profile;
 }
 function biometricDeleteCommand(device,profile){
@@ -2434,9 +2435,9 @@ async function finalizeBiometricEnrollment(env,cmd,rc,now){
 
 async function saveEmployee(env,me,body){
  if(!canManageEmployees(me))throw Object.assign(new Error('لا توجد صلاحية لإدارة موظفي الحضور.'),{status:403});
- const id=txt(body.id),name=txt(body.name),branchId=elevated(me)?txt(body.branch_id):actorBranch(me),staffId=txt(body.staff_user_id),requestedEnv=body.data_environment==='production'?'production':'training',systemMode=await runtimeMode(env);
+ const id=txt(body.id),name=txt(body.name),branchId=attendanceAllBranches(me)?txt(body.branch_id):actorBranch(me),staffId=txt(body.staff_user_id),requestedEnv=body.data_environment==='production'?'production':'training',systemMode=await runtimeMode(env);
  if(!name)throw Object.assign(new Error('اسم الموظف مطلوب.'),{status:400});if(!branchId)throw Object.assign(new Error('اختر فرع الموظف.'),{status:400});if(requestedEnv==='production'&&systemMode!=='production')throw Object.assign(new Error('لا يمكن إنشاء موظف حضور Production بينما النظام في وضع التدريب.'),{status:409});
- let staff=null;if(staffId){const rows=await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1');staff=rows?.[0]||null;if(!staff)throw Object.assign(new Error('حساب الموظف المختار غير موجود.'),{status:404});if(!elevated(me)&&txt(staff.branch_id)!==actorBranch(me))throw Object.assign(new Error('لا يمكن ربط حساب من فرع آخر.'),{status:403})}
+ let staff=null;if(staffId){const rows=await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1');staff=rows?.[0]||null;if(!staff)throw Object.assign(new Error('حساب الموظف المختار غير موجود.'),{status:404});if(!attendanceAllBranches(me)&&txt(staff.branch_id)!==actorBranch(me))throw Object.assign(new Error('لا يمكن ربط حساب من فرع آخر.'),{status:403})}
  let before=null,beforePeriods=[];if(id){before=await scopedEmployee(env,me,id);if(!before)throw Object.assign(new Error('موظف الحضور غير موجود أو خارج نطاق الفرع.'),{status:404});beforePeriods=await rest(env,'attendance_employee_shift_periods?attendance_employee_id=eq.'+enc(id)+'&active=eq.true&select=*&order=sequence_no.asc').catch(()=>[])}
  const suppliedPeriods=Array.isArray(body.shift_periods),periods=suppliedPeriods?cleanShiftPeriods(body.shift_periods):cleanShiftPeriods([{label:'الفترة الأولى',start_time:body.shift_start,end_time:body.shift_end,grace_minutes:body.grace_minutes}]);
  const firstPeriod=periods[0]||null,weeklyOffDays=cleanOffDays(body.weekly_off_days);
@@ -2503,7 +2504,7 @@ async function saveLink(env,me,body){
  const pin=txt(body.device_pin),attendanceEmployeeId=txt(body.attendance_employee_id),staffId=txt(body.staff_user_id);if(!pin)throw Object.assign(new Error('رقم الموظف داخل جهاز البصمة مطلوب.'),{status:400});
  let attendanceEmployee=null,staff=null;
  if(attendanceEmployeeId){attendanceEmployee=await scopedEmployee(env,me,attendanceEmployeeId);if(!attendanceEmployee)throw Object.assign(new Error('موظف الحضور المختار غير موجود.'),{status:404});if(device.branch_id&&attendanceEmployee.branch_id&&txt(device.branch_id)!==txt(attendanceEmployee.branch_id))throw Object.assign(new Error('الجهاز وموظف الحضور يجب أن يكونا في نفس الفرع.'),{status:400});}
- if(!attendanceEmployee&&staffId){const rows=await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1');staff=rows?.[0]||null;if(!staff)throw Object.assign(new Error('الموظف المختار غير موجود.'),{status:404});if(!elevated(me)&&txt(staff.branch_id)!==actorBranch(me))throw Object.assign(new Error('لا يمكن ربط موظف من فرع آخر.'),{status:403})}
+ if(!attendanceEmployee&&staffId){const rows=await rest(env,'staff_users?id=eq.'+enc(staffId)+'&select=id,name,branch_id,status&limit=1');staff=rows?.[0]||null;if(!staff)throw Object.assign(new Error('الموظف المختار غير موجود.'),{status:404});if(!attendanceAllBranches(me)&&txt(staff.branch_id)!==actorBranch(me))throw Object.assign(new Error('لا يمكن ربط موظف من فرع آخر.'),{status:403})}
  const resolvedStaff=attendanceEmployee?.staff_user_id||staff?.id||null,branchId=txt(device.branch_id||attendanceEmployee?.branch_id||staff?.branch_id)||null,displayName=txt(attendanceEmployee?.name||staff?.name||body.display_name)||null;
  const payload={device_id:device.id,device_pin:pin,attendance_employee_id:attendanceEmployee?.id||null,staff_user_id:resolvedStaff,branch_id:branchId,display_name:displayName,active:true,updated_by:actorId(me)||actorName(me)||null,updated_at:new Date().toISOString()};
  const before=(await rest(env,'attendance_employee_links?device_id=eq.'+enc(device.id)+'&device_pin=eq.'+enc(pin)+'&select=*&limit=1'))?.[0]||null;
@@ -2701,7 +2702,7 @@ async function attendanceSelfServiceApi(request,env,ctx){
 async function reviewSelfServiceBiometricRequest(env,me,body){
  const id=txt(body.id),decision=txt(body.decision),reason=txt(body.reason);if(!id)throw Object.assign(new Error('طلب الموظف غير محدد.'),{status:400});
  const req=(await rest(env,'attendance_self_service_biometric_requests?id=eq.'+enc(id)+'&select=*&limit=1').catch(()=>[]))?.[0]||null;if(!req)throw Object.assign(new Error('طلب الموظف غير موجود.'),{status:404});
- if(!elevated(me)&&txt(req.branch_id)!==actorBranch(me))throw Object.assign(new Error('الطلب خارج نطاق فرعك.'),{status:403});
+ if(!attendanceAllBranches(me)&&txt(req.branch_id)!==actorBranch(me))throw Object.assign(new Error('الطلب خارج نطاق فرعك.'),{status:403});
  if(req.status!=='pending')return {ok:true,request:req,message:'هذا الطلب تمت معالجته بالفعل.'};
  const now=new Date().toISOString(),who=actorId(me)||actorName(me)||null;
  if(decision==='reject'){
