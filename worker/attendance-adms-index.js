@@ -56,8 +56,14 @@ async function touchDevice(env,device,request,url,extra={}){
   const previous=device.last_command_poll_at||null,prevMs=previous?new Date(previous).getTime():NaN,nowMs=new Date(now).getTime(),gapSec=Number.isFinite(prevMs)?Math.round((nowMs-prevMs)/1000):0;
   patch.last_command_poll_at=now;
   if(gapSec>1800){
-   const startedAt=new Date(prevMs+1800*1000).toISOString(),duration=Math.max(1,gapSec-1800);
-   await recordDeviceHealthEvent(env,{event_key:'disconnect_gap:'+device.id+':'+new Date(prevMs).toISOString(),device_id:device.id,branch_id:device.branch_id,event_type:'disconnect_gap',severity:duration>=4*3600?'critical':'warning',started_at:startedAt,ended_at:now,duration_seconds:duration,summary:'انقطاع اتصال تقريبي قبل عودة الجهاز لمدة '+Math.max(1,Math.round(duration/60))+' دقيقة.',metadata:{previous_poll_at:previous,reconnected_at:now,threshold_seconds:1800}});
+   const startedAt=new Date(prevMs+1800*1000).toISOString(),duration=Math.max(1,gapSec-1800),overlapMs=5*60*1000,recoveryStart=deviceLocalDateTime(new Date(prevMs-overlapMs)),recoveryEnd=deviceLocalNow(),preferredStrategy=txt(device?.metadata?.history_profile?.preferred_strategy)||'range_space';
+   let recoveryQueued=false;
+   if(!(await hasAttendanceHistoryTransfer(env,device))){
+    await rest(env,'attendance_device_commands',{method:'POST',body:{device_id:device.id,command_type:'history_attlog',command_text:historyQueryCommand(preferredStrategy,recoveryStart,recoveryEnd),metadata:{automatic_recovery:true,recovery_reason:'reconnect_gap',requested_start:recoveryStart,requested_end:recoveryEnd,history_strategy:preferredStrategy,previous_poll_at:previous,reconnected_at:now,overlap_seconds:Math.round(overlapMs/1000)},created_by:'system:reconnect_recovery'},prefer:'return=minimal'}).catch(()=>{});
+    recoveryQueued=true;
+   }
+   device.metadata={...(device.metadata||{}),last_reconnect_recovery:{detected_at:now,previous_poll_at:previous,gap_seconds:gapSec,recovery_start:recoveryStart,recovery_end:recoveryEnd,history_strategy:preferredStrategy,queued:recoveryQueued}};
+   await recordDeviceHealthEvent(env,{event_key:'disconnect_gap:'+device.id+':'+new Date(prevMs).toISOString(),device_id:device.id,branch_id:device.branch_id,event_type:'disconnect_gap',severity:duration>=4*3600?'critical':'warning',started_at:startedAt,ended_at:now,duration_seconds:duration,summary:'انقطاع اتصال تقريبي قبل عودة الجهاز لمدة '+Math.max(1,Math.round(duration/60))+' دقيقة.',metadata:{previous_poll_at:previous,reconnected_at:now,threshold_seconds:1800,automatic_recovery_queued:recoveryQueued,recovery_start:recoveryStart,recovery_end:recoveryEnd,history_strategy:preferredStrategy}});
   }
  }
  const pv=txt(url.searchParams.get('pushver')||extra.pushversion);if(pv)patch.push_version=pv;
@@ -1215,7 +1221,8 @@ async function replaceShiftPeriods(env,me,employeeId,periods){
  const now=new Date().toISOString(),rows=periods.map(p=>({attendance_employee_id:employeeId,sequence_no:p.sequence_no,label:p.label,start_time:p.start_time,end_time:p.end_time,grace_minutes:p.grace_minutes,device_shift_template_id:p.device_shift_template_id||null,source_type:p.device_shift_template_id?'device_template':'custom',weekdays:cleanWeekdays(p.weekdays),active:true,created_by:actorId(me)||actorName(me)||null,updated_by:actorId(me)||actorName(me)||null,created_at:now,updated_at:now}));
  return await rest(env,'attendance_employee_shift_periods',{method:'POST',body:rows,prefer:'return=representation'});
 }
-function deviceLocalNow(){try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date()).replace('T',' ')}catch{return new Date().toISOString().slice(0,19).replace('T',' ')}}
+function deviceLocalDateTime(value=new Date()){const d=value instanceof Date?value:new Date(value);try{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d).replace('T',' ')}catch{return d.toISOString().slice(0,19).replace('T',' ')}}
+function deviceLocalNow(){return deviceLocalDateTime(new Date())}
 async function queueDeviceSync(env,me,body){
  if(!canManageDevices(me))throw Object.assign(new Error('لا توجد صلاحية لسحب بيانات جهاز البصمة.'),{status:403});
  const device=await scopedDevice(env,me,txt(body.device_id));if(!device)throw Object.assign(new Error('الجهاز غير موجود أو خارج نطاق الفرع.'),{status:404});

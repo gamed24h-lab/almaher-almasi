@@ -51,7 +51,7 @@ export default function Attendance({initialTab=''}){
  const userMap=useMemo(()=>new Map(users.map(x=>[String(x.id),x])),[users]);
  const employeeMap=useMemo(()=>new Map(employees.map(x=>[String(x.id),x])),[employees]);
  const deviceUserMap=useMemo(()=>new Map(deviceUsers.map(x=>[String(x.device_id)+'|'+String(x.device_pin),x])),[deviceUsers]);
- const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length;
+ const today=dayKey(new Date()),todayLogs=logs.filter(x=>dayKey(x.occurred_at)===today),unlinked=Number(state.unlinkedTotal??unlinkedGroups.reduce((n,x)=>n+Number(x.count||0),0)),onlineCount=devices.filter(online).length,offlineDevices=devices.filter(d=>d.status==='active'&&!online(d)),recoveringDevices=devices.filter(d=>d.status==='active'&&d.metadata?.force_attlog_replay);
 
  const employeeOptions=useMemo(()=>employees.map(e=>({value:String(e.id),label:(e.employee_code?e.employee_code+' — ':'')+(e.name||e.id)})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[employees]);
  const branchOptions=useMemo(()=>branches.map(b=>({value:String(b.id),label:b.name||b.id})).sort((a,b)=>a.label.localeCompare(b.label,'ar')),[branches]);
@@ -132,7 +132,7 @@ export default function Attendance({initialTab=''}){
   {key:'serial',label:'Serial Number',render:r=><span dir="ltr">{r.serial_number}</span>},
   {key:'branch',label:'الفرع',render:r=>branchMap.get(String(r.branch_id))||<Badge tone="orange">غير مربوط</Badge>},
   {key:'env',label:'البيئة',render:r=>r.data_environment==='production'?<Badge tone="green">Production</Badge>:<Badge tone="orange">Training</Badge>},
-  {key:'connection',label:'الاتصال',render:r=>online(r)?<Badge tone="green"><Wifi size={13}/> متصل / حديث</Badge>:<Badge tone="red"><WifiOff size={13}/> غير متصل</Badge>},
+  {key:'connection',label:'الاتصال',render:r=>!online(r)?<Badge tone="red"><WifiOff size={13}/> غير متصل</Badge>:r.metadata?.force_attlog_replay?<Badge tone="orange"><RefreshCw size={13}/> متصل · استرجاع الحركات</Badge>:<Badge tone="green"><Wifi size={13}/> متصل / حديث</Badge>},
   {key:'seen',label:'آخر اتصال',render:r=>fmtDate(r.last_command_poll_at||r.last_seen_at)},
   {key:'edit',label:'',render:r=>state.permissions?.manage_devices?<Button onClick={()=>editDevice(r)}><Settings2 size={15}/> إعداد</Button>:'—'}
  ];
@@ -169,6 +169,8 @@ export default function Attendance({initialTab=''}){
 
   {activeTab==='overview'&&<>
    <div className="stats-grid"><Card><div className="stat-card"><div><span>الأجهزة</span><strong>{devices.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>متصل الآن</span><strong>{onlineCount}</strong></div></div></Card><Card><div className="stat-card"><div><span>بصمات اليوم</span><strong>{todayLogs.length}</strong></div></div></Card><Card><div className="stat-card"><div><span>غير مرتبطة بموظف</span><strong>{unlinked}</strong></div></div></Card></div>
+   {offlineDevices.length>0&&<div className="training-banner" style={{background:'#fff4f2',color:'#8a2f22',borderColor:'#f0c7bf'}}><WifiOff size={16}/> يوجد {offlineDevices.length} جهاز بصمة غير متصل حاليًا: {offlineDevices.map(d=>d.name||d.serial_number).join('، ')}. لا يعتمد النظام الغياب أو الجزاءات الناتجة عن فترة الانقطاع حتى تكتمل استعادة الحركات.</div>}
+   {recoveringDevices.length>0&&<div className="training-banner" style={{background:'#eef7ff',color:'#174a7e',borderColor:'#c9def4'}}><RefreshCw size={16}/> وضع Recovery مفعّل على {recoveringDevices.length} جهاز: {recoveringDevices.map(d=>d.name||d.serial_number).join('، ')}. عند عودة الاتصال ستُسترجع الحركات المحفوظة مع منع التكرار تلقائيًا.</div>}
    <Card><div className="card-title"><div><h3><Fingerprint size={19}/> إعداد ADMS المركزي</h3><small>حالة الاتصال المعتمدة لأجهزة ZKTeco</small></div><Badge tone="green">ZKTeco Push</Badge></div><div className="stats-grid"><Card><div className="stat-card"><div><span>Domain</span><strong dir="ltr">{state.adms?.host||'system.almaheralmasi.sa'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Port</span><strong>{state.adms?.port||443}</strong></div></div></Card><Card><div className="stat-card"><div><span>HTTPS</span><strong>{state.adms?.https===false?'OFF':'ON'}</strong></div></div></Card><Card><div className="stat-card"><div><span>Proxy</span><strong>OFF</strong></div></div></Card></div><div className="success-note"><ShieldCheck size={16}/> النظام يستقبل الحركات، ويمكنه اكتشاف حالة بصمات الأصابع والوجه الموجودة على أجهزة ZKTeco. يتم حفظ PIN ونوع البصمة ورقم الإصبع والحالة فقط، ولا يتم حفظ قالب FP/Face الخام.</div></Card>
    <Card><div className="card-title"><div><h3>آخر الحركات</h3><small>آخر 10 بصمات مستلمة للمتابعة السريعة</small></div><Badge>{Math.min(10,logs.length)}</Badge></div><Table preferenceKey="attendance-overview-logs" defaultPageSize={10} rows={logs.slice(0,10)} columns={logCols}/></Card>
   </>}
