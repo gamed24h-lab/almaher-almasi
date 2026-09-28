@@ -10,7 +10,8 @@ export function resolveAttendanceDayStatus({
   missingPunches=0,
   shortageMinutes=0,
   partialThreshold=60,
-  approvedPermissionMinutes=0
+  approvedPermissionMinutes=0,
+  provisionalStatus=''
 }={}){
   const periods=Math.max(0,Number(periodsCount)||0);
   const punchCount=Math.max(0,Number(punches)||0);
@@ -20,9 +21,11 @@ export function resolveAttendanceDayStatus({
   const shortage=Math.max(0,Number(shortageMinutes)||0);
   const threshold=Math.max(0,Number(partialThreshold)||60);
   const permission=Math.max(0,Number(approvedPermissionMinutes)||0);
+  const provisional=String(provisionalStatus||'').trim();
 
   if(leave)return 'إجازة';
   if(off&&punchCount===0)return 'راحة';
+  if(provisional)return provisional;
   if(periods>0&&punchCount===0&&excused===periods)return 'استئذان';
   if(periods>0&&punchCount===0)return 'غياب';
   if(punchCount>0&&periods>0&&(missed>0||missing>0||shortage>=threshold))return 'حضور جزئي';
